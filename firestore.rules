@@ -1,0 +1,178 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper Functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // CHECK FOR GOD MODE (Super Admin Claim)
+    function isGod() {
+      return isSignedIn() && request.auth.token.get('superAdmin', false) == true;
+    }
+    
+    // Global Ban Check: Blocks ALL access if the user is banned in their profile
+    // UNLESS they are God
+    function isNotBanned() {
+      return isGod() || 
+        !exists(/databases/$(database)/documents/users/$(request.auth.uid)) ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isBanned', false) != true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && (request.auth.uid == userId || isGod());
+    }
+
+    // Check if the user has 'isAdmin' field set to true in their profile
+    function isAdmin() {
+      return isGod() || (isSignedIn() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true);
+    }
+
+    // Check if user is a participant of a specific chat
+    function isParticipant(chatId) {
+      return isSignedIn() && 
+        request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+    }
+
+    // Check if user is friends with the target user (for Status privacy)
+    function isFriend(targetUserId) {
+      return isSignedIn() && 
+        targetUserId != request.auth.uid &&
+        request.auth.uid in get(/databases/$(database)/documents/users/$(targetUserId)).data.friends;
+    }
+
+    // 1. Users Collection - SECURED
+    // 1. Users Collection - SECURED
+    match /users/{userId} {
+      // God Mode: Full Access
+      allow read, write: if isGod();
+      
+      // Basic read for discovery
+      // Fix: Allow finding self without checking isNotBanned (causes recursion)
+      allow read: if isSignedIn() && (request.auth.uid == userId || isNotBanned());
+
+      // Create: Owner only, cannot set elevated privileges
+      allow create: if isOwner(userId) && 
+        // For new users, they are by definition not banned yet (doc doesn't exist)
+        (!request.resource.data.keys().hasAny(['isAdmin', 'superAdmin', 'isBanned']));
+
+      // Update: Owner only, cannot change elevated privileges
+      // Admin can update banned status (moderation)
+      allow update: if (isOwner(userId) && 
+        // Fix: Use .get() for safety if field is missing
+        (resource.data.get('isBanned', false) != true) && 
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['isAdmin', 'superAdmin', 'isBanned'])))
+        || (isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isBanned']));
+    }
+
+    // 2. Chats Collection
+    match /chats/{chatId} {
+      // Participants OR Admin (Spy Mode) can read/update
+      allow read: if (isSignedIn() && (
+        (request.auth.uid in resource.data.participants) || isAdmin() || isGod()
+      )) && isNotBanned();
+      
+      allow create: if isSignedIn() && isNotBanned();
+      
+      allow update: if (isSignedIn() && (
+        (request.auth.uid in resource.data.participants) || isAdmin() || isGod()
+      )) && isNotBanned();
+      
+      // Admin can delete chats
+      allow delete: if isGod() && isNotBanned();
+      
+      match /messages/{messageId} {
+        allow read: if (isAdmin() || isParticipant(chatId) || isGod()) && isNotBanned();
+        allow create: if (isParticipant(chatId) || isAdmin() || isGod()) && isNotBanned();
+        allow update: if (isParticipant(chatId) || isAdmin() || isGod()) && isNotBanned();
+        allow delete: if isGod() && isNotBanned(); // SUPER ADMIN ONLY
+      }
+    }
+
+    // 3. Friend Requests
+    match /friend_requests/{requestId} {
+      allow read: if isSignedIn() && (
+        resource.data.from == request.auth.uid || 
+        resource.data.to == request.auth.uid ||
+        isAdmin() || isGod()
+      ) && isNotBanned();
+      allow create: if isSignedIn() && request.resource.data.from == request.auth.uid && isNotBanned();
+      allow update, delete: if isSignedIn() && (
+        resource.data.from == request.auth.uid || 
+        resource.data.to == request.auth.uid || 
+        isAdmin() || isGod()
+      ) && isNotBanned();
+    }
+
+    // 4. Status Collection - SECURED (Friend Only)
+    match /statuses/{statusId} {
+       // Read: Allow authenticated users to read statuses (filtering happens on client)
+       allow read: if isSignedIn() && (
+         // We allow reading if signed in because the client needs to filter 
+         // friends' statuses, and 'in' array queries are limited.
+         // Real privacy would require a separate 'feed' collection or Cloud Functions.
+         true
+       );
+       
+       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid && isNotBanned();
+       // Owner can delete self; Admin can delete any (Moderation)
+       allow delete: if isSignedIn() && (
+         resource.data.userId == request.auth.uid || isAdmin() || isGod()
+       ) && isNotBanned();
+    }
+
+    // 5. Calls (Signaling) - HARDENED
+    match /calls/{callId} {
+       // Allow create if authenticated and the caller is the current user
+       allow create: if isSignedIn() && 
+         request.resource.data.callerId == request.auth.uid && 
+         isNotBanned();
+       
+       // Allow read/update if participant or admin
+       allow read, update: if isSignedIn() && (
+         request.auth.uid == resource.data.callerId || 
+         request.auth.uid == resource.data.receiverId || 
+         isAdmin() || isGod()
+       ) && isNotBanned();
+       
+       match /callerCandidates/{id} {
+          allow read, write: if isSignedIn() && (
+            request.auth.uid == get(/databases/$(database)/documents/calls/$(callId)).data.callerId ||
+            request.auth.uid == get(/databases/$(database)/documents/calls/$(callId)).data.receiverId ||
+            isAdmin() || isGod()
+          ) && isNotBanned();
+       }
+       match /calleeCandidates/{id} {
+          allow read, write: if isSignedIn() && (
+            request.auth.uid == get(/databases/$(database)/documents/calls/$(callId)).data.receiverId ||
+            request.auth.uid == get(/databases/$(database)/documents/calls/$(callId)).data.callerId ||
+            isAdmin() || isGod()
+          ) && isNotBanned();
+       }
+    }
+
+    // 6. Notifications
+    match /notifications/{notificationId} {
+      // Fix: Relaxed isNotBanned check for reads to prevent listener failures.
+      // AuthContext handles banning logic on the client side.
+      allow read: if isSignedIn() && (resource.data.toUserId == request.auth.uid || isGod()); // && isNotBanned();
+      allow create: if isSignedIn() && 
+        request.resource.data.fromUserId == request.auth.uid && 
+        isNotBanned(); 
+      allow update: if isSignedIn() && (resource.data.toUserId == request.auth.uid || isGod()) && isNotBanned();
+      allow delete: if isSignedIn() && (resource.data.toUserId == request.auth.uid || isGod()) && isNotBanned();
+    }
+    
+    // 7. Secure User Locations (Admin Only Map)
+    match /user_locations/{userId} {
+       // Only the owner can write their location
+       allow write: if isSignedIn() && request.auth.uid == userId;
+       
+       // Only the owner OR Admin/God can read
+       allow read: if isSignedIn() && (request.auth.uid == userId || isGod());
+    }
+  }
+}

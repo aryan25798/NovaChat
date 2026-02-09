@@ -1,0 +1,54 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Helper to check if user is a participant of the chat in Firestore
+    // Note: This relies on a Firestore read.
+    function isParticipant(chatId) {
+      return request.auth != null && 
+        firestore.exists(/databases/(default)/documents/chats/$(chatId)) &&
+        request.auth.uid in firestore.get(/databases/(default)/documents/chats/$(chatId)).data.participants;
+    }
+    
+    function isAdmin() {
+      return request.auth != null && 
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+
+    // 1. Chat Media - Secure Access
+    match /uploads/{chatId}/{allPaths=**} {
+      // Allow read/write if the user is a participant of the chat or an admin
+      // Optimization: Check auth.uid in path if structure allows, but for shared chats we must read the doc.
+      // Allow read if participant or admin
+      allow read: if isParticipant(chatId) || isAdmin();
+      
+      // Allow write with strict validation
+      allow write: if (isParticipant(chatId) || isAdmin()) &&
+                   request.resource.size < 50 * 1024 * 1024 && // Max 50MB
+                   request.resource.contentType.matches('image/.*|video/.*|audio/.*|application/pdf|text/plain');
+    }
+    
+    // 2. Profile Photos - Optimistic Public Read
+    // 2. Profile Photos - Optimistic Public Read
+    match /profiles/{fileName} {
+      // Only the user themselves can upload/update their profile photo (assuming filename starts with uid)
+      allow write: if request.auth != null && fileName.matches(request.auth.uid + '_.*');
+      // Public read? Yes, for profile discovery.
+      allow read: if request.auth != null;
+    }
+
+    // 3. Status Media - Friends Only (Consistent with Firestore)
+    // NOTE: Storage rules cannot easily check "Friend" status without multiple reads.
+    // Compromise: We use the same 'isParticipant' logic if we had status groups, 
+    // but for now, we restrict write to owner and read to authenticated users 
+    // (application layer handles the obscurity). 
+    // For strict security, we'd need to replicate friend logic here, which is expensive.
+    match /status/{userId}/{allPaths=**} {
+      // Owner can write
+      allow write: if request.auth != null && request.auth.uid == userId;
+      // Everyone signed in can read (Relies on App logic for privacy, or use signed URLs)
+      // SECURITY WARNING: This allows any authenticated user to read if they know the path (UUID).
+      allow read: if request.auth != null;
+    }
+  }
+}

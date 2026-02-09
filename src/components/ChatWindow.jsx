@@ -1,0 +1,367 @@
+import React, { useState, useEffect, useRef } from "react";
+import { FaTimes, FaSearch } from "react-icons/fa";
+import { useAuth } from "../contexts/AuthContext";
+import { useCall } from "../contexts/CallContext";
+import { useNavigate } from "react-router-dom";
+import { subscribeToMessages, sendMessage, sendMediaMessage, deleteMessage, addReaction } from "../services/chatService";
+import { setTypingStatus, subscribeToTypingStatus } from "../services/typingService";
+import { usePresence } from "../contexts/PresenceContext";
+import { motion, AnimatePresence } from "framer-motion";
+import { useFileUpload } from "../hooks/useFileUpload";
+import { getDownloadURL } from "firebase/storage";
+
+// Modular Components
+import ChatHeader from "./chat/ChatHeader";
+import MessageList from "./chat/MessageList";
+import MessageInput from "./chat/MessageInput";
+import ContactInfoPanel from "./ContactInfoPanel";
+import UploadProgress from "./chat/UploadProgress";
+
+export default function ChatWindow({ chat, setChat }) {
+    const [messages, setMessages] = useState([]);
+    const [newMessage, setNewMessage] = useState("");
+    const [typingUsers, setTypingUsers] = useState({});
+    const [showContactInfo, setShowContactInfo] = useState(false);
+    const [replyTo, setReplyTo] = useState(null);
+    const [showSearch, setShowSearch] = useState(false);
+    const [searchQuery, setSearchQuery] = useState("");
+    const [loading, setLoading] = useState(false);
+
+    const { currentUser } = useAuth();
+    const { startCall } = useCall();
+    const { getUserPresence } = usePresence();
+    const navigate = useNavigate();
+
+    const messagesEndRef = useRef(null);
+    const inputRef = useRef(null);
+    const typingTimeoutRef = useRef(null);
+
+    // Context & Presence
+    const [presence, setPresence] = useState(null);
+    const otherUid = chat?.participants?.find(uid => uid !== currentUser.uid);
+    let otherUser = { uid: otherUid, displayName: 'User', photoURL: null };
+
+    if (chat?.type === 'group') {
+        otherUser = { displayName: chat.groupName, photoURL: chat.groupImage, isGroup: true };
+    } else if (chat?.participantInfo && otherUid) {
+        otherUser = { uid: otherUid, ...chat.participantInfo[otherUid] };
+    }
+
+    // Handlers
+    const scrollToBottom = () => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    };
+
+    const handleBack = () => {
+        if (setChat) setChat(null);
+        navigate('/');
+    };
+
+    const handleInputChange = (e) => {
+        setNewMessage(e.target.value);
+        if (!chat?.id || !currentUser?.uid) return;
+        setTypingStatus(chat.id, currentUser.uid, true);
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = setTimeout(() => {
+            setTypingStatus(chat.id, currentUser.uid, false);
+        }, 3000);
+    };
+
+    const [isSending, setIsSending] = useState(false);
+
+    const handleSendMessage = async (e) => {
+        if (e) e.preventDefault();
+        if ((newMessage.trim() === "" && !replyTo) || isSending) return;
+
+        setIsSending(true);
+        const textToSend = newMessage;
+        setNewMessage("");
+        const replyContext = replyTo;
+        setReplyTo(null);
+
+        try {
+            await sendMessage(chat.id, currentUser, textToSend, replyContext, chat.type);
+        } catch (err) {
+            console.error("Failed to send message", err);
+            setNewMessage(textToSend); // Restore message on failure
+        } finally {
+            setIsSending(false);
+        }
+    };
+
+    const { startUpload, uploads, pauseUpload, resumeUpload, cancelUpload, clearCompleted } = useFileUpload();
+
+    // ... (existing code)
+
+    const handleFileUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        // Start resumable upload
+        const { uploadTask } = startUpload(file, `uploads/${chat.id}/${Date.now()}_${file.name}`);
+
+        // Listen for completion to send DB message
+        uploadTask.on('state_changed',
+            null,
+            (error) => console.error("Upload error:", error),
+            async () => {
+                const url = await getDownloadURL(uploadTask.snapshot.ref);
+                await sendMediaMessage(chat.id, currentUser, {
+                    url,
+                    fileType: file.type,
+                    fileName: file.name,
+                    fileSize: file.size
+                });
+            }
+        );
+    };
+
+    const handleDelete = async (msgId, deleteFor) => {
+        await deleteMessage(chat.id, msgId, deleteFor);
+    };
+
+    const handleReact = async (msgId, emoji) => {
+        await addReaction(chat.id, msgId, emoji, currentUser.uid);
+    };
+
+    const [messageLimit, setMessageLimit] = useState(50);
+    const [hasMoreMessages, setHasMoreMessages] = useState(true);
+
+    // ... (handlers)
+
+    // Subscriptions
+    useEffect(() => {
+        if (!chat?.id || !currentUser?.uid) return;
+        setLoading(true); // Reset loading when chat changes
+
+        // Reset limit when chat changes
+        // But we need to distinguish between chat change and limit change to avoid resetting limit on scroll
+        // Actually, easier to let the dependency array handle it. 
+        // We'll wrap the setLimit in a separate effect that depends on chat.id
+    }, [chat?.id]);
+
+    useEffect(() => {
+        setMessageLimit(50);
+    }, [chat?.id]);
+
+    useEffect(() => {
+        if (!chat?.id || !currentUser?.uid) return;
+
+        const unsubscribe = subscribeToMessages(chat.id, currentUser.uid, (msgs) => {
+            setMessages(msgs);
+            setLoading(false);
+            if (msgs.length < messageLimit) {
+                setHasMoreMessages(false);
+            } else {
+                setHasMoreMessages(true);
+            }
+        }, true, messageLimit);
+
+        return () => unsubscribe();
+    }, [chat?.id, currentUser?.uid, messageLimit]);
+
+    useEffect(() => {
+        // Only scroll to bottom if we are near bottom or it's initial load (limit 50)
+        // For simplicity, we scroll to bottom on new message if near bottom.
+        // But if we just loaded older messages (limit increased), we want to stay where we were?
+        // That requires complex scroll management.
+        // MVP: Scroll to bottom only if limit is 50. If limit > 50, user is scrolling up.
+        if (messageLimit === 50) {
+            scrollToBottom();
+        }
+    }, [messages, messageLimit]);
+
+    useEffect(() => {
+        if (!chat?.id || !currentUser?.uid) return;
+        const unsubscribe = subscribeToTypingStatus(chat.id, currentUser.uid, (data) => {
+            setTypingUsers(data);
+        });
+        return () => {
+            unsubscribe();
+            setTypingStatus(chat.id, currentUser.uid, false);
+        };
+    }, [chat?.id, currentUser?.uid]);
+
+    useEffect(() => {
+        if (otherUid && !otherUser.isGroup) {
+            const unsub = getUserPresence(otherUid, (data) => {
+                setPresence(data);
+            });
+            return () => unsub();
+        }
+    }, [otherUid, otherUser.isGroup]);
+
+    // Helpers
+    const formatLastSeen = (timestamp) => {
+        if (!timestamp) return "";
+        const date = new Date(timestamp);
+        const now = new Date();
+        const diff = now - date;
+        if (diff < 60000) return "just now";
+        if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+        return `at ${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}`;
+    };
+
+    const getStatusText = () => {
+        if (otherUser.isGroup) return "click for group info";
+        if (otherUser.isGemini) return "AI Assistant";
+        if (Object.keys(typingUsers).length > 0) return "typing...";
+        if (presence?.state === 'online') return "online";
+        if (presence?.last_changed) return `last seen ${formatLastSeen(presence.last_changed)}`;
+        return "offline";
+    };
+
+    if (!chat) {
+        return (
+            <div className="hidden md:flex flex-col items-center justify-center h-full bg-surface-elevated relative overflow-hidden">
+                {/* Decorative Background Elements */}
+                <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-primary/5 rounded-full blur-[120px]" />
+                <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-primary/10 rounded-full blur-[120px]" />
+
+                <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="text-center max-w-md p-10 z-10"
+                >
+                    <div className="relative mb-10 inline-block">
+                        <img src="https://static.whatsapp.net/rsrc.php/v3/y6/r/wa669ae5y9Z.png" alt="WhatsApp Web" className="w-72 mx-auto opacity-80 drop-shadow-2xl" />
+                        <div className="absolute inset-0 bg-primary/10 rounded-full blur-2xl -z-10" />
+                    </div>
+                    <h1 className="text-3xl font-bold text-text-1 mb-4 tracking-tight">WhatsClone Web</h1>
+                    <p className="text-text-2 text-[15px] leading-relaxed mb-8">
+                        Experience the next generation of messaging. Secure, fast, and beautifully designed for your desktop.
+                    </p>
+                    <Button className="rounded-full px-8 shadow-premium">Start a conversation</Button>
+                </motion.div>
+
+                <div className="absolute bottom-10 text-text-2/40 text-xs flex items-center gap-2 font-medium">
+                    <span className="text-primary/60">🔒</span> End-to-end encrypted
+                </div>
+                <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-primary/30" />
+            </div>
+        );
+    }
+
+    const filteredMessages = messages.filter(m => {
+        const clearedAt = chat?.clearedBy?.[currentUser.uid]?.toDate?.() || new Date(0);
+        const msgTime = m.timestamp?.toDate?.() || new Date();
+        const matchesSearch = searchQuery ? m.text?.toLowerCase().includes(searchQuery.toLowerCase()) : true;
+        return msgTime > clearedAt && matchesSearch;
+    });
+
+    return (
+        <div className="flex flex-col h-full bg-background relative overflow-hidden">
+            {/* Background Pattern Layer */}
+            <div className="absolute inset-0 opacity-[0.03] pointer-events-none z-0 bg-[url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png')] bg-repeat" />
+
+            <ChatHeader
+                otherUser={otherUser}
+                presence={presence}
+                getStatusText={getStatusText}
+                startCall={startCall}
+                chat={chat}
+                onBack={handleBack}
+                onShowInfo={() => setShowContactInfo(true)}
+                onToggleSearch={() => setShowSearch(!showSearch)}
+                showSearch={showSearch}
+            />
+
+            <AnimatePresence>
+                {showSearch && (
+                    <motion.div
+                        className="glass px-3 py-2 md:px-4 md:py-3 border-b border-border/30 flex items-center gap-2 md:gap-3 z-30 shadow-sm"
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                    >
+                        <div className="flex-1 bg-surface flex items-center px-3 md:px-4 rounded-xl shadow-sm border border-border/50 transition-all focus-within:border-primary/30">
+                            <FaSearch className="text-text-2 text-sm mr-2 md:mr-3" />
+                            <input
+                                type="text"
+                                placeholder="Filter messages..."
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                className="w-full py-2 md:py-2.5 bg-transparent border-none focus:outline-none text-base text-text-1 placeholder:text-text-2/50"
+                                autoFocus
+                            />
+                            {searchQuery && (
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => setSearchQuery("")}
+                                    className="h-8 w-8 rounded-full hover:bg-surface-elevated"
+                                >
+                                    <FaTimes className="text-text-2" />
+                                </Button>
+                            )}
+                        </div>
+                        <Button variant="ghost" onClick={() => { setShowSearch(false); setSearchQuery(""); }} className="text-primary font-bold px-3">
+                            Done
+                        </Button>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            <UploadProgress
+                uploads={uploads}
+                onPause={pauseUpload}
+                onResume={resumeUpload}
+                onCancel={cancelUpload}
+                onClear={clearCompleted}
+            />
+
+            <div className="flex-1 overflow-y-auto no-scrollbar flex flex-col relative" id="message-container">
+                {hasMoreMessages && !loading && (
+                    <div className="flex justify-center p-2 z-10">
+                        <button
+                            onClick={() => setMessageLimit(prev => prev + 50)}
+                            className="text-xs bg-surface-elevated text-text-2 px-3 py-1 rounded-full shadow-sm hover:bg-surface border border-border/10 transition-colors"
+                        >
+                            Load Older Messages
+                        </button>
+                    </div>
+                )}
+
+                <MessageList
+                    messages={filteredMessages}
+                    chat={chat}
+                    currentUser={currentUser}
+                    handleDelete={handleDelete}
+                    handleReact={handleReact}
+                    setReplyTo={setReplyTo}
+                    inputRef={inputRef}
+                    messagesEndRef={messagesEndRef}
+                    loading={loading}
+                />
+            </div>
+
+            <MessageInput
+                newMessage={newMessage}
+                setNewMessage={setNewMessage}
+                handleInputChange={handleInputChange}
+                handleSendMessage={handleSendMessage}
+                handleFileUpload={handleFileUpload}
+                replyTo={replyTo}
+                setReplyTo={setReplyTo}
+                inputRef={inputRef}
+                chat={chat}
+                otherUser={otherUser}
+                messages={filteredMessages}
+            />
+
+            <AnimatePresence>
+                {showContactInfo && (
+                    <motion.div
+                        initial={{ x: '100%' }}
+                        animate={{ x: 0 }}
+                        exit={{ x: '100%' }}
+                        transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                        className="absolute top-0 right-0 h-full w-full md:w-[420px] z-[100] bg-surface border-l border-border/50 shadow-2xl"
+                    >
+                        <ContactInfoPanel user={otherUser} chat={chat} isOpen={true} onClose={() => setShowContactInfo(false)} />
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </div>
+    );
+}
