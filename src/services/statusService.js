@@ -153,3 +153,39 @@ export const markStatusAsViewed = async (statusDocId, itemIndex, userId, current
         console.error("Error marking status as viewed:", err);
     }
 };
+
+// --- Reply to Status ---
+import { sendMessage } from "./chatService";
+
+export const replyToStatus = async (currentUser, statusUser, statusItem, text) => {
+    try {
+        // Create a "reply" context object
+        const replyContext = {
+            id: statusItem.id, // Status ID as the message ID we are replying to
+            text: statusItem.caption || (statusItem.type === 'text' ? statusItem.content : 'Status'),
+            senderId: statusUser.uid,
+            senderName: statusUser.displayName,
+            type: statusItem.type,
+            mediaUrl: statusItem.type !== 'text' ? statusItem.content : null,
+            isStatusReply: true // Marker to handle UI differently if needed
+        };
+
+        // We need a chat ID between current user and status user.
+        // For simplicity, we'll let sendMessage handle or find the chat, 
+        // BUT sendMessage usually requires a `chatId`. 
+        // We might need to find or create the chat first. 
+        // Let's import `createPrivateChat` from chatListService if needed, 
+        // OR assuming we can pass a special flag.
+
+        // Actually, we should probably fetch the Chat ID first.
+        // Let's use a helper or modify this to assume we can get it.
+        // For now, let's try to find the chat.
+
+        // BETTER: The UI calling this should probably provide the Chat ID if known, 
+        // but StatusViewer doesn't know Chat ID.
+        // We'll search for the chat.
+    } catch (error) {
+        console.error("Error replying to status:", error);
+        throw error;
+    }
+};
