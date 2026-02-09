@@ -118,6 +118,12 @@ service cloud.firestore {
        );
        
        allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid && isNotBanned();
+       
+       // Update: Allow user to update their own status doc (add new items)
+       allow update: if isSignedIn() && (
+         resource.data.userId == request.auth.uid || statusId == request.auth.uid
+       ) && isNotBanned();
+
        // Owner can delete self; Admin can delete any (Moderation)
        allow delete: if isSignedIn() && (
          resource.data.userId == request.auth.uid || isAdmin() || isGod()
