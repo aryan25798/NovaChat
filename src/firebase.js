@@ -30,6 +30,9 @@ export const db = initializeFirestore(app, {
 });
 
 import { getDatabase } from "firebase/database";
+import { getFunctions } from "firebase/functions";
+
 export const rtdb = getDatabase(app);
 export const storage = getStorage(app);
 export const messaging = getMessaging(app);
+export const functions = getFunctions(app);

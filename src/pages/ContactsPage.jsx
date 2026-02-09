@@ -64,7 +64,6 @@ const ContactsPage = () => {
     );
 
     return (
-    return (
         <div className="flex flex-col h-full bg-surface md:max-w-2xl md:mx-auto md:border-x md:border-border relative shadow-sm">
             {/* Header */}
             <div className="bg-primary h-[70px] flex items-center px-4 gap-4 text-white shadow-md shrink-0 z-20">
