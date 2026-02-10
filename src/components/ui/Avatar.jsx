@@ -24,6 +24,8 @@ const Avatar = React.forwardRef(({ className, src, alt, fallback, size = "md", .
                 <img
                     src={src}
                     alt={alt}
+                    loading="lazy"
+                    decoding="async"
                     className="aspect-square h-full w-full object-cover"
                 />
             ) : (

@@ -148,15 +148,16 @@ const Message = memo(({ message, chat, isOwn, onDelete, onReply, onReact, showBl
 
                 <div
                     className={cn(
-                        "relative max-w-[85%] md:max-w-[70%] min-w-[80px] group cursor-pointer lg:cursor-default transition-all duration-200",
+                        "relative max-w-[85%] md:max-w-[70%] min-w-[80px] group cursor-pointer lg:cursor-default transition-all duration-200 shadow-[0_1px_0.5px_rgba(0,0,0,0.13)]",
                         isOwn
-                            ? "bg-primary text-primary-foreground shadow-sm"
-                            : "bg-surface-elevated text-text-1 shadow-sm border border-border/30",
+                            ? "bg-[#d9fdd3] dark:bg-[#005c4b] text-black dark:text-[#e9edef]" // WhatsApp Sent Bubble
+                            : "bg-white dark:bg-[#202c33] text-black dark:text-[#e9edef]", // WhatsApp Received Bubble
                         // Asymmetric radius
                         isOwn
-                            ? (showTail ? "rounded-[20px] rounded-br-[4px]" : "rounded-[20px]")
-                            : (showTail ? "rounded-[20px] rounded-bl-[4px]" : "rounded-[20px]"),
-                        "px-2 py-2" // Reduced padding for cleaner look
+                            ? (showTail ? "rounded-l-lg rounded-tr-lg rounded-br-none" : "rounded-lg")
+                            : (showTail ? "rounded-r-lg rounded-tl-lg rounded-bl-none" : "rounded-lg"),
+                        "px-2 py-0.5", // Reduced padding
+                        "text-[14.2px] leading-[19px]" // Precise typography
                     )}
                     onClick={() => setShowMenu(!showMenu)}
                 >
@@ -297,12 +298,17 @@ const Message = memo(({ message, chat, isOwn, onDelete, onReply, onReact, showBl
                                 {message.text && message.mediaType !== 'file' && (
                                     <span className="whitespace-pre-wrap break-words leading-relaxed">{message.text}</span>
                                 )}
-                                <div className="flex items-center gap-1.5 self-end mt-1 opacity-70 group-hover:opacity-100 transition-opacity">
-                                    <span className="text-[10.5px] font-medium">{formatTime(message.timestamp)}</span>
+                                <div className="flex items-center gap-1 self-end mt-1 min-w-[60px] justify-end">
+                                    <span className={cn(
+                                        "text-[11px] font-normal min-w-fit",
+                                        isOwn ? "text-black/60 dark:text-white/60" : "text-black/60 dark:text-white/60"
+                                    )}>
+                                        {formatTime(message.timestamp)}
+                                    </span>
                                     {isOwn && (
                                         <span className={cn(
-                                            "text-[10.5px] transition-colors duration-300",
-                                            message.read ? "text-[#53bdeb]" : "text-white/70" // WhatsApp Blue
+                                            "text-[15px] transition-colors duration-300 -mt-0.5",
+                                            message.read ? "text-[#53bdeb]" : "text-black/30 dark:text-white/30" // Blue for read, gray for sent
                                         )}>
                                             {message.read ? <FaCheckDouble /> : (message.delivered ? <FaCheckDouble /> : <FaCheck />)}
                                         </span>

@@ -6,12 +6,16 @@
   "scripts": {
     "dev": "node scripts/generate-sw.js && vite",
     "build": "node scripts/generate-sw.js && vite build",
+    "deploy": "firebase deploy --only firestore:rules,functions",
+    "deploy:rules": "firebase deploy --only firestore:rules",
+    "deploy:functions": "firebase deploy --only functions",
     "lint": "eslint .",
     "preview": "vite preview"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@radix-ui/react-slot": "^1.2.4",
+    "browser-image-compression": "^2.0.2",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "firebase": "^12.9.0",
@@ -25,6 +29,7 @@
     "react-leaflet": "^5.0.0",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.13.0",
+    "react-virtuoso": "^4.18.1",
     "tailwind-merge": "^3.4.0",
     "uuid": "^13.0.0"
   },

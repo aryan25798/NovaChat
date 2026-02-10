@@ -94,17 +94,15 @@ export default function MessageInput({
                     </motion.div>
                 ) : (
                     <>
-                        <div className="flex items-center gap-0.5 md:gap-1 mb-1">
-                            <Button variant="ghost" size="icon" className="rounded-full text-text-2 hover:text-primary transition-colors w-9 h-9 md:w-10 md:h-10">
-                                <FaRegSmile className="text-lg md:text-xl" />
+                        <div className="flex items-center gap-1 md:gap-2 mb-1 shrink-0">
+                            <Button variant="ghost" size="icon" className="rounded-full text-text-2 hover:text-primary transition-colors min-w-[44px] min-h-[44px] w-11 h-11 md:w-10 md:h-10 flex items-center justify-center">
+                                <FaRegSmile className="text-xl md:text-xl" />
                             </Button>
-                            <label className="relative">
-                                <Button asChild variant="ghost" size="icon" className="rounded-full text-text-2 hover:text-primary transition-colors cursor-pointer w-9 h-9 md:w-10 md:h-10">
-                                    <span>
-                                        <FaPaperclip className="text-lg" />
-                                        <input type="file" hidden onChange={handleFileUpload} />
-                                    </span>
-                                </Button>
+                            <label className="relative cursor-pointer">
+                                <div className="rounded-full text-text-2 hover:text-primary transition-colors min-w-[44px] min-h-[44px] w-11 h-11 md:w-10 md:h-10 flex items-center justify-center hover:bg-surface-elevated">
+                                    <FaPaperclip className="text-xl md:text-lg" />
+                                    <input type="file" hidden onChange={handleFileUpload} />
+                                </div>
                             </label>
                         </div>
 
@@ -134,17 +132,17 @@ export default function MessageInput({
                             />
                         </form>
 
-                        <div className="flex items-center mb-0.5 md:mb-1">
+                        <div className="flex items-center mb-0.5 md:mb-1 shrink-0 ml-1">
                             {newMessage.trim() === "" ? (
-                                <Button variant="ghost" size="icon" className="rounded-full text-text-2 hover:text-primary transition-colors w-9 h-9 md:w-10 md:h-10">
-                                    <FaMicrophone className="text-lg md:text-xl" />
+                                <Button variant="ghost" size="icon" className="rounded-full text-text-2 hover:text-primary transition-colors min-w-[44px] min-h-[44px] w-11 h-11 md:w-10 md:h-10 flex items-center justify-center">
+                                    <FaMicrophone className="text-xl md:text-xl" />
                                 </Button>
                             ) : (
                                 <Button
                                     onClick={handleSendMessage}
-                                    className="rounded-full h-10 w-10 md:h-11 md:w-11 p-0 shadow-premium hover:shadow-premium-hover active:scale-95 transition-all"
+                                    className="rounded-full min-w-[44px] min-h-[44px] w-11 h-11 md:w-11 md:h-11 p-0 shadow-premium hover:shadow-premium-hover active:scale-95 transition-all flex items-center justify-center"
                                 >
-                                    <FaPaperPlane className="text-base md:text-lg" />
+                                    <FaPaperPlane className="text-lg md:text-lg" />
                                 </Button>
                             )}
                         </div>

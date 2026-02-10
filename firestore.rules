@@ -1,4 +1,7 @@
 rules_version = '2';
+// @deployed 2026-02-10
+// @version 1.0.0 (Production)
+// status: ACTIVE
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -51,7 +54,9 @@ service cloud.firestore {
       allow read, write: if isGod();
       
       // Basic read for discovery
-      // Fix: Allow finding self without checking isNotBanned (causes recursion)
+      // Basic read for discovery
+      // Note: We allow reading all users to enable client-side search (filtered).
+      // Ideally, use a backend search service (Algolia) to strictly hide non-matched users.
       allow read: if isSignedIn() && (request.auth.uid == userId || isNotBanned());
 
       // Create: Owner only, cannot set elevated privileges
@@ -79,7 +84,9 @@ service cloud.firestore {
       
       allow update: if (isSignedIn() && (
         (request.auth.uid in resource.data.participants) || isAdmin() || isGod()
-      )) && isNotBanned();
+      )) && isNotBanned() && 
+      // Stricter Update: Non-admins cannot modify participants
+      (isAdmin() || isGod() || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['participants']));
       
       // Admin can delete chats
       allow delete: if isGod() && isNotBanned();

@@ -34,13 +34,13 @@ const ChatListItem = memo(({ chat, currentUserId }) => {
         <Link
             to={`/c/${chat.id}`}
             className={cn(
-                "group flex items-center gap-4 px-4 py-3 hover:bg-surface transition-all duration-200 cursor-pointer relative",
-                isActive && "bg-surface"
+                "group flex items-center gap-3 md:gap-4 px-3 md:px-4 py-3 hover:bg-surface/50 transition-all duration-200 cursor-pointer relative border-b border-border/30 last:border-0",
+                isActive ? "bg-surface-elevated dark:bg-surface/80" : "bg-transparent"
             )}
         >
             {/* Active Indicator Bar */}
             {isActive && (
-                <div className="absolute left-0 top-1 bottom-1 w-1 bg-primary rounded-r-full" />
+                <div className="absolute left-0 top-0 bottom-0 w-[4px] bg-primary" />
             )}
 
             <Avatar src={displayInfo.photo} alt={displayInfo.name} size="lg" className="shrink-0 shadow-sm" />

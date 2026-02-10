@@ -19,19 +19,21 @@ export default function ChatHeader({
 
     return (
         <div className="h-[60px] md:h-[72px] px-2 md:px-6 flex justify-between items-center glass border-b border-border/30 z-20 shrink-0 sticky top-0 shadow-sm transition-all">
-            <div className="flex items-center gap-2 md:gap-4 cursor-pointer overflow-hidden flex-1 group" onClick={onShowInfo}>
+            <div className="flex items-center gap-1 md:gap-4 cursor-pointer overflow-hidden flex-1 group" onClick={onShowInfo}>
                 <button
-                    className="md:hidden text-text-2 p-1.5 -ml-1 hover:bg-surface-elevated rounded-full shrink-0 transition-colors"
+                    className="md:hidden text-text-2 hover:bg-surface-elevated active:bg-surface-elevated rounded-full shrink-0 transition-colors min-w-[40px] min-h-[40px] flex items-center justify-center -ml-2 mr-1"
                     onClick={(e) => { e.stopPropagation(); onBack(); }}
                 >
                     <FaArrowLeft className="text-lg" />
                 </button>
-                <Avatar
-                    src={otherUser.photoURL}
-                    alt={otherUser.displayName}
-                    size="md"
-                    className="h-9 w-9 md:h-11 md:w-11 shrink-0 transition-transform group-hover:scale-105"
-                />
+                <div className="relative">
+                    <Avatar
+                        src={otherUser.photoURL}
+                        alt={otherUser.displayName}
+                        size="md"
+                        className="h-10 w-10 md:h-11 md:w-11 shrink-0 transition-transform group-hover:scale-105 shadow-sm"
+                    />
+                </div>
                 <div className="flex flex-col justify-center min-w-0">
                     <h3 className="font-semibold text-text-1 text-[15px] md:text-[16px] leading-snug truncate group-hover:text-primary transition-colors">
                         {otherUser.displayName}
@@ -44,22 +46,22 @@ export default function ChatHeader({
                     </p>
                 </div>
             </div>
-            <div className="flex items-center gap-0.5 md:gap-2 text-text-2">
+            <div className="flex items-center gap-1 md:gap-2 text-text-2">
                 <Button
                     variant="ghost"
                     size="icon"
-                    className="rounded-full hover:text-text-1 w-9 h-9 md:w-10 md:h-10"
+                    className="rounded-full hover:text-text-1 min-w-[40px] min-h-[40px] w-10 h-10 md:w-10 md:h-10 flex items-center justify-center"
                     onClick={() => startCall(otherUser, 'video', chat.id)}
                 >
-                    <FaVideo className="w-3.5 h-3.5 md:w-4 md:h-4" />
+                    <FaVideo className="w-4 h-4 md:w-4 md:h-4" />
                 </Button>
                 <Button
                     variant="ghost"
                     size="icon"
-                    className="rounded-full hover:text-text-1 w-9 h-9 md:w-10 md:h-10"
+                    className="rounded-full hover:text-text-1 min-w-[40px] min-h-[40px] w-10 h-10 md:w-10 md:h-10 flex items-center justify-center"
                     onClick={() => startCall(otherUser, 'audio', chat.id)}
                 >
-                    <FaPhone className="w-3 h-3 md:w-3.5 md:h-3.5" />
+                    <FaPhone className="w-3.5 h-3.5 md:w-3.5 md:h-3.5" />
                 </Button>
 
                 <div className="h-6 w-px bg-border/50 mx-1 hidden md:block"></div>
@@ -67,7 +69,10 @@ export default function ChatHeader({
                 <Button
                     variant="ghost"
                     size="icon"
-                    className={cn("rounded-full transition-colors w-9 h-9 md:w-10 md:h-10 hidden md:inline-flex", showSearch ? "text-primary bg-primary/10" : "hover:text-text-1")}
+                    className={cn(
+                        "rounded-full transition-colors min-w-[40px] min-h-[40px] w-10 h-10 md:w-10 md:h-10 hidden md:inline-flex items-center justify-center",
+                        showSearch ? "text-primary bg-primary/10" : "hover:text-text-1"
+                    )}
                     onClick={onToggleSearch}
                 >
                     <FaSearch className="w-4 h-4" />
@@ -77,7 +82,10 @@ export default function ChatHeader({
                     <Button
                         variant="ghost"
                         size="icon"
-                        className={cn("rounded-full transition-colors w-9 h-9 md:w-10 md:h-10", showHeaderMenu ? "bg-surface-elevated text-text-1" : "hover:text-text-1")}
+                        className={cn(
+                            "rounded-full transition-colors min-w-[40px] min-h-[40px] w-10 h-10 md:w-10 md:h-10 flex items-center justify-center",
+                            showHeaderMenu ? "bg-surface-elevated text-text-1" : "hover:text-text-1"
+                        )}
                         onClick={() => setShowHeaderMenu(!showHeaderMenu)}
                     >
                         <FaEllipsisV className="w-4 h-4" />

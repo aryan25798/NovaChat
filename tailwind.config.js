@@ -31,6 +31,7 @@ export default {
                     light: "#25D366",
                     dark: "#075E54",
                     background: "#efeae2",
+                    backgroundDark: "#0b141a",
                     chatBubbleOut: "#d9fdd3",
                     chatBubbleIn: "#ffffff",
                     chatBubbleOutDark: "#005c4b",

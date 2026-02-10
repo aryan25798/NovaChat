@@ -15,6 +15,7 @@ const ProfilePage = lazy(() => import('./pages/ProfilePage'));
 const StatusPage = lazy(() => import('./pages/StatusPage'));
 const CallsPage = lazy(() => import('./pages/CallsPage'));
 const ContactsPage = lazy(() => import('./pages/ContactsPage'));
+const SharePage = lazy(() => import('./pages/SharePage'));
 
 // Loading Fallback
 const Loading = () => (
@@ -85,9 +86,12 @@ const ConnectivityMonitor = ({ children }) => {
   );
 };
 
+import DeliveryStatusListener from './components/DeliveryStatusListener';
+
 const App = () => {
   return (
     <NotificationProvider>
+      <DeliveryStatusListener />
       <FriendProvider>
         <StatusProvider>
           <ConnectivityMonitor>
@@ -95,6 +99,7 @@ const App = () => {
               <Suspense fallback={<Loading />}>
                 <Routes>
                   <Route path="/login" element={<Login />} />
+                  <Route path="/share" element={<PrivateRoute><SharePage /></PrivateRoute>} />
                   <Route path="/admin" element={<PrivateRoute><AdminDashboard /></PrivateRoute>} />
                   <Route
                     path="/"

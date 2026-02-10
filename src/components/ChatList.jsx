@@ -7,6 +7,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { Avatar } from "./ui/Avatar";
 import { Link } from "react-router-dom";
 import { subscribeToUserChats } from "../services/chatListService";
+import { searchUsers } from "../services/userService";
 
 const ChatList = ({ searchTerm }) => {
     const { currentUser } = useAuth();
@@ -42,18 +43,8 @@ const ChatList = ({ searchTerm }) => {
             }
             setSearching(true);
             try {
-                // Ideally move this to a service too, but keeping simple for now
-                const usersRef = collection(db, "users");
-                const snapshot = await getDocs(usersRef);
-                const results = [];
-                snapshot.forEach(doc => {
-                    const data = doc.data();
-                    if (doc.id !== currentUser.uid &&
-                        (data.displayName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                            data.email?.toLowerCase().includes(searchTerm.toLowerCase()))) {
-                        results.push({ id: doc.id, ...data });
-                    }
-                });
+                // Optimized Search
+                const results = await searchUsers(searchTerm, currentUser.uid);
                 setSearchResults(results);
             } catch (e) {
                 console.error("Search error:", e);

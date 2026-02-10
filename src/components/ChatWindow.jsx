@@ -3,7 +3,7 @@ import { FaTimes, FaSearch } from "react-icons/fa";
 import { useAuth } from "../contexts/AuthContext";
 import { useCall } from "../contexts/CallContext";
 import { useNavigate } from "react-router-dom";
-import { subscribeToMessages, sendMessage, sendMediaMessage, deleteMessage, addReaction } from "../services/chatService";
+import { subscribeToMessages, sendMessage, sendMediaMessage, deleteMessage, addReaction, searchMessages } from "../services/chatService";
 import { setTypingStatus, subscribeToTypingStatus } from "../services/typingService";
 import { usePresence } from "../contexts/PresenceContext";
 import { motion, AnimatePresence } from "framer-motion";
@@ -97,23 +97,27 @@ export default function ChatWindow({ chat, setChat }) {
         const file = e.target.files[0];
         if (!file) return;
 
-        // Start resumable upload
-        const { uploadTask } = startUpload(file, `uploads/${chat.id}/${Date.now()}_${file.name}`);
+        try {
+            // Start resumable upload (await for compression)
+            const { uploadTask } = await startUpload(file, `uploads/${chat.id}/${Date.now()}_${file.name}`);
 
-        // Listen for completion to send DB message
-        uploadTask.on('state_changed',
-            null,
-            (error) => console.error("Upload error:", error),
-            async () => {
-                const url = await getDownloadURL(uploadTask.snapshot.ref);
-                await sendMediaMessage(chat.id, currentUser, {
-                    url,
-                    fileType: file.type,
-                    fileName: file.name,
-                    fileSize: file.size
-                });
-            }
-        );
+            // Listen for completion to send DB message
+            uploadTask.on('state_changed',
+                null,
+                (error) => console.error("Upload error:", error),
+                async () => {
+                    const url = await getDownloadURL(uploadTask.snapshot.ref);
+                    await sendMediaMessage(chat.id, currentUser, {
+                        url,
+                        fileType: file.type,
+                        fileName: file.name,
+                        fileSize: file.size
+                    });
+                }
+            );
+        } catch (error) {
+            console.error("Failed to start upload:", error);
+        }
     };
 
     const handleDelete = async (msgId, deleteFor) => {
@@ -242,12 +246,44 @@ export default function ChatWindow({ chat, setChat }) {
         );
     }
 
-    const filteredMessages = messages.filter(m => {
+    const [serverResults, setServerResults] = useState([]);
+
+    const handleServerSearch = async () => {
+        if (!searchQuery) return;
+        setLoading(true);
+        const results = await searchMessages(chat.id, searchQuery);
+        setServerResults(results);
+        setLoading(false);
+    };
+
+    // Reset server results when search query is cleared
+    useEffect(() => {
+        if (!searchQuery) setServerResults([]);
+    }, [searchQuery]);
+
+    const filteredMessages = React.useMemo(() => {
         const clearedAt = chat?.clearedBy?.[currentUser.uid]?.toDate?.() || new Date(0);
-        const msgTime = m.timestamp?.toDate?.() || new Date();
-        const matchesSearch = searchQuery ? m.text?.toLowerCase().includes(searchQuery.toLowerCase()) : true;
-        return msgTime > clearedAt && matchesSearch;
-    });
+
+        // 1. Filter local messages
+        const localMatches = messages.filter(m => {
+            const msgTime = m.timestamp?.toDate?.() || new Date();
+            const matchesSearch = searchQuery ? m.text?.toLowerCase().includes(searchQuery.toLowerCase()) : true;
+            return msgTime > clearedAt && matchesSearch;
+        });
+
+        // 2. Merge with server results (deduplicate)
+        if (serverResults.length > 0) {
+            const combined = [...localMatches, ...serverResults];
+            const unique = Array.from(new Map(combined.map(m => [m.id, m])).values());
+            return unique.sort((a, b) => {
+                const tA = a.timestamp?.toDate?.() || new Date(a.timestamp);
+                const tB = b.timestamp?.toDate?.() || new Date(b.timestamp);
+                return tA - tB;
+            });
+        }
+
+        return localMatches;
+    }, [messages, searchQuery, serverResults, chat, currentUser.uid]);
 
     return (
         <div className="flex flex-col h-full bg-background relative overflow-hidden">
@@ -285,14 +321,22 @@ export default function ChatWindow({ chat, setChat }) {
                                 autoFocus
                             />
                             {searchQuery && (
-                                <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={() => setSearchQuery("")}
-                                    className="h-8 w-8 rounded-full hover:bg-surface-elevated"
-                                >
-                                    <FaTimes className="text-text-2" />
-                                </Button>
+                                <div className="flex items-center">
+                                    <button
+                                        onClick={handleServerSearch}
+                                        className="mr-2 text-xs bg-primary/10 text-primary px-2 py-1 rounded hover:bg-primary/20 transition-colors whitespace-nowrap"
+                                    >
+                                        Search Server
+                                    </button>
+                                    <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        onClick={() => setSearchQuery("")}
+                                        className="h-8 w-8 rounded-full hover:bg-surface-elevated"
+                                    >
+                                        <FaTimes className="text-text-2" />
+                                    </Button>
+                                </div>
                             )}
                         </div>
                         <Button variant="ghost" onClick={() => { setShowSearch(false); setSearchQuery(""); }} className="text-primary font-bold px-3">

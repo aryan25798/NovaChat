@@ -2,31 +2,60 @@ import { useState, useCallback, useRef } from 'react';
 import { storage } from '../firebase';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { v4 as uuidv4 } from 'uuid';
+import imageCompression from 'browser-image-compression';
 
 export const useFileUpload = () => {
     const [uploads, setUploads] = useState({});
     const uploadTasksRef = useRef({});
 
-    const startUpload = useCallback((file, path, metadata = {}) => {
+    const startUpload = useCallback(async (file, path, metadata = {}) => {
         const uploadId = uuidv4();
-        const storageRef = ref(storage, path);
-        const uploadTask = uploadBytesResumable(storageRef, file, metadata);
 
-        // Store task ref for control (pause/resume/cancel)
-        uploadTasksRef.current[uploadId] = uploadTask;
-
-        // Initialize state
+        // Initial state: Compressing
         setUploads(prev => ({
             ...prev,
             [uploadId]: {
                 id: uploadId,
                 fileName: file.name,
                 progress: 0,
-                status: 'uploading', // uploading, paused, error, completed, cancelled
+                status: 'compressing',
                 error: null,
                 url: null,
                 fileType: file.type,
                 fileSize: file.size
+            }
+        }));
+
+        let processedFile = file;
+
+        // Compress if it's an image
+        if (file.type.startsWith('image/')) {
+            try {
+                const options = {
+                    maxSizeMB: 1,
+                    maxWidthOrHeight: 1920,
+                    useWebWorker: true
+                };
+                processedFile = await imageCompression(file, options);
+                console.log(`Compressed: ${file.size} -> ${processedFile.size}`);
+            } catch (error) {
+                console.warn("Compression failed, using original file", error);
+            }
+        }
+
+        const storageRef = ref(storage, path);
+        const uploadTask = uploadBytesResumable(storageRef, processedFile, metadata);
+
+        // Store task ref
+        uploadTasksRef.current[uploadId] = uploadTask;
+
+        // Update state to uploading
+        setUploads(prev => ({
+            ...prev,
+            [uploadId]: {
+                ...prev[uploadId],
+                fileSize: processedFile.size, // Update with compressed size
+                status: 'uploading'
             }
         }));
 
@@ -66,7 +95,6 @@ export const useFileUpload = () => {
                         url: downloadURL
                     }
                 }));
-                // We don't delete the task immediately so the UI can show "Completed"
             }
         );
 

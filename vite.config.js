@@ -7,8 +7,14 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.js',
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
+      devOptions: {
+        enabled: true
+      },
+      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg', 'nova-icon.png'],
       manifest: {
         name: 'Nova',
         short_name: 'Nova',
@@ -20,14 +26,32 @@ export default defineConfig({
         start_url: '/',
         icons: [
           {
-            src: 'nova-icon.svg',
-            sizes: '512x512',
-            type: 'image/svg+xml'
+            src: '/nova-icon.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'any'
           },
           {
-            src: 'nova-icon.svg',
-            sizes: '192x192',
-            type: 'image/svg+xml'
+            src: '/nova-icon.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable'
+          }
+        ],
+        screenshots: [
+          {
+            src: "/nova-icon.png", // Placeholder, ideally actual screenshots
+            sizes: "512x512",
+            type: "image/png",
+            form_factor: "wide",
+            label: "Desktop"
+          },
+          {
+            src: "/nova-icon.png", // Placeholder
+            sizes: "512x512",
+            type: "image/png",
+            form_factor: "narrow",
+            label: "Mobile"
           }
         ]
       },

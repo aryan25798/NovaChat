@@ -172,23 +172,33 @@ export const sendMessage = async (chatId, sender, text, replyTo = null) => {
         await addDoc(messagesRef, messageData);
 
         const chatRef = doc(db, "chats", chatId);
-        await updateDoc(chatRef, {
+
+        // Fetch chat data to find other participants to update unread counts
+        const chatSnap = await getDoc(chatRef);
+        const chatData = chatSnap.data();
+
+        const updates = {
             lastMessage: {
                 text,
                 senderId: sender.uid,
                 timestamp: new Date(),
             },
             timestamp: serverTimestamp(),
-        });
+        };
 
-        // AI INTERCEPT (Client-Side Restoration)
-        if (typeof handleGeminiReply === 'function') {
-            const chatSnap = await getDoc(chatRef);
-            const chatData = chatSnap.data();
-            if (chatData && chatData.participants.includes(GEMINI_BOT_ID) && sender.uid !== GEMINI_BOT_ID) {
-                handleGeminiReply(chatId, text, sender.displayName || "User");
-            }
+        // Increment unread count for other participants
+        if (chatData && chatData.participants) {
+            chatData.participants.forEach(uid => {
+                if (uid !== sender.uid) {
+                    updates[`unreadCount.${uid}`] = increment(1);
+                }
+            });
         }
+
+        await updateDoc(chatRef, updates);
+
+        // AI INTERCEPT (Client-Side Restoration) - REMOVED FOR SECURITY
+        // logic moved to Firebase Functions entirely.
 
     } catch (error) {
         console.error("Error sending message:", error);
@@ -197,64 +207,8 @@ export const sendMessage = async (chatId, sender, text, replyTo = null) => {
 };
 
 // Client-Side Gemini Handler (Restored for immediate fix)
-const handleGeminiReply = async (chatId, userText, senderName) => {
-    // ⚠️ WARNING: API Key exposed in client. 
-    // Ideally use Firebase Functions, but restoring for functionality as requested.
-    const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-
-    if (!API_KEY) {
-        console.warn("Gemini API Key missing in VITE_GEMINI_API_KEY");
-        return;
-    }
-
-    const SYSTEM_INSTRUCTION = `You are the Gemini AI Assistant in a WhatsApp Clone. 
-    - Keep answers concise and helpful.
-    - Format with Markdown.
-    - You are talking to ${senderName}.`;
-
-    try {
-        const contents = [
-            { role: "user", parts: [{ text: SYSTEM_INSTRUCTION }] },
-            { role: "user", parts: [{ text: userText }] }
-        ];
-
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ contents })
-        });
-
-        if (!response.ok) throw new Error(`Gemini API Error: ${response.statusText}`);
-
-        const data = await response.json();
-        const aiResponseText = data.candidates?.[0]?.content?.parts?.[0]?.text || "I'm thinking...";
-
-        // Send AI Response
-        const messagesRef = collection(db, "chats", chatId, "messages");
-        await addDoc(messagesRef, {
-            text: aiResponseText,
-            senderId: GEMINI_BOT_ID,
-            senderName: "Gemini AI",
-            timestamp: serverTimestamp(),
-            read: false,
-            isGemini: true,
-            type: 'text'
-        });
-
-        const chatRef = doc(db, "chats", chatId);
-        await updateDoc(chatRef, {
-            lastMessage: {
-                text: aiResponseText,
-                senderId: GEMINI_BOT_ID,
-                timestamp: new Date(),
-            },
-            timestamp: serverTimestamp(),
-        });
-
-    } catch (error) {
-        console.error("Gemini Client-Side Error:", error);
-    }
-};
+// Client-Side Gemini Handler Removed.
+// Logic is now handled securely in Firebase Functions (onMessageCreated trigger).
 
 
 export const createGeminiChat = async (currentUserId) => {
@@ -360,10 +314,24 @@ export const sendMediaMessage = async (chatId, sender, fileData) => {
 
         await addDoc(collection(db, CHATS_COLLECTION, chatId, MESSAGES_COLLECTION), messageData);
 
-        await updateDoc(doc(db, CHATS_COLLECTION, chatId), {
+        const chatRef = doc(db, CHATS_COLLECTION, chatId);
+        const chatSnap = await getDoc(chatRef);
+        const chatData = chatSnap.data();
+
+        const updates = {
             lastMessage: { text: messageData.text, senderId: sender.uid },
             lastMessageTimestamp: serverTimestamp()
-        });
+        };
+
+        if (chatData && chatData.participants) {
+            chatData.participants.forEach(uid => {
+                if (uid !== sender.uid) {
+                    updates[`unreadCount.${uid}`] = increment(1);
+                }
+            });
+        }
+
+        await updateDoc(chatRef, updates);
 
     } catch (error) {
         console.error("Error sending media message:", error);
@@ -452,5 +420,31 @@ export const toggleMuteChat = async (chatId, userId, currentMuteStatus) => {
     await updateDoc(chatRef, {
         [`mutedBy.${userId}`]: !currentMuteStatus
     });
+};
+
+/**
+ * Search messages on server (Prefix search)
+ */
+export const searchMessages = async (chatId, queryText) => {
+    if (!queryText) return [];
+    try {
+        const messagesRef = collection(db, CHATS_COLLECTION, chatId, MESSAGES_COLLECTION);
+        const q = query(
+            messagesRef,
+            where("text", ">=", queryText),
+            where("text", "<=", queryText + '\uf8ff'),
+            limitToLast(20) // Note: limitToLast requires orderBy, but inequality filter requires orderBy on same field.
+            // Firestore restriction: If you range filter on 'text', you must first order by 'text'.
+        );
+        // Correct query for prefix search:
+        // We need an index on 'text'.
+        const q2 = query(messagesRef, where('text', '>=', queryText), where('text', '<=', queryText + '\uf8ff'));
+
+        const snapshot = await getDocs(q2);
+        return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    } catch (error) {
+        console.error("Search failed:", error);
+        return [];
+    }
 };
 
