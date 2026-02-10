@@ -46,36 +46,11 @@ export function PresenceProvider({ children }) {
 
             // We set our status to online
             set(userStatusDatabaseRef, isOnlineForDatabase);
-
-            // OPTIONAL: Sync to Firestore for "God Mode" query capabilities (since querying RTDB is harder)
-            // We debounce this to avoid writing to Firestore on every disconnect flick
-            // THROTTLE: Max 1 write per 10 seconds to save costs/avoid hot spots
-            const lastUpdate = Number(sessionStorage.getItem('last_presence_update') || 0);
-            const now = Date.now();
-
-            if (now - lastUpdate > 10000) {
-                updateDoc(userStatusFirestoreRef, {
-                    isOnline: true,
-                    lastSeen: firestoreServerTimestamp()
-                }).catch(e => console.warn("Firestore online sync failed", e));
-                sessionStorage.setItem('last_presence_update', now);
-            }
         });
-
-        // Sync offline status to Firestore on window unload (best effort)
-        const handleUnload = () => {
-            updateDoc(userStatusFirestoreRef, {
-                isOnline: false,
-                lastSeen: firestoreServerTimestamp()
-            });
-        };
-        window.addEventListener("beforeunload", handleUnload);
 
         return () => {
             unsubscribe();
-            window.removeEventListener("beforeunload", handleUnload);
             // We don't manually set offline here because onDisconnect handles it on the server side
-            // and we might just be navigating pages (which shouldn't flicker offline)
         };
     }, [currentUser?.uid]);
 
