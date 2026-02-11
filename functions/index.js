@@ -180,7 +180,9 @@ async function checkRateLimit(uid, action, limit, windowMs) {
     }
 }
 
-exports.onMessageCreated = onDocumentCreated("chats/{chatId}/messages/{messageId}", async (event) => {
+exports.onMessageCreated = onDocumentCreated({
+    document: "chats/{chatId}/messages/{messageId}"
+}, async (event) => {
     const messageData = event.data.data();
     const chatId = event.params.chatId;
     const senderId = messageData.senderId;
@@ -336,7 +338,7 @@ async function handleGeminiReply(chatId, userText, senderName) {
     const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // Set via: firebase functions:secrets:set GEMINI_API_KEY
 
     if (!GEMINI_API_KEY) {
-        logger.warn("Skipping Gemini Reply: No API Key configured.");
+        logger.error("Skipping Gemini Reply: GEMINI_API_KEY is missing in environment variables.");
         return;
     }
 

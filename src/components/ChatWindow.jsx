@@ -55,13 +55,15 @@ export default function ChatWindow({ chat, setChat }) {
     // Context & Presence
     const [presence, setPresence] = useState(null);
     const otherUid = chat?.participants?.find(uid => uid !== currentUser.uid);
-    let otherUser = { uid: otherUid, displayName: 'User', photoURL: null };
-
-    if (chat?.type === 'group') {
-        otherUser = { displayName: chat.groupName, photoURL: chat.groupImage, isGroup: true };
-    } else if (chat?.participantInfo && otherUid) {
-        otherUser = { uid: otherUid, ...chat.participantInfo[otherUid] };
-    }
+    const otherUser = useMemo(() => {
+        if (chat?.type === 'group') {
+            return { displayName: chat.groupName, photoURL: chat.groupImage, isGroup: true, uid: chat.id };
+        }
+        if (chat?.participantInfo && otherUid) {
+            return { uid: otherUid, ...chat.participantInfo[otherUid] };
+        }
+        return { uid: otherUid, displayName: 'User', photoURL: null };
+    }, [chat?.type, chat?.groupName, chat?.groupImage, chat?.participantInfo, otherUid, chat?.id]);
 
     // Handlers
     const scrollToBottom = useCallback(() => {

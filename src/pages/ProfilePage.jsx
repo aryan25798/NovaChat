@@ -26,6 +26,7 @@ const ProfilePage = () => {
             const userRef = doc(db, "users", currentUser.uid);
             await updateDoc(userRef, {
                 displayName: name,
+                searchableName: name.toLowerCase(),
                 about: about
             });
             setTimeout(() => setSaving(false), 500);

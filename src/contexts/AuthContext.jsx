@@ -212,22 +212,36 @@ export function AuthProvider({ children }) {
 
                     if (!userSnap.exists()) {
                         console.debug("Provisioning new user profile...");
+                        const searchableName = (user.displayName || user.email?.split('@')[0] || "user").toLowerCase();
                         await setDoc(userRef, {
                             uid: user.uid,
-                            displayName: user.displayName,
-                            searchableName: (user.displayName || '').toLowerCase(),
+                            displayName: user.displayName || user.email?.split('@')[0] || "User",
+                            searchableName: searchableName,
                             email: user.email,
                             photoURL: user.photoURL,
                             createdAt: serverTimestamp(),
                             isOnline: true,
                             locationSharingEnabled: true,
+                            lastSeen: serverTimestamp(), // New field
+                            phoneNumber: user.phoneNumber, // New field
                             metadata: {
                                 creationTime: user.metadata.creationTime,
                                 lastSignInTime: user.metadata.lastSignInTime
                             }
                         });
-                        userSnap = await getDoc(userRef);
+                        userSnap = await getDoc(userRef); // Re-fetch to get the newly created data
                     } else {
+                        const userData = userSnap.data();
+                        // self-heal: ensure searchableName exists
+                        if (!userData.searchableName && userData.displayName) {
+                            try {
+                                await updateDoc(userRef, {
+                                    searchableName: userData.displayName.toLowerCase()
+                                });
+                            } catch (e) {
+                                console.error("Auto-fix searchableName failed", e);
+                            }
+                        }
                         await updateDoc(userRef, {
                             isOnline: true,
                             "metadata.lastSignInTime": user.metadata.lastSignInTime

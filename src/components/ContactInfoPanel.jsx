@@ -45,7 +45,7 @@ export default function ContactInfoPanel({ user, chat, onClose, isOpen }) {
             }
         }
         fetchFullProfile();
-    }, [user]);
+    }, [user?.uid, user?.isGroup]);
 
     const isMuted = chat?.mutedBy?.[currentUser?.uid] || false;
 
