@@ -4,6 +4,7 @@ import { useAuth } from './contexts/AuthContext';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { StatusProvider } from './contexts/StatusContext';
 import { FriendProvider } from './contexts/FriendContext';
+import { FileUploadProvider } from './contexts/FileUploadContext';
 
 // Lazy Load Components
 const Login = lazy(() => import('./pages/Login'));
@@ -103,35 +104,37 @@ const App = () => {
           <GlobalAnnouncements />
           <FriendProvider>
             <StatusProvider>
-              <ConnectivityMonitor>
-                <Router>
-                  <Suspense fallback={<Loading />}>
-                    <Routes>
-                      <Route path="/login" element={<Login />} />
-                      <Route path="/share" element={<PrivateRoute><SharePage /></PrivateRoute>} />
-                      <Route path="/admin" element={<PrivateRoute><AdminDashboard /></PrivateRoute>} />
-                      <Route
-                        path="/"
-                        element={
-                          <PrivateRoute>
-                            <MainLayout />
-                          </PrivateRoute>
-                        }
-                      >
-                        <Route index element={<EmptyState />} />
-                        <Route path="c/:id" element={<ChatPage />} />
-                        <Route path="profile" element={<ProfilePage />} />
-                        <Route path="settings" element={<Navigate to="/profile" />} />
-                        <Route path="status" element={<StatusPage />} />
-                        <Route path="calls" element={<CallsPage />} />
-                        <Route path="contacts" element={<ContactsPage />} />
-                      </Route>
+              <FileUploadProvider>
+                <ConnectivityMonitor>
+                  <Router>
+                    <Suspense fallback={<Loading />}>
+                      <Routes>
+                        <Route path="/login" element={<Login />} />
+                        <Route path="/share" element={<PrivateRoute><SharePage /></PrivateRoute>} />
+                        <Route path="/admin" element={<PrivateRoute><AdminDashboard /></PrivateRoute>} />
+                        <Route
+                          path="/"
+                          element={
+                            <PrivateRoute>
+                              <MainLayout />
+                            </PrivateRoute>
+                          }
+                        >
+                          <Route index element={<EmptyState />} />
+                          <Route path="c/:id" element={<ChatPage />} />
+                          <Route path="profile" element={<ProfilePage />} />
+                          <Route path="settings" element={<Navigate to="/profile" />} />
+                          <Route path="status" element={<StatusPage />} />
+                          <Route path="calls" element={<CallsPage />} />
+                          <Route path="contacts" element={<ContactsPage />} />
+                        </Route>
 
-                      <Route path="*" element={<Navigate to="/" />} />
-                    </Routes>
-                  </Suspense>
-                </Router>
-              </ConnectivityMonitor>
+                        <Route path="*" element={<Navigate to="/" />} />
+                      </Routes>
+                    </Suspense>
+                  </Router>
+                </ConnectivityMonitor>
+              </FileUploadProvider>
             </StatusProvider>
           </FriendProvider>
         </NotificationProvider>

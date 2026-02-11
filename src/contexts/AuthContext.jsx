@@ -1,7 +1,7 @@
 import React, { useContext, useState, useEffect, useRef } from "react";
 import { auth, googleProvider, db } from "../firebase";
 import { signInWithPopup, getRedirectResult, signOut, onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
-import { doc, setDoc, getDoc, serverTimestamp, updateDoc, onSnapshot } from "firebase/firestore";
+import { doc, setDoc, getDoc, serverTimestamp, updateDoc, onSnapshot, enableNetwork } from "firebase/firestore";
 import { listenerManager } from "../utils/ListenerManager";
 import { logoutWithTimeout, clearAllCaches } from "../utils/logoutUtils";
 
@@ -224,8 +224,6 @@ export function AuthProvider({ children }) {
                             photoURL: user.photoURL,
                             createdAt: serverTimestamp(),
                             isOnline: true,
-                            superAdmin: false,
-                            isAdmin: false,
                             locationSharingEnabled: true,
                             metadata: {
                                 creationTime: user.metadata.creationTime,
@@ -291,7 +289,7 @@ export function AuthProvider({ children }) {
         };
     }, []);
 
-    const value = {
+    const value = React.useMemo(() => ({
         currentUser,
         loginWithGoogle,
         loginWithEmail,
@@ -304,7 +302,7 @@ export function AuthProvider({ children }) {
             await deactivateFn();
             await logout();
         }
-    };
+    }), [currentUser, loginWithGoogle, loginWithEmail, logout, toggleLocationSharing]);
 
     return (
         <AuthContext.Provider value={value}>

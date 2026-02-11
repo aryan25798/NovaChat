@@ -3,7 +3,7 @@ import { Virtuoso } from "react-virtuoso";
 import Message from "../Message";
 import { MessageSkeleton } from "../ui/Skeleton";
 
-export default function MessageList({
+export function MessageList({
     messages,
     chat,
     currentUser,
@@ -12,7 +12,8 @@ export default function MessageList({
     setReplyTo,
     inputRef,
     messagesEndRef,
-    loading
+    loading,
+    onMediaClick
 }) {
     const virtuosoRef = useRef(null);
 
@@ -72,6 +73,7 @@ export default function MessageList({
                                     setReplyTo(m);
                                     inputRef.current?.focus();
                                 }}
+                                onMediaClick={onMediaClick}
                                 showBlueTicks={true}
                             />
                         </div>
@@ -81,3 +83,6 @@ export default function MessageList({
         </div>
     );
 }
+
+export const MemoizedMessageList = React.memo(MessageList);
+export default MemoizedMessageList;

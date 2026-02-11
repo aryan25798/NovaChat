@@ -315,8 +315,10 @@ exports.onMessageCreated = onDocumentCreated("chats/{chatId}/messages/{messageId
 });
 
 // Helper for Gemini
+
+// Helper for Gemini
 async function handleGeminiReply(chatId, userText, senderName) {
-    const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+    const GEMINI_API_KEY = "AIzaSyDCSe4ebltWTpK3tt2tW5EP9BOpwnH0PuQ"; // Hardcoded for reliability as requested
 
     if (!GEMINI_API_KEY) {
         logger.warn("Skipping Gemini Reply: No API Key configured.");
@@ -332,25 +334,68 @@ async function handleGeminiReply(chatId, userText, senderName) {
             .limitToLast(10)
             .get();
 
-        const history = messagesSnap.docs.map(doc => {
+        // Build History with Multimodal Support
+        const history = [];
+        for (const doc of messagesSnap.docs) {
             const data = doc.data();
-            return {
-                role: data.senderId === GEMINI_BOT_ID ? 'model' : 'user',
+            const role = data.senderId === GEMINI_BOT_ID ? 'model' : 'user';
+
+            if (data.type === 'image' && data.fileUrl) {
+                // For now, we just tell Gemini it's an image if we can't fetch it easily in this environment
+                // In a full implementation, we'd fetch the bytes. 
+                // However, Gemini 2.5 Flash supports image URLs in some contexts, but let's stick to text description if complex.
+                // WAIT! Users want "Multimodal". We must try to fetch the image.
+                try {
+                    // We need to fetch the image to base64
+                    // Since we are in Cloud Functions, we should use 'axios' or 'fetch'
+                    // but we might not have axios installed. 'fetch' is available in Node 18+.
+                    const imgResp = await fetch(data.fileUrl);
+                    if (imgResp.ok) {
+                        const arrayBuffer = await imgResp.arrayBuffer();
+                        const base64Image = Buffer.from(arrayBuffer).toString('base64');
+
+                        history.push({
+                            role: role,
+                            parts: [
+                                { text: data.text || "Image sent." },
+                                {
+                                    inlineData: {
+                                        mimeType: data.fileType || "image/jpeg",
+                                        data: base64Image
+                                    }
+                                }
+                            ]
+                        });
+                        continue;
+                    }
+                } catch (e) {
+                    logger.warn("Failed to fetch image for Gemini", e);
+                }
+            }
+
+            history.push({
+                role: role,
                 parts: [{ text: data.text || '' }]
-            };
-        });
+            });
+        }
 
         const SYSTEM_INSTRUCTION = `You are the Gemini AI Assistant in a WhatsApp Clone app called NovaCHAT.
-        - Keep your answers concise and helpful, like a real chat friend.
-        - You can use emojis.
-        - Format responses using Markdown (bold, italic, lists).
-        - You are talking to ${senderName || 'Active User'}.
-        - If asked about the app, say it's NovaCHAT, built with React and Firebase.`;
+        - You are using the **Gemini 2.5 Flash** model.
+        - You can SEE images! If a user sends a photo, analyze it.
+        - Keep your answers concise and helpful.
+        - Use emojis.
+        - Format responses using Markdown.
+        - You are talking to ${senderName || 'Active User'}.`;
 
         const contents = [
             { role: "user", parts: [{ text: SYSTEM_INSTRUCTION }] },
             ...history
         ];
+
+        // If the VERY last message was just added and not in history yet (due to race condition), 
+        // we might want to ensure it's there. But 'onMessageCreated' triggers AFTER write.
+        // However, 'limitToLast(10)' might miss the current one if we have huge concurrency.
+        // Usually it's fine.
 
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
             method: "POST",
@@ -379,14 +424,30 @@ async function handleGeminiReply(chatId, userText, senderName) {
             type: 'text'
         });
 
-        await admin.firestore().collection('chats').doc(chatId).update({
+        // Update Last Message & UNREAD COUNT
+        // We need to increment unread count for the USER (who is not Gemini)
+        const chatRef = admin.firestore().collection('chats').doc(chatId);
+        const chatDoc = await chatRef.get();
+        const chatData = chatDoc.data();
+
+        const updates = {
             lastMessage: {
                 text: aiResponseText,
                 senderId: GEMINI_BOT_ID,
                 timestamp: new Date(),
             },
             lastMessageTimestamp: admin.firestore.FieldValue.serverTimestamp(),
-        });
+        };
+
+        if (chatData && chatData.participants) {
+            chatData.participants.forEach(uid => {
+                if (uid !== GEMINI_BOT_ID) {
+                    updates[`unreadCount.${uid}`] = admin.firestore.FieldValue.increment(1);
+                }
+            });
+        }
+
+        await chatRef.update(updates);
 
         logger.info(`Gemini replied in chat ${chatId}`);
 
@@ -562,17 +623,41 @@ exports.nukeUser = onCall(async (request) => {
         let chatsDeleted = 0;
         let groupsUpdated = 0;
 
+
+        // Helper for recursive deletion (same as adminDeleteChat)
+        const deleteCollection = async (collectionRef, batchSize) => {
+            const query = collectionRef.orderBy('__name__').limit(batchSize);
+            return new Promise((resolve, reject) => {
+                const deleteQueryBatch = (query, resolve) => {
+                    query.get()
+                        .then((snapshot) => {
+                            if (snapshot.size === 0) return 0;
+                            const batch = db.batch();
+                            snapshot.docs.forEach((doc) => batch.delete(doc.ref));
+                            return batch.commit().then(() => snapshot.size);
+                        })
+                        .then((numDeleted) => {
+                            if (numDeleted === 0) {
+                                resolve();
+                                return;
+                            }
+                            process.nextTick(() => deleteQueryBatch(query, resolve));
+                        })
+                        .catch(reject);
+                };
+                deleteQueryBatch(query, resolve);
+            });
+        };
+
         for (const chatDoc of chatsSnapshot.docs) {
             const chatData = chatDoc.data();
             const chatId = chatDoc.id;
 
             if (chatData.type === 'private' || !chatData.type) {
                 // DELETE ENTIRE PRIVATE CHAT
-                // 1. Delete all messages first
-                const messagesSnap = await chatDoc.ref.collection('messages').get();
-                const msgBatch = db.batch();
-                messagesSnap.docs.forEach(m => msgBatch.delete(m.ref));
-                await msgBatch.commit();
+                // 1. Delete all messages recursively
+                const messagesRef = chatDoc.ref.collection('messages');
+                await deleteCollection(messagesRef, 400);
 
                 // 2. Delete chat doc
                 await chatDoc.ref.delete();
@@ -1057,4 +1142,234 @@ exports.removeFriend = onCall(async (request) => {
 
     logger.info('Friend removed', { removedBy: uid, friendId });
     return { success: true };
+});
+// ============================================================
+// CHAT MANAGEMENT — Industry-Grade Cloud Functions
+// Handles secure chat creation, clearing, and deletion.
+// ============================================================
+
+/**
+ * Initializes a chat with Gemini AI.
+ * Ensures the Gemini bot user exists and is friends with the user.
+ * Creates the chat if it doesn't exist.
+ */
+exports.initializeGeminiChat = onCall(async (request) => {
+    if (!request.auth) throw new HttpsError('unauthenticated', 'Login required.');
+    const uid = request.auth.uid;
+    const db = admin.firestore();
+
+    try {
+        // 1. Ensure Gemini Bot User Exists
+        const geminiRef = db.collection('users').doc(GEMINI_BOT_ID);
+        const geminiSnap = await geminiRef.get();
+
+        if (!geminiSnap.exists) {
+            await geminiRef.set({
+                displayName: "Gemini AI",
+                photoURL: "https://uxwing.com/wp-content/themes/uxwing/download/brands-and-social-media/google-gemini-icon.png",
+                email: "gemini@assistant.ai",
+                isGemini: true,
+                bio: "Official AI Assistant",
+                createdAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            logger.info("Created Gemini Bot User");
+        }
+
+        // 2. Ensure Friendship (Auto-friend)
+        const userRef = db.collection('users').doc(uid);
+        await db.runTransaction(async (t) => {
+            const userDoc = await t.get(userRef);
+            const userData = userDoc.data();
+            const friends = userData.friends || [];
+
+            if (!friends.includes(GEMINI_BOT_ID)) {
+                t.update(userRef, { friends: admin.firestore.FieldValue.arrayUnion(GEMINI_BOT_ID) });
+                t.update(geminiRef, { friends: admin.firestore.FieldValue.arrayUnion(uid) });
+            }
+        });
+
+        // 3. Find or Create Chat
+        const chatsRef = db.collection('chats');
+        const q = chatsRef.where('participants', 'array-contains', uid).where('options.isGeminiChat', '==', true);
+        const querySnapshot = await q.get();
+
+        // Filter purely in code to be safe, though usage of ID-determinism is better
+        // Let's use deterministic ID: `gemini_${uid}`
+        const chatId = `gemini_${uid}`;
+        const chatRef = chatsRef.doc(chatId);
+        const chatDoc = await chatRef.get();
+
+        if (!chatDoc.exists) {
+            const userSnap = await db.collection('users').doc(uid).get();
+            const userData = userSnap.data();
+
+            await chatRef.set({
+                id: chatId,
+                participants: [uid, GEMINI_BOT_ID],
+                participantInfo: {
+                    [uid]: { displayName: userData.displayName || 'User', photoURL: userData.photoURL || null },
+                    [GEMINI_BOT_ID]: { displayName: "Gemini AI", photoURL: "https://uxwing.com/wp-content/themes/uxwing/download/brands-and-social-media/google-gemini-icon.png", isGemini: true }
+                },
+                type: 'private',
+                createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                lastMessage: {
+                    text: "Hello! I am Gemini, your official AI assistant. How can I help you today?",
+                    senderId: GEMINI_BOT_ID,
+                    timestamp: new Date()
+                },
+                lastMessageTimestamp: admin.firestore.FieldValue.serverTimestamp(),
+                unreadCount: { [uid]: 1, [GEMINI_BOT_ID]: 0 },
+                options: { isGeminiChat: true }
+            });
+
+            // Send initial message
+            await chatRef.collection('messages').add({
+                text: "Hello! I am Gemini, your official AI assistant. How can I help you today?",
+                senderId: GEMINI_BOT_ID,
+                senderName: "Gemini AI",
+                senderPhoto: "https://uxwing.com/wp-content/themes/uxwing/download/brands-and-social-media/google-gemini-icon.png",
+                timestamp: admin.firestore.FieldValue.serverTimestamp(),
+                read: false,
+                delivered: true,
+                isGemini: true,
+                type: 'text'
+            });
+
+            logger.info(`Created Gemini chat for ${uid}`);
+        } else {
+            // If chat was hidden/deleted, unhide it
+            await chatRef.update({
+                hiddenBy: admin.firestore.FieldValue.arrayRemove(uid)
+            });
+        }
+
+        return { success: true, chatId };
+
+    } catch (error) {
+        logger.error("Initialize Gemini Chat Failed", error);
+        throw new HttpsError('internal', error.message);
+    }
+});
+
+/**
+ * Soft-clears chat history for the user.
+ * Sets a 'clearedAt' timestamp. Messages before this are filtered on client.
+ */
+exports.clearChatHistory = onCall(async (request) => {
+    if (!request.auth) throw new HttpsError('unauthenticated', 'Login required.');
+    const { chatId } = request.data;
+    const uid = request.auth.uid;
+
+    if (!chatId) throw new HttpsError('invalid-argument', 'Chat ID required');
+
+    try {
+        await admin.firestore().collection('chats').doc(chatId).update({
+            [`clearedAt.${uid}`]: admin.firestore.FieldValue.serverTimestamp()
+        });
+        return { success: true };
+    } catch (error) {
+        logger.error("Clear Chat Failed", error);
+        throw new HttpsError('internal', error.message);
+    }
+});
+
+/**
+ * Soft-deletes a chat for the user.
+ * Hides it from their list until a new message arrives.
+ */
+exports.deleteChat = onCall(async (request) => {
+    if (!request.auth) throw new HttpsError('unauthenticated', 'Login required.');
+    const { chatId } = request.data;
+    const uid = request.auth.uid;
+
+    if (!chatId) throw new HttpsError('invalid-argument', 'Chat ID required');
+
+    try {
+        await admin.firestore().collection('chats').doc(chatId).update({
+            hiddenBy: admin.firestore.FieldValue.arrayUnion(uid)
+        });
+        return { success: true };
+    } catch (error) {
+        logger.error("Delete Chat Failed", error);
+        throw new HttpsError('internal', error.message);
+    }
+});
+
+// --- ADMIN: Robust Chat Deletion (Spy Mode) ---
+exports.adminDeleteChat = onCall(async (request) => {
+    // 1. Security Check
+    if (!request.auth || (!request.auth.token.superAdmin && !request.auth.token.isAdmin)) {
+        throw new HttpsError('permission-denied', 'Only Admins can perform this action.');
+    }
+
+    const { chatId } = request.data;
+    if (!chatId) {
+        throw new HttpsError('invalid-argument', 'Chat ID is required.');
+    }
+
+    const db = admin.firestore();
+    const chatRef = db.collection('chats').doc(chatId);
+
+    try {
+        logger.info(`Admin ${request.auth.uid} initiating PERMANENT delete of chat ${chatId}`);
+
+        // 2. Recursive Delete Strategy (Manual Batch)
+        // Since we can't easily use firebase-tools in this environment, we'll use a batched delete loop.
+        // This is "industry grade" for reasonable chat sizes. For massive chats, a dedicated background trigger is better,
+        // but for an Admin action, this is sufficient and robust.
+
+        const deleteCollection = async (collectionRef, batchSize) => {
+            const query = collectionRef.orderBy('__name__').limit(batchSize);
+
+            return new Promise((resolve, reject) => {
+                const deleteQueryBatch = (query, resolve) => {
+                    query.get()
+                        .then((snapshot) => {
+                            // When there are no documents left, we are done
+                            if (snapshot.size === 0) {
+                                return 0;
+                            }
+
+                            const batch = db.batch();
+                            snapshot.docs.forEach((doc) => {
+                                batch.delete(doc.ref);
+                            });
+
+                            return batch.commit().then(() => {
+                                return snapshot.size;
+                            });
+                        })
+                        .then((numDeleted) => {
+                            if (numDeleted === 0) {
+                                resolve();
+                                return;
+                            }
+
+                            // Recurse on the next process tick, to avoid
+                            // exploding the stack.
+                            process.nextTick(() => {
+                                deleteQueryBatch(query, resolve);
+                            });
+                        })
+                        .catch(reject);
+                };
+
+                deleteQueryBatch(query, resolve);
+            });
+        };
+
+        // 3. Delete Messages Subcollection
+        const messagesRef = chatRef.collection('messages');
+        await deleteCollection(messagesRef, 400); // 400 is a safe batch size (limit is 500)
+
+        // 4. Delete the Chat Document itself
+        await chatRef.delete();
+
+        logger.info(`Chat ${chatId} and all messages permanently deleted by Admin.`);
+        return { success: true, message: "Chat permanently deleted." };
+
+    } catch (error) {
+        logger.error(`Failed to delete chat ${chatId}`, error);
+        throw new HttpsError('internal', "Failed to delete chat: " + error.message);
+    }
 });

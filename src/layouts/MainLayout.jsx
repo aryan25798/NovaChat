@@ -6,6 +6,7 @@ import { cn } from "../lib/utils";
 import NavRail from "../components/NavRail";
 import { motion, AnimatePresence } from "framer-motion";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import UploadProgress from "../components/chat/UploadProgress";
 
 const MainLayout = () => {
     const location = useLocation();
@@ -59,6 +60,9 @@ const MainLayout = () => {
                         <div className="flex-1 flex flex-col overflow-hidden relative w-full h-full">
                             <Outlet />
                         </div>
+
+                        {/* Global Upload Progress Indicator */}
+                        <UploadProgress />
                     </main>
                 )}
             </div>

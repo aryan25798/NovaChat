@@ -1,5 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
-import { FaTimes, FaSearch } from "react-icons/fa";
+import { FaTimes, FaSearch, FaVideo, FaPhone, FaEllipsisV } from "react-icons/fa";
+import { GEMINI_BOT_ID } from "../constants";
+
+// ... existing imports ...
+
 import { useAuth } from "../contexts/AuthContext";
 import { useCall } from "../contexts/CallContext";
 import { useNavigate } from "react-router-dom";
@@ -7,7 +11,7 @@ import { subscribeToMessages, sendMessage, sendMediaMessage, deleteMessage, addR
 import { setTypingStatus, subscribeToTypingStatus } from "../services/typingService";
 import { usePresence } from "../contexts/PresenceContext";
 import { motion, AnimatePresence } from "framer-motion";
-import { useFileUpload } from "../hooks/useFileUpload";
+import { useFileUpload } from "../contexts/FileUploadContext";
 import { getDownloadURL } from "firebase/storage";
 
 import { useFriend } from "../contexts/FriendContext";
@@ -17,7 +21,7 @@ import ChatHeader from "./chat/ChatHeader";
 import MessageList from "./chat/MessageList";
 import MessageInput from "./chat/MessageInput";
 import ContactInfoPanel from "./ContactInfoPanel";
-import UploadProgress from "./chat/UploadProgress";
+import FullScreenMedia from "./FullScreenMedia";
 
 export default function ChatWindow({ chat, setChat }) {
     const [messages, setMessages] = useState([]);
@@ -29,14 +33,20 @@ export default function ChatWindow({ chat, setChat }) {
     const [searchQuery, setSearchQuery] = useState("");
     const [loading, setLoading] = useState(false);
 
+    // Media Gallery State
+    const [activeMediaMessage, setActiveMediaMessage] = useState(null);
+
     const { currentUser } = useAuth();
     const { startCall } = useCall();
     const { getUserPresence } = usePresence();
     const navigate = useNavigate();
 
+
     const messagesEndRef = useRef(null);
     const inputRef = useRef(null);
     const typingTimeoutRef = useRef(null);
+
+
 
     // Context & Presence
     const [presence, setPresence] = useState(null);
@@ -108,7 +118,7 @@ export default function ChatWindow({ chat, setChat }) {
         }
     };
 
-    const { startUpload, uploads, pauseUpload, resumeUpload, cancelUpload, clearCompleted } = useFileUpload();
+    const { startUpload } = useFileUpload();
 
     // ... (existing code)
 
@@ -139,13 +149,13 @@ export default function ChatWindow({ chat, setChat }) {
         }
     };
 
-    const handleDelete = async (msgId, deleteFor) => {
+    const handleDelete = React.useCallback(async (msgId, deleteFor) => {
         await deleteMessage(chat.id, msgId, deleteFor);
-    };
+    }, [chat?.id]);
 
-    const handleReact = async (msgId, emoji) => {
+    const handleReact = React.useCallback(async (msgId, emoji) => {
         await addReaction(chat.id, msgId, emoji, currentUser.uid);
-    };
+    }, [chat?.id, currentUser.uid]);
 
     const handleDeleteChat = async () => {
         try {
@@ -294,7 +304,7 @@ export default function ChatWindow({ chat, setChat }) {
     }, [searchQuery]);
 
     const filteredMessages = React.useMemo(() => {
-        const clearedAt = chat?.clearedBy?.[currentUser.uid]?.toDate?.() || new Date(0);
+        const clearedAt = chat?.clearedAt?.[currentUser.uid]?.toDate?.() || new Date(0);
 
         // 1. Filter local messages
         const localMatches = messages.filter(m => {
@@ -317,6 +327,51 @@ export default function ChatWindow({ chat, setChat }) {
 
         return localMatches;
     }, [messages, searchQuery, serverResults, chat, currentUser.uid]);
+
+    // Media Gallery Logic
+    const mediaMessages = React.useMemo(() => {
+        return filteredMessages.filter(m => {
+            // Check if it has media URL and correct type
+            const hasUrl = m.mediaUrl || m.fileUrl || m.imageUrl || m.videoUrl;
+            const isMedia = m.type === 'image' || m.type === 'video' || (m.fileType && (m.fileType.startsWith('image/') || m.fileType.startsWith('video/')));
+            return hasUrl && isMedia;
+        });
+    }, [filteredMessages]);
+
+    const handleMediaClick = (msg) => {
+        setActiveMediaMessage(msg);
+    };
+
+    const handleNextMedia = () => {
+        if (!activeMediaMessage) return;
+        const currentIndex = mediaMessages.findIndex(m => m.id === activeMediaMessage.id);
+        if (currentIndex < mediaMessages.length - 1) {
+            setActiveMediaMessage(mediaMessages[currentIndex + 1]);
+        }
+    };
+
+    const handlePrevMedia = () => {
+        if (!activeMediaMessage) return;
+        const currentIndex = mediaMessages.findIndex(m => m.id === activeMediaMessage.id);
+        if (currentIndex > 0) {
+            setActiveMediaMessage(mediaMessages[currentIndex - 1]);
+        }
+    };
+
+    const activeMediaIndex = activeMediaMessage
+        ? mediaMessages.findIndex(m => m.id === activeMediaMessage.id)
+        : -1;
+
+    const getActiveMediaSrc = () => {
+        if (!activeMediaMessage) return null;
+        return activeMediaMessage.mediaUrl || activeMediaMessage.fileUrl || activeMediaMessage.imageUrl || activeMediaMessage.videoUrl;
+    };
+
+    const getActiveMediaType = () => {
+        if (!activeMediaMessage) return 'image';
+        if (activeMediaMessage.type === 'video' || activeMediaMessage.videoUrl || activeMediaMessage.fileType?.startsWith('video/')) return 'video';
+        return 'image';
+    };
 
     // Friend Status Check
     const { getFriendStatus } = useFriend();
@@ -386,13 +441,7 @@ export default function ChatWindow({ chat, setChat }) {
                 )}
             </AnimatePresence>
 
-            <UploadProgress
-                uploads={uploads}
-                onPause={pauseUpload}
-                onResume={resumeUpload}
-                onCancel={cancelUpload}
-                onClear={clearCompleted}
-            />
+
 
             <div className="flex-1 overflow-y-auto no-scrollbar flex flex-col relative" id="message-container">
                 {hasMoreMessages && !loading && (
@@ -416,6 +465,7 @@ export default function ChatWindow({ chat, setChat }) {
                     inputRef={inputRef}
                     messagesEndRef={messagesEndRef}
                     loading={loading}
+                    onMediaClick={handleMediaClick}
                 />
             </div>
 
@@ -457,6 +507,20 @@ export default function ChatWindow({ chat, setChat }) {
                     </motion.div>
                 )}
             </AnimatePresence>
+
+            {/* Media Viewer */}
+            {activeMediaMessage && (
+                <FullScreenMedia
+                    src={getActiveMediaSrc()}
+                    type={getActiveMediaType()}
+                    fileName={activeMediaMessage.fileName}
+                    onClose={() => setActiveMediaMessage(null)}
+                    onNext={handleNextMedia}
+                    onPrev={handlePrevMedia}
+                    hasNext={activeMediaIndex < mediaMessages.length - 1}
+                    hasPrev={activeMediaIndex > 0}
+                />
+            )}
         </div>
     );
 }

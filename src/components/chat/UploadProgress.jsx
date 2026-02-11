@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FaPause, FaPlay, FaTimes, FaCheck, FaCloudUploadAlt, FaExclamationTriangle } from 'react-icons/fa';
 import { Button } from '../ui/Button';
+import { useFileUpload } from '../../contexts/FileUploadContext';
 
-const UploadProgress = ({ uploads, onPause, onResume, onCancel, onClear }) => {
+const UploadProgress = () => {
+    const { uploads, pauseUpload, resumeUpload, cancelUpload, clearCompleted } = useFileUpload();
     const activeUploads = Object.values(uploads);
     const [minimized, setMinimized] = useState(false);
 
@@ -14,11 +16,11 @@ const UploadProgress = ({ uploads, onPause, onResume, onCancel, onClear }) => {
 
         if (hasCompleted && !hasActive) {
             const timer = setTimeout(() => {
-                onClear();
+                clearCompleted();
             }, 1500);
             return () => clearTimeout(timer);
         }
-    }, [uploads, onClear]);
+    }, [uploads, clearCompleted]);
 
     if (activeUploads.length === 0) return null;
 
@@ -86,12 +88,12 @@ const UploadProgress = ({ uploads, onPause, onResume, onCancel, onClear }) => {
                                         </div>
                                         <div className="flex gap-1 shrink-0">
                                             {upload.status === 'uploading' && (
-                                                <Button size="icon" variant="ghost" className="h-6 w-6 rounded-full" onClick={() => onPause(upload.id)}>
+                                                <Button size="icon" variant="ghost" className="h-6 w-6 rounded-full" onClick={() => pauseUpload(upload.id)}>
                                                     <FaPause className="text-[10px]" />
                                                 </Button>
                                             )}
                                             {upload.status === 'paused' && (
-                                                <Button size="icon" variant="ghost" className="h-6 w-6 rounded-full" onClick={() => onResume(upload.id)}>
+                                                <Button size="icon" variant="ghost" className="h-6 w-6 rounded-full" onClick={() => resumeUpload(upload.id)}>
                                                     <FaPlay className="text-[10px]" />
                                                 </Button>
                                             )}
@@ -99,7 +101,7 @@ const UploadProgress = ({ uploads, onPause, onResume, onCancel, onClear }) => {
                                                 <FaExclamationTriangle className="text-red-500 text-sm mt-1" title={upload.error} />
                                             )}
                                             {(upload.status === 'uploading' || upload.status === 'paused' || upload.status === 'error') && (
-                                                <Button size="icon" variant="ghost" className="h-6 w-6 rounded-full hover:bg-red-50 hover:text-red-500" onClick={() => onCancel(upload.id)}>
+                                                <Button size="icon" variant="ghost" className="h-6 w-6 rounded-full hover:bg-red-50 hover:text-red-500" onClick={() => cancelUpload(upload.id)}>
                                                     <FaTimes className="text-[10px]" />
                                                 </Button>
                                             )}
@@ -118,7 +120,7 @@ const UploadProgress = ({ uploads, onPause, onResume, onCancel, onClear }) => {
                                 </div>
                             ))}
                             <div className="p-2 flex justify-end">
-                                <Button variant="ghost" size="sm" className="text-xs h-7" onClick={onClear}>
+                                <Button variant="ghost" size="sm" className="text-xs h-7" onClick={clearCompleted}>
                                     Clear Completed
                                 </Button>
                             </div>

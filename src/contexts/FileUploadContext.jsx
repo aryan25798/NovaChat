@@ -1,10 +1,14 @@
-import { useState, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
 import { storage } from '../firebase';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { v4 as uuidv4 } from 'uuid';
 import imageCompression from 'browser-image-compression';
 
-export const useFileUpload = () => {
+const FileUploadContext = createContext();
+
+export const useFileUpload = () => useContext(FileUploadContext);
+
+export const FileUploadProvider = ({ children }) => {
     const [uploads, setUploads] = useState({});
     const uploadTasksRef = useRef({});
 
@@ -22,7 +26,8 @@ export const useFileUpload = () => {
                 error: null,
                 url: null,
                 fileType: file.type,
-                fileSize: file.size
+                fileSize: file.size,
+                path: path
             }
         }));
 
@@ -37,7 +42,6 @@ export const useFileUpload = () => {
                     useWebWorker: true
                 };
                 processedFile = await imageCompression(file, options);
-                console.log(`Compressed: ${file.size} -> ${processedFile.size}`);
             } catch (error) {
                 console.warn("Compression failed, using original file", error);
             }
@@ -59,15 +63,13 @@ export const useFileUpload = () => {
             }
         }));
 
-
-        // Listen for state changes
+        // Listen for state changes (throttle updates)
         let lastUpdate = 0;
         uploadTask.on('state_changed',
             (snapshot) => {
                 const now = Date.now();
                 const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
 
-                // Throttle updates to once every 300ms, but always allow 0% and 100% (or very close to it)
                 if (now - lastUpdate > 300 || progress === 0 || progress >= 100) {
                     lastUpdate = now;
                     setUploads(prev => ({
@@ -90,6 +92,7 @@ export const useFileUpload = () => {
                         error: error.message
                     }
                 }));
+                // Keep task ref for retry if needed? For now delete.
                 delete uploadTasksRef.current[uploadId];
             },
             async () => {
@@ -169,7 +172,7 @@ export const useFileUpload = () => {
         }
     }, []);
 
-    return {
+    const value = {
         uploads,
         startUpload,
         pauseUpload,
@@ -178,4 +181,10 @@ export const useFileUpload = () => {
         clearCompleted,
         removeUpload
     };
+
+    return (
+        <FileUploadContext.Provider value={value}>
+            {children}
+        </FileUploadContext.Provider>
+    );
 };

@@ -4,7 +4,9 @@ import { Avatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
 import { cn } from "../../lib/utils";
 
-export default function ChatHeader({
+import { GEMINI_BOT_ID } from "../../constants";
+
+export function ChatHeader({
     otherUser,
     presence,
     getStatusText,
@@ -15,9 +17,10 @@ export default function ChatHeader({
     onToggleSearch,
     showSearch,
     onDeleteChat,
-    canMessage = true // default to true to not break other usages
+    canMessage = true
 }) {
     const [showHeaderMenu, setShowHeaderMenu] = useState(false);
+    const isGemini = otherUser.uid === GEMINI_BOT_ID;
 
     return (
         <div className="h-[60px] md:h-[72px] px-2 md:px-6 flex justify-between items-center glass border-b border-border/30 z-20 shrink-0 sticky top-0 shadow-sm transition-all">
@@ -49,24 +52,28 @@ export default function ChatHeader({
                 </div>
             </div>
             <div className="flex items-center gap-1 md:gap-2 text-text-2">
-                <Button
-                    variant="ghost"
-                    size="icon"
-                    className="rounded-full hover:text-text-1 min-w-[40px] min-h-[40px] w-10 h-10 md:w-10 md:h-10 flex items-center justify-center disabled:opacity-30 disabled:hover:text-text-2"
-                    onClick={() => startCall(otherUser, 'video', chat.id)}
-                    disabled={!canMessage}
-                >
-                    <FaVideo className="w-4 h-4 md:w-4 md:h-4" />
-                </Button>
-                <Button
-                    variant="ghost"
-                    size="icon"
-                    className="rounded-full hover:text-text-1 min-w-[40px] min-h-[40px] w-10 h-10 md:w-10 md:h-10 flex items-center justify-center disabled:opacity-30 disabled:hover:text-text-2"
-                    onClick={() => startCall(otherUser, 'audio', chat.id)}
-                    disabled={!canMessage}
-                >
-                    <FaPhone className="w-3.5 h-3.5 md:w-3.5 md:h-3.5" />
-                </Button>
+                {!isGemini && (
+                    <>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="rounded-full hover:text-text-1 min-w-[40px] min-h-[40px] w-10 h-10 md:w-10 md:h-10 flex items-center justify-center disabled:opacity-30 disabled:hover:text-text-2"
+                            onClick={() => startCall(otherUser, 'video', chat.id)}
+                            disabled={!canMessage}
+                        >
+                            <FaVideo className="w-4 h-4 md:w-4 md:h-4" />
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="rounded-full hover:text-text-1 min-w-[40px] min-h-[40px] w-10 h-10 md:w-10 md:h-10 flex items-center justify-center disabled:opacity-30 disabled:hover:text-text-2"
+                            onClick={() => startCall(otherUser, 'audio', chat.id)}
+                            disabled={!canMessage}
+                        >
+                            <FaPhone className="w-3.5 h-3.5 md:w-3.5 md:h-3.5" />
+                        </Button>
+                    </>
+                )}
 
                 <div className="h-6 w-px bg-border/50 mx-1 hidden md:block"></div>
 
@@ -143,3 +150,6 @@ export default function ChatHeader({
         </div>
     );
 }
+
+export const MemoizedChatHeader = React.memo(ChatHeader);
+export default MemoizedChatHeader;

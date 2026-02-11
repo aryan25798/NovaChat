@@ -1,24 +1,10 @@
-import { db, storage, auth } from "../firebase";
+import { db, auth, storage } from "../firebase"; // Ensure storage is exported from firebase.js
 import {
-    collection,
-    addDoc,
-    serverTimestamp,
-    query,
-    onSnapshot,
-    orderBy,
-    doc,
-    updateDoc,
-    increment,
-    writeBatch,
-    where,
-    getDoc,
-    getDocs,
-    deleteField,
-    arrayUnion,
-    setDoc,
-    limitToLast
+    collection, addDoc, query, where, orderBy, onSnapshot,
+    doc, updateDoc, deleteDoc, getDoc, setDoc, getDocs,
+    serverTimestamp, increment, arrayUnion, writeBatch, deleteField, limit, limitToLast // added limit/limitToLast
 } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL, uploadBytesResumable } from "firebase/storage";
+import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
 
 import { GEMINI_BOT_ID } from '../constants';
 
@@ -70,24 +56,25 @@ export const subscribeToMessages = (chatId, currentUserId, callback, updateReadS
 const markMessagesAsRead = async (chatId, currentUserId, messageDocs) => {
     if (!messageDocs || messageDocs.length === 0) return;
 
-    // 1. Reset unread count on the chat document (only if not already 0)
     const chatRef = doc(db, CHATS_COLLECTION, chatId);
 
-    // Optimization: Only update if we know there are unread messages
-    const unreadMsgs = messageDocs.filter(d => {
-        const data = d.data();
-        return !data.read && data.senderId !== currentUserId && data.senderId !== GEMINI_BOT_ID;
-    });
-
-    if (unreadMsgs.length === 0) return;
-
-    // Reset unread count for the user
+    // 1. Reset unread count on the chat document
+    // We update this even if we don't find individual messages to mark as read, 
+    // to ensure the badge clears if the count and message state got out of sync.
     updateDoc(chatRef, {
         [`unreadCount.${currentUserId}`]: 0
     }).catch(err => console.error("Error resetting unread count:", err));
 
-    // 2. Mark individual messages as read (batched)
-    // Optimization: Limit to last 50 messages to prevent huge batch failures
+    // 2. Identify messages to mark as read
+    const unreadMsgs = messageDocs.filter(d => {
+        const data = d.data();
+        // Include Gemini messages in the reading process
+        return !data.read && data.senderId !== currentUserId;
+    });
+
+    if (unreadMsgs.length === 0) return;
+
+    // Mark individual messages as read (batched)
     const msgsToUpdate = unreadMsgs.slice(-50);
 
     if (msgsToUpdate.length > 0) {
@@ -111,10 +98,11 @@ const markMessagesAsRead = async (chatId, currentUserId, messageDocs) => {
 
 
 export const markMessagesAsDelivered = async (chatId, currentUserId, messageDocs) => {
+    if (!messageDocs || messageDocs.length === 0) return;
+
     const undeliveredMsgs = messageDocs.filter(d =>
         !d.data().delivered &&
-        d.data().senderId !== currentUserId &&
-        d.data().senderId !== GEMINI_BOT_ID
+        d.data().senderId !== currentUserId
     );
 
     if (undeliveredMsgs.length > 0) {
@@ -149,20 +137,32 @@ const checkRateLimit = () => {
     localStorage.setItem(RATE_LIMIT_KEY, JSON.stringify(timestamps));
 };
 
-export const sendMessage = async (chatId, sender, text, replyTo = null) => {
-    if (!text.trim()) return;
 
+export const sendMediaMessage = async (chatId, sender, fileData, replyTo = null) => {
     // 🛡️ ANTI-SPAM PROTECTED
     checkRateLimit();
 
+    const type = fileData.fileType.startsWith('image/') ? 'image' :
+        fileData.fileType.startsWith('video/') ? 'video' :
+            fileData.fileType.startsWith('audio/') ? 'audio' : 'file';
+
+    const isGeminiChat = chatId.startsWith('gemini_') || chatId.includes(GEMINI_BOT_ID);
+
     const messageData = {
-        text,
         senderId: sender.uid,
         senderName: sender.displayName || sender.email,
         timestamp: serverTimestamp(),
-        read: false,
-        delivered: false, // Initial state
-        type: 'text',
+        read: isGeminiChat,
+        delivered: isGeminiChat,
+        type: type,
+        fileUrl: fileData.url, // Standard key
+        imageUrl: type === 'image' ? fileData.url : null, // Legacy/Fallback key
+        videoUrl: type === 'video' ? fileData.url : null, // Legacy/Fallback key
+        audioUrl: type === 'audio' ? fileData.url : null, // Legacy/Fallback key
+        fileName: fileData.fileName,
+        fileSize: fileData.fileSize,
+        fileType: fileData.fileType,
+        text: type === 'image' ? '📷 Photo' : type === 'video' ? '🎥 Video' : '📎 File',
         replyTo: replyTo ? {
             id: replyTo.id,
             text: replyTo.text,
@@ -171,191 +171,27 @@ export const sendMessage = async (chatId, sender, text, replyTo = null) => {
     };
 
     try {
-        const chatRef = doc(db, "chats", chatId);
-        const chatSnap = await getDoc(chatRef);
-
-        // GHOST CHAT AUTO-CREATION
-        if (!chatSnap.exists()) {
-            // If it's a private chat (UID_UID format), we know the participants
-            const participants = chatId.split('_');
-            if (participants.length === 2 && participants.includes(sender.uid)) {
-                // Fetch other user info to denormalize
-                const otherUid = participants.find(uid => uid !== sender.uid);
-                const otherUserSnap = await getDoc(doc(db, "users", otherUid));
-                const otherUserData = otherUserSnap.exists() ? otherUserSnap.data() : { displayName: "User" };
-
-                await setDoc(chatRef, {
-                    id: chatId,
-                    participants,
-                    participantInfo: {
-                        [sender.uid]: { displayName: sender.displayName, photoURL: sender.photoURL },
-                        [otherUid]: { displayName: otherUserData.displayName, photoURL: otherUserData.photoURL }
-                    },
-                    type: 'private',
-                    createdAt: serverTimestamp(),
-                    lastMessage: { text, senderId: sender.uid, timestamp: new Date() },
-                    lastMessageTimestamp: serverTimestamp(),
-                    unreadCount: {
-                        [participants[0]]: participants[0] === sender.uid ? 0 : 1,
-                        [participants[1]]: participants[1] === sender.uid ? 0 : 1
-                    }
-                });
-            } else {
-                throw new Error("Cannot send message to non-existent chat.");
-            }
-        }
-
         const messagesRef = collection(db, "chats", chatId, "messages");
         await addDoc(messagesRef, messageData);
-        const chatData = chatSnap.data();
 
+        const chatRef = doc(db, "chats", chatId);
         const updates = {
             lastMessage: {
-                text,
+                text: messageData.text,
                 senderId: sender.uid,
                 timestamp: new Date(),
             },
             timestamp: serverTimestamp(),
         };
 
-        // Increment unread count for other participants
-        if (chatData && chatData.participants) {
-            chatData.participants.forEach(uid => {
-                if (uid !== sender.uid) {
-                    updates[`unreadCount.${uid}`] = increment(1);
-                }
-            });
-        }
-
-        await updateDoc(chatRef, updates);
-
-        // 🤖 GEMINI AUTO-REPLY: Handled securely by Firebase Functions
-        // See functions/index.js → onMessageCreated → handleGeminiReply
-
-    } catch (error) {
-        console.error("Error sending message:", error);
-        throw error;
-    }
-};
-
-
-
-export const createGeminiChat = async (currentUserId) => {
-    // Check if chat already exists
-    const q = query(
-        collection(db, CHATS_COLLECTION),
-        where("participants", "array-contains", currentUserId),
-        where("type", "==", "private")
-    );
-    const snapshot = await getDocs(q);
-    const existingChat = snapshot.docs.find(doc => {
-        const data = doc.data();
-        return data.participants.includes(GEMINI_BOT_ID) && data.participants.length === 2;
-    });
-
-    if (existingChat) {
-        return existingChat.id;
-    }
-
-    // Create new chat
-    const newChatData = {
-        participants: [currentUserId, GEMINI_BOT_ID],
-        participantInfo: {
-            [currentUserId]: { role: 'user' },
-            [GEMINI_BOT_ID]: {
-                displayName: "Gemini AI",
-                photoURL: "https://uxwing.com/wp-content/themes/uxwing/download/brands-and-social-media/google-gemini-icon.png",
-                isGemini: true,
-                bio: "Official AI Assistant"
-            }
-        },
-        type: 'private',
-        createdAt: serverTimestamp(),
-        lastMessage: { text: "Hello! I am Gemini, your official AI assistant. How can I help you today?", senderId: GEMINI_BOT_ID, timestamp: new Date() },
-        lastMessageTimestamp: serverTimestamp()
-    };
-
-    const docRef = await addDoc(collection(db, CHATS_COLLECTION), newChatData);
-
-    // Auto-friending Gemini (optional but makes it feel integrated)
-    try {
-        await updateDoc(doc(db, "users", currentUserId), {
-            friends: arrayUnion(GEMINI_BOT_ID)
-        });
-
-        // Also ensure Gemini 'user' doc exists if it doesn't
-        const geminiRef = doc(db, "users", GEMINI_BOT_ID);
-        const geminiSnap = await getDoc(geminiRef);
-        if (!geminiSnap.exists()) {
-            await setDoc(geminiRef, {
-                displayName: "Gemini AI",
-                photoURL: "https://uxwing.com/wp-content/themes/uxwing/download/brands-and-social-media/google-gemini-icon.png",
-                email: "gemini@assistant.ai",
-                isGemini: true,
-                // isAdmin: true, // REMOVED: Client cannot set admin. Backend script should set this if needed.
-                bio: "Official AI Assistant"
-            });
-        }
-    } catch (e) {
-        console.warn("Auto-friending Gemini failed, but chat was created.");
-    }
-
-    return docRef.id;
-};
-
-
-
-/**
- * Initiates a resumable file upload.
- * @returns {object} { uploadTask, storageRef }
- */
-export const uploadFileResumable = (file, chatId) => {
-    const storageRef = ref(storage, `uploads/${chatId}/${Date.now()}_${file.name}`);
-    const uploadTask = uploadBytesResumable(storageRef, file);
-    return { uploadTask, storageRef };
-};
-
-/**
- * Sends a media message after upload completion.
- */
-export const sendMediaMessage = async (chatId, sender, fileData) => {
-    try {
-        const { url, fileType, fileName, fileSize } = fileData;
-
-        let mediaType = 'file';
-        if (fileType.startsWith('image/')) mediaType = 'image';
-        else if (fileType.startsWith('video/')) mediaType = 'video';
-        else if (fileType.startsWith('audio/')) mediaType = 'audio';
-
-        const messageData = {
-            mediaUrl: url,
-            mediaType,
-            fileName: fileName,
-            fileSize: fileSize,
-            senderId: sender.uid,
-            senderName: sender.displayName,
-            timestamp: serverTimestamp(),
-            type: mediaType,
-            text: mediaType === 'image' ? '📷 Photo' : mediaType === 'video' ? '🎥 Video' : '📄 File',
-            read: false,
-            delivered: false
-        };
-
-        await addDoc(collection(db, CHATS_COLLECTION, chatId, MESSAGES_COLLECTION), messageData);
-
-        const chatRef = doc(db, CHATS_COLLECTION, chatId);
         const chatSnap = await getDoc(chatRef);
         const chatData = chatSnap.data();
 
-        const updates = {
-            lastMessage: { text: messageData.text, senderId: sender.uid },
-            lastMessageTimestamp: serverTimestamp()
-        };
-
+        // Increment unread count
         if (chatData && chatData.participants) {
             chatData.participants.forEach(uid => {
                 if (uid !== sender.uid) {
-                    updates[`unreadCount.${uid}`] = increment(1);
+                    updates[`unreadCount.${uid}`] = (chatData.unreadCount?.[uid] || 0) + 1;
                 }
             });
         }
@@ -368,41 +204,122 @@ export const sendMediaMessage = async (chatId, sender, fileData) => {
     }
 };
 
-/**
- * Legacy wrapper for backward compatibility if needed, 
- * or can be removed if all calls are updated.
- */
-export const sendFileMessage = async (chatId, sender, file) => {
-    // This is now a wrapper around the new flow for simple one-shot uploads
-    const { uploadTask } = uploadFileResumable(file, chatId);
+export const sendMessage = async (chatId, sender, text, replyTo = null) => {
+    if (!text.trim()) return;
 
-    return new Promise((resolve, reject) => {
-        uploadTask.on('state_changed',
-            null,
-            (error) => reject(error),
-            async () => {
-                const url = await getDownloadURL(uploadTask.snapshot.ref);
-                await sendMediaMessage(chatId, sender, {
-                    url,
-                    fileType: file.type,
-                    fileName: file.name,
-                    fileSize: file.size
-                });
-                resolve();
+    // 🛡️ ANTI-SPAM PROTECTED
+    checkRateLimit();
+
+    try {
+        const chatRef = doc(db, "chats", chatId);
+        let chatSnap = await getDoc(chatRef);
+
+        // GHOST CHAT AUTO-CREATION logic (moved up)
+        if (!chatSnap.exists()) {
+            // If it's a private chat (UID_UID format), we know the participants
+            const participants = chatId.split('_');
+            if (participants.length === 2 && participants.includes(sender.uid)) {
+                const otherUid = participants.find(uid => uid !== sender.uid);
+                const otherUserSnap = await getDoc(doc(db, "users", otherUid));
+                const otherUserData = otherUserSnap.exists() ? otherUserSnap.data() : { displayName: "User" };
+
+                const newChatData = {
+                    id: chatId,
+                    participants,
+                    participantInfo: {
+                        [sender.uid]: { displayName: sender.displayName, photoURL: sender.photoURL },
+                        [otherUid]: { displayName: otherUserData.displayName || "User", photoURL: otherUserData.photoURL }
+                    },
+                    type: 'private',
+                    createdAt: serverTimestamp(),
+                    lastMessage: null,
+                    unreadCount: {},
+                    mutedBy: {}
+                };
+                await setDoc(chatRef, newChatData);
+                chatSnap = await getDoc(chatRef); // Refresh snap
             }
-        );
-    });
+        }
+
+        const isGeminiChat = chatId.includes(GEMINI_BOT_ID) || (chatSnap.exists() && chatSnap.data().participants?.includes(GEMINI_BOT_ID));
+
+        const messageData = {
+            text,
+            senderId: sender.uid,
+            senderName: sender.displayName || sender.email,
+            timestamp: serverTimestamp(),
+            read: isGeminiChat, // Auto-read for Gemini
+            delivered: isGeminiChat, // Auto-deliver for Gemini
+            type: 'text',
+            replyTo: replyTo ? {
+                id: replyTo.id,
+                text: replyTo.text,
+                senderName: replyTo.senderName
+            } : null
+        };
+
+        const messagesRef = collection(db, "chats", chatId, "messages");
+        await addDoc(messagesRef, messageData);
+
+        // Update Chat Metadata
+        const updates = {
+            lastMessage: {
+                text,
+                senderId: sender.uid,
+                timestamp: new Date(),
+            },
+            timestamp: serverTimestamp(),
+        };
+
+        const chatData = chatSnap.exists() ? chatSnap.data() : {};
+        if (chatData.participants) {
+            chatData.participants.forEach(uid => {
+                if (uid !== sender.uid) {
+                    updates[`unreadCount.${uid}`] = (chatData.unreadCount?.[uid] || 0) + 1;
+                }
+            });
+        }
+        await updateDoc(chatRef, updates);
+
+    } catch (error) {
+        console.error("Error sending message:", error);
+        throw error;
+    }
 };
+
+
+
+
+import { functions } from "../firebase";
+import { httpsCallable } from "firebase/functions";
+
+// ... existing imports ...
+
+// Cloud Functions
+const initializeGeminiChatFn = httpsCallable(functions, 'initializeGeminiChat');
+const clearChatHistoryFn = httpsCallable(functions, 'clearChatHistory');
+const deleteChatFn = httpsCallable(functions, 'deleteChat');
+
+// ... existing code ...
+
+export const createGeminiChat = async (currentUserId) => {
+    try {
+        const result = await initializeGeminiChatFn();
+        return result.data.chatId;
+    } catch (error) {
+        console.error("Failed to initialize Gemini chat:", error);
+        throw error;
+    }
+};
+
+// ... existing code ...
 
 /**
  * Soft deletes all messages for a specific user in a chat.
  */
 export const clearChat = async (chatId, userId) => {
     try {
-        const chatRef = doc(db, CHATS_COLLECTION, chatId);
-        await updateDoc(chatRef, {
-            [`clearedBy.${userId}`]: serverTimestamp()
-        });
+        await clearChatHistoryFn({ chatId });
     } catch (error) {
         console.error("Error clearing chat:", error);
         throw error;
@@ -410,17 +327,13 @@ export const clearChat = async (chatId, userId) => {
 };
 
 /**
- * Hides a chat from the user's view.
- * Persists data for Admin auditing while removing it from the player's dashboard.
+ * Hides a chat from the user's view (Soft Delete).
  */
 export const hideChat = async (chatId, userId) => {
     try {
-        const chatRef = doc(db, CHATS_COLLECTION, chatId);
-        await updateDoc(chatRef, {
-            hiddenBy: arrayUnion(userId)
-        });
+        await deleteChatFn({ chatId });
     } catch (error) {
-        console.error("Error hiding chat:", error);
+        console.error("Error deleting chat:", error);
         throw error;
     }
 };
@@ -429,12 +342,38 @@ export const hideChat = async (chatId, userId) => {
 export const deleteMessage = async (chatId, messageId, deleteFor = 'everyone') => {
     const msgRef = doc(db, CHATS_COLLECTION, chatId, MESSAGES_COLLECTION, messageId);
     if (deleteFor === 'everyone') {
-        await updateDoc(msgRef, {
-            isSoftDeleted: true,
-            // SECURITY: We preserve 'text' and 'mediaUrl' for Admin/Spy Mode auditing.
-            // The UI (Message.jsx) will mask these for normal users.
-            deletedAt: serverTimestamp()
-        });
+        try {
+            const msgSnap = await getDoc(msgRef);
+            if (msgSnap.exists()) {
+                const data = msgSnap.data();
+                // 🗑️ HARD DELETE: Remove file from Storage to prevent orphaned data
+                const url = data.fileUrl || data.imageUrl || data.videoUrl || data.audioUrl;
+                if (url) {
+                    try {
+                        const fileRef = ref(storage, url);
+                        await deleteObject(fileRef);
+                        console.log("File deleted from storage:", url);
+                    } catch (storageError) {
+                        console.warn("Failed to delete file from storage (might already be gone):", storageError);
+                    }
+                }
+            }
+
+            await updateDoc(msgRef, {
+                isSoftDeleted: true,
+                deletedAt: serverTimestamp(),
+                // WIPE CONTENT for security/privacy
+                text: "🚫 This message was deleted",
+                fileUrl: deleteField(),
+                imageUrl: deleteField(),
+                videoUrl: deleteField(),
+                audioUrl: deleteField(),
+                type: 'deleted'
+            });
+        } catch (error) {
+            console.error("Error deleting message:", error);
+            throw error;
+        }
     } else {
         // Soft Delete for current user only
         await updateDoc(msgRef, {

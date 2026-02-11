@@ -156,7 +156,7 @@ const ChatPage = () => {
 
         resolveChat();
         return () => unsubscribe();
-    }, [id, currentUser]);
+    }, [id, currentUser?.uid]);
 
     if (loading) return (
         <div className="h-full flex items-center justify-center p-10 bg-[#efeae2] dark:bg-[#0b141a]">

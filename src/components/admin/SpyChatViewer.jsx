@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { db, auth } from '../../firebase';
+import { db, auth, functions } from '../../firebase';
 import { collection, query, orderBy, onSnapshot, doc, getDoc, deleteDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { format } from 'date-fns';
-import { FaTrash, FaEyeSlash, FaSearch, FaUserShield, FaExternalLinkAlt } from 'react-icons/fa';
+import { FaTrash, FaEyeSlash, FaSearch, FaUserShield, FaExternalLinkAlt, FaFileAlt, FaDownload } from 'react-icons/fa';
 import { Search, ShieldAlert, User, MoreHorizontal, Info, X } from 'lucide-react';
 import { subscribeToTypingStatus } from '../../services/typingService';
+import { VideoPlayer } from '../ui/VideoPlayer';
+import { downloadMedia } from '../../utils/downloadHelper';
 
 const SpyChatViewer = ({ chatId, onClose, onOpenDossier }) => {
     const [messages, setMessages] = useState([]);
@@ -69,15 +72,19 @@ const SpyChatViewer = ({ chatId, onClose, onOpenDossier }) => {
         }
     };
 
+
+
+    // ... (existing imports)
+
     const hardDeleteChat = async () => {
         if (!window.confirm("NUCLEAR OPTION: This will permanently delete this entire chat and all associated messages for ALL users. This action is irreversible. Continue?")) return;
         try {
-            // In a production app, we'd use a Cloud Function to recursive delete the messages sub-collection.
-            // For now, we'll delete the main doc. The rules prevent normal users from doing this.
-            await deleteDoc(doc(db, 'chats', chatId));
+            const deleteChatFn = httpsCallable(functions, 'adminDeleteChat');
+            await deleteChatFn({ chatId });
             alert("Chat permanently erased.");
             onClose();
         } catch (err) {
+            console.error(err);
             alert("Hard Delete Chat Failed: " + err.message);
         }
     };
@@ -232,11 +239,62 @@ const SpyChatViewer = ({ chatId, onClose, onOpenDossier }) => {
                                     </div>
 
                                     {/* Content */}
-                                    {msg.type === 'image' ? (
-                                        <div className="rounded-lg overflow-hidden border border-gray-100 dark:border-gray-800 max-w-sm mt-2">
-                                            <img src={msg.fileUrl} alt="Payload" className="w-full object-cover max-h-60" />
+                                    {/* Content */}
+                                    {msg.type === 'image' && (
+                                        <div className="relative rounded-lg overflow-hidden border border-gray-100 dark:border-gray-800 max-w-sm mt-2 group/media">
+                                            <img src={msg.fileUrl || msg.imageUrl} alt="Payload" className="w-full object-cover max-h-60" />
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); downloadMedia(msg.fileUrl || msg.imageUrl, msg.fileName); }}
+                                                className="absolute top-2 right-2 p-1.5 bg-black/50 text-white rounded-full opacity-0 group-hover/media:opacity-100 transition-opacity hover:bg-black/70"
+                                                title="Download Image"
+                                            >
+                                                <FaDownload size={12} />
+                                            </button>
                                         </div>
-                                    ) : (
+                                    )}
+
+                                    {msg.type === 'video' && (
+                                        <div className="rounded-lg overflow-hidden border border-gray-100 dark:border-gray-800 max-w-sm mt-2 relative group/media">
+                                            <VideoPlayer
+                                                src={msg.fileUrl || msg.videoUrl}
+                                                className="max-h-60"
+                                                fileName={msg.fileName}
+                                            />
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); downloadMedia(msg.fileUrl || msg.videoUrl, msg.fileName); }}
+                                                className="absolute top-2 right-2 p-1.5 bg-black/50 text-white rounded-full opacity-0 group-hover/media:opacity-100 transition-opacity hover:bg-black/70 z-20"
+                                                title="Download Video"
+                                            >
+                                                <FaDownload size={12} />
+                                            </button>
+                                        </div>
+                                    )}
+
+                                    {msg.type === 'audio' && (
+                                        <div className="flex items-center gap-2 mt-2 p-2 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-100 dark:border-gray-700 w-fit">
+                                            <audio controls src={msg.fileUrl || msg.audioUrl} className="h-8 w-60" />
+                                        </div>
+                                    )}
+
+                                    {msg.type === 'file' && (
+                                        <div className="flex items-center gap-3 p-3 mt-2 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 max-w-sm cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                                            onClick={(e) => { e.stopPropagation(); downloadMedia(msg.fileUrl, msg.fileName); }}>
+                                            <div className="bg-indigo-100 dark:bg-indigo-900/30 p-2.5 rounded-full text-indigo-600 dark:text-indigo-400">
+                                                <FaFileAlt size={18} />
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-sm font-medium truncate text-gray-900 dark:text-gray-100">
+                                                    {msg.fileName || "Document"}
+                                                </p>
+                                                <p className="text-[10px] text-gray-500 uppercase">
+                                                    {msg.fileType?.split('/')[1] || 'FILE'} • {msg.fileSize ? `${(msg.fileSize / 1024).toFixed(0)} KB` : ''}
+                                                </p>
+                                            </div>
+                                            <FaDownload className="text-gray-400" size={14} />
+                                        </div>
+                                    )}
+
+                                    {(msg.text && (msg.type === 'text' || (!['image', 'video', 'audio', 'file'].includes(msg.type)))) && (
                                         <p className={`text-sm leading-relaxed ${isSoftDeleted ? 'text-gray-400 italic' : 'text-gray-700 dark:text-gray-300'}`}>
                                             {msg.text}
                                         </p>

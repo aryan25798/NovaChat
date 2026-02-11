@@ -2,76 +2,126 @@ import React from "react";
 import { cn } from "../../lib/utils";
 import { format } from "date-fns";
 import { BsCheckAll, BsCheck } from "react-icons/bs";
+import { FaDownload, FaFileAlt } from "react-icons/fa";
+import { VideoPlayer } from "../ui/VideoPlayer";
+import { downloadMedia } from "../../utils/downloadHelper";
+import { Button } from "../ui/Button";
+import FullScreenMedia from "../FullScreenMedia";
 
-const MessageBubble = ({ message, isGroup, isOwn }) => {
-    // If isOwn is passed, use it. Fallback to message.senderId === 'me' only if legacy/debugging.
-    // Ideally rely strictly on isOwn passed from parent.
+const MessageBubble = ({ message, isOwn, onMediaClick }) => {
+    const [imgError, setImgError] = React.useState(false);
 
-    // Status Logic
-    // sent: Check (Gray)
-    // delivered: Double Check (Gray)
-    // read: Double Check (Blue)
+    // Consolidated URL getter
+    const getMediaUrl = () => {
+        return message.imageUrl || message.fileUrl || message.videoUrl || message.audioUrl || message.url || message.mediaUrl;
+    };
+    const mediaUrl = getMediaUrl();
 
-    const renderStatusIcon = () => {
-        if (!isOwn) return null;
+    // 🧠 SMART TYPE DETECTION
+    const getDisplayType = () => {
+        if (message.type === 'text') return 'text';
+        if (message.imageUrl || message.mediaType === 'image') return 'image';
+        if (message.videoUrl || message.mediaType === 'video') return 'video';
+        if (message.audioUrl || message.mediaType === 'audio') return 'audio';
+        if (message.type === 'image' || message.type === 'video' || message.type === 'audio') return message.type;
 
-        const status = message.status || 'sent';
-        const colorClass = status === 'read' ? 'text-blue-500' : 'text-gray-400';
+        const fileType = message.fileType || '';
+        const fileName = (message.fileName || '').toLowerCase();
+        if (fileType.startsWith('image/') || /\.(jpg|jpeg|png|gif|webp|bmp|heic)$/.test(fileName)) return 'image';
+        if (fileType.startsWith('video/') || /\.(mp4|webm|ogg|mov|avi|mkv)$/.test(fileName)) return 'video';
+        if (fileType.startsWith('audio/') || /\.(mp3|wav|m4a|aac|flac)$/.test(fileName)) return 'audio';
+        if (message.type === 'file' || mediaUrl) return 'file';
+        return 'text';
+    };
 
-        if (status === 'sent') {
-            return <BsCheck className={cn("text-lg", colorClass)} />;
-        }
-        return <BsCheckAll className={cn("text-lg", colorClass)} />;
+    const displayType = getDisplayType();
+    const hasMedia = displayType === 'image' || displayType === 'video';
+
+    const handleMediaClick = (e) => {
+        e.stopPropagation();
+        if (onMediaClick) onMediaClick(message);
+    };
+
+    const shouldHideText = (text) => {
+        if (!text) return true;
+        return /^\s*(📷|🎥|📎|📹|🎵)?\s*(Photo|Video|File|Audio|Document)\s*$/i.test(text);
     };
 
     return (
-        <div
-            className={cn(
-                "flex w-full mb-2",
-                isOwn ? "justify-end" : "justify-start"
-            )}
-        >
-            <div
-                className={cn(
-                    "relative max-w-[65%] px-3 py-1.5 rounded-lg shadow-sm text-sm",
-                    isOwn
-                        ? "bg-[#d9fdd3] dark:bg-[#005c4b] rounded-tr-none"
-                        : "bg-white dark:bg-[#202c33] rounded-tl-none"
-                )}
-            >
-                {/* Triangle for bubble tail - simplified with CSS borders or pseudo-elements later if needed, utilizing rounded corners for now */}
-
-                {!isOwn && isGroup && (
-                    <p className={`text-xs font-bold mb-1 ${message.senderColor || 'text-orange-500'}`}>
-                        {message.senderName}
-                    </p>
-                )}
-
-                {message.type === 'image' && message.imageUrl && (
-                    <div className="mb-1 rounded-lg overflow-hidden">
-                        <img src={message.imageUrl} alt="Shared" className="max-w-full sm:max-w-[300px] object-cover" />
-                    </div>
-                )}
-
-                {message.type === 'audio' && message.audioUrl && (
-                    <div className="flex items-center gap-2 min-w-[200px] p-2">
-                        <audio controls src={message.audioUrl} className="w-full h-8" />
-                    </div>
-                )}
-
-                {message.type !== 'image' && message.type !== 'audio' && message.text && (
-                    <p className="text-gray-800 dark:text-gray-100 leading-relaxed break-words whitespace-pre-wrap pb-2">
-                        {message.text}
-                    </p>
-                )}
-
-                <div className="flex items-center justify-end gap-1 absolute bottom-1 right-2 select-none">
-                    <span className="text-[10px] text-gray-500 dark:text-gray-400 min-w-fit">
-                        {message.timestamp ? format(new Date(message.timestamp.toDate ? message.timestamp.toDate() : message.timestamp), "HH:mm") : ""}
-                    </span>
-                    {isOwn && renderStatusIcon()}
+        <div className={cn("relative w-full", hasMedia ? "pb-1" : "")}>
+            {/* IMAGE */}
+            {displayType === 'image' && (
+                <div className="relative rounded-lg overflow-hidden mb-1 min-h-[150px] bg-black/5 dark:bg-black/20 cursor-pointer"
+                    onClick={handleMediaClick}>
+                    {!imgError && mediaUrl ? (
+                        <img
+                            src={mediaUrl}
+                            alt="Shared"
+                            className="w-full max-h-[350px] object-cover rounded-lg transition-opacity hover:opacity-95"
+                            onError={() => setImgError(true)}
+                            loading="lazy"
+                        />
+                    ) : (
+                        <div className="w-full h-[150px] flex flex-col items-center justify-center text-gray-500 gap-2">
+                            <FaFileAlt size={40} className="opacity-50" />
+                            <span className="text-xs">Image not available</span>
+                        </div>
+                    )}
                 </div>
-            </div>
+            )}
+
+            {/* VIDEO */}
+            {displayType === 'video' && mediaUrl && (
+                <div className="relative rounded-lg overflow-hidden mb-1 min-w-[200px] bg-black/5 dark:bg-black/20 cursor-pointer"
+                    onClick={handleMediaClick}>
+                    <VideoPlayer
+                        src={mediaUrl}
+                        className="max-h-[350px] pointer-events-none" // Overlay handles the click
+                        fileName={message.fileName}
+                    />
+                    {/* Play Overlay */}
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/10 group-hover:bg-black/20 transition-colors">
+                        <div className="w-12 h-12 bg-black/50 rounded-full flex items-center justify-center text-white backdrop-blur-sm border border-white/30">
+                            <FaPlay className="ml-1" />
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* AUDIO */}
+            {displayType === 'audio' && mediaUrl && (
+                <div className="flex items-center gap-2 min-w-[200px] p-2 bg-black/5 dark:bg-black/10 rounded-lg my-1">
+                    <audio controls src={mediaUrl} className="w-full h-8" />
+                </div>
+            )}
+
+            {/* GENERIC FILE */}
+            {displayType === 'file' && (
+                <div className="flex items-center gap-3 p-2.5 min-w-[220px] max-w-[300px] bg-black/5 dark:bg-black/20 rounded-lg border border-black/5 mx-0.5 my-1 cursor-pointer hover:bg-black/10 transition-colors"
+                    onClick={() => downloadMedia(mediaUrl, message.fileName || "File")}>
+                    <div className="bg-primary/10 p-2.5 rounded-lg text-primary">
+                        <FaFileAlt size={20} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate text-gray-800 dark:text-gray-100">
+                            {message.fileName || "Document"}
+                        </p>
+                        <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wider">
+                            {message.fileType?.split('/')[1] || 'FILE'} • {message.fileSize ? `${(message.fileSize / 1024).toFixed(0)} KB` : ''}
+                        </p>
+                    </div>
+                </div>
+            )}
+
+            {/* TEXT CAPTION / CONTENT */}
+            {message.text && !shouldHideText(message.text) && (
+                <p className={cn(
+                    "text-gray-900 dark:text-[#e9edef] leading-[19px] break-words whitespace-pre-wrap px-1 pt-0.5",
+                    hasMedia ? "mt-1" : ""
+                )}>
+                    {message.text}
+                </p>
+            )}
         </div>
     );
 };

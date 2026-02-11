@@ -44,7 +44,7 @@ const ChatList = ({ searchTerm }) => {
 
         const unsubscribe = subscribeToUserChats(currentUser.uid, (chatData) => {
             const filteredChats = chatData.filter(chat => {
-                const clearedAt = chat.clearedBy?.[currentUser.uid]?.toDate?.() || 0;
+                const clearedAt = chat.clearedAt?.[currentUser.uid]?.toDate?.() || 0;
                 const lastMsgTime = chat.lastMessageTimestamp?.toDate?.() || 0;
                 const isHidden = chat.hiddenBy?.includes(currentUser.uid);
                 return lastMsgTime > clearedAt && !isHidden;
