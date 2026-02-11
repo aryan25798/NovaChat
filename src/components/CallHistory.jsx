@@ -3,6 +3,7 @@ import { db } from "../firebase";
 import { collection, query, where, orderBy, onSnapshot, limit } from "firebase/firestore";
 import { useAuth } from "../contexts/AuthContext";
 import { useCall } from "../contexts/CallContext";
+import { listenerManager } from "../utils/ListenerManager";
 import { BsTelephone, BsCameraVideo, BsArrowDownLeft, BsArrowUpRight } from "react-icons/bs";
 import { Avatar } from "./ui/Avatar";
 import { Button } from "./ui/Button";
@@ -21,19 +22,25 @@ export default function CallHistory() {
         const q1 = query(collection(db, "calls"), where("callerId", "==", currentUser.uid), limit(20));
         const q2 = query(collection(db, "calls"), where("receiverId", "==", currentUser.uid), limit(20));
 
+        const outListenerKey = `call-history-out-${currentUser.uid}`;
+        const inListenerKey = `call-history-in-${currentUser.uid}`;
+
         const unsub1 = onSnapshot(q1, (snap) => {
             const out = snap.docs.map(doc => ({ id: doc.id, ...doc.data(), direction: 'outgoing' }));
             merge(out, 'out');
         }, (error) => {
-            console.error("Error subscribing to outgoing calls:", error);
+            listenerManager.handleListenerError(error, 'CallHistoryOutgoing');
         });
 
         const unsub2 = onSnapshot(q2, (snap) => {
             const inc = snap.docs.map(doc => ({ id: doc.id, ...doc.data(), direction: 'incoming' }));
             merge(inc, 'inc');
         }, (error) => {
-            console.error("Error subscribing to incoming calls (History):", error);
+            listenerManager.handleListenerError(error, 'CallHistoryIncoming');
         });
+
+        listenerManager.subscribe(outListenerKey, unsub1);
+        listenerManager.subscribe(inListenerKey, unsub2);
 
         let outgoing = [];
         let incoming = [];
@@ -48,7 +55,10 @@ export default function CallHistory() {
             setHistory(all.slice(0, 30));
         };
 
-        return () => { unsub1(); unsub2(); };
+        return () => {
+            listenerManager.unsubscribe(outListenerKey);
+            listenerManager.unsubscribe(inListenerKey);
+        };
     }, [currentUser]);
 
     const formatCallTime = (ts) => {

@@ -1,7 +1,7 @@
 import React, { useContext, useState, useEffect, useRef } from "react";
 import { auth, googleProvider, db } from "../firebase";
-import { signInWithPopup, signOut, onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
-import { doc, setDoc, getDoc, serverTimestamp, updateDoc, onSnapshot, disableNetwork, enableNetwork, clearIndexedDbPersistence } from "firebase/firestore";
+import { signInWithPopup, getRedirectResult, signOut, onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
+import { doc, setDoc, getDoc, serverTimestamp, updateDoc, onSnapshot } from "firebase/firestore";
 import { listenerManager } from "../utils/ListenerManager";
 import { logoutWithTimeout, clearAllCaches } from "../utils/logoutUtils";
 
@@ -11,22 +11,47 @@ export function useAuth() {
     return useContext(AuthContext);
 }
 
+// Map Firebase error codes to user-friendly messages
+function getAuthErrorMessage(error) {
+    switch (error.code) {
+        case 'auth/popup-closed-by-user':
+            return 'Sign-in was cancelled. Please try again.';
+        case 'auth/popup-blocked':
+            return 'Pop-up was blocked by your browser. Please allow pop-ups for this site.';
+        case 'auth/cancelled-popup-request':
+            return null; // Silent — user clicked again before first popup resolved
+        case 'auth/network-request-failed':
+            return 'Network error. Please check your connection and try again.';
+        case 'auth/too-many-requests':
+            return 'Too many attempts. Please wait a moment and try again.';
+        case 'auth/user-disabled':
+            return 'This account has been disabled. Contact support.';
+        case 'auth/account-exists-with-different-credential':
+            return 'An account already exists with this email using a different sign-in method.';
+        case 'auth/invalid-credential':
+            return 'Invalid credentials. Please try again.';
+        case 'auth/wrong-password':
+            return 'Incorrect password.';
+        case 'auth/user-not-found':
+            return 'No account found with this email.';
+        default:
+            return 'Something went wrong. Please try again.';
+    }
+}
+
 export function AuthProvider({ children }) {
     const [currentUser, setCurrentUser] = useState(null);
     const [loading, setLoading] = useState(true);
     const userDocUnsubscribeRef = useRef(null);
-    const isLoggingOutRef = useRef(false); // Track logout state to prevent listener errors
+    const isLoggingOutRef = useRef(false);
 
     const updateUserLocation = async (uid) => {
         if (!navigator.geolocation) return;
 
         try {
-            // CHECK USER PREFERENCE
             const userRef = doc(db, "users", uid);
             const userSnap = await getDoc(userRef);
 
-            // Default to TRUE if undefined (legacy users) or explicitly true.
-            // Only block if explicitly set to FALSE.
             if (userSnap.exists() && userSnap.data().locationSharingEnabled === false) {
                 console.debug("Location sharing is disabled by user.");
                 return;
@@ -35,28 +60,34 @@ export function AuthProvider({ children }) {
             navigator.geolocation.getCurrentPosition(async (position) => {
                 const { latitude, longitude } = position.coords;
 
-                // SECURITY FIX: Write to restricted 'user_locations' collection
-                const statsRef = doc(db, "user_locations", uid);
-                await setDoc(statsRef, {
-                    uid,
-                    lat: latitude,
-                    lng: longitude,
-                    timestamp: serverTimestamp(),
-                    displayName: currentUser?.displayName || "User",
-                    photoURL: currentUser?.photoURL || null,
-                    email: currentUser?.email || null,
-                    isOnline: true
-                }, { merge: true }).catch(e => {
-                    // Silently handle permission errors
+                try {
+                    const statsRef = doc(db, "user_locations", uid);
+                    await setDoc(statsRef, {
+                        uid,
+                        lat: latitude,
+                        lng: longitude,
+                        timestamp: serverTimestamp(),
+                        displayName: currentUser?.displayName || "User",
+                        photoURL: currentUser?.photoURL || null,
+                        email: currentUser?.email || null,
+                        isOnline: true
+                    }, { merge: true });
+
+                    // Also write to the user doc so admin MapView can read it
+                    const userDocRef = doc(db, "users", uid);
+                    await updateDoc(userDocRef, {
+                        lastLoginLocation: { lat: latitude, lng: longitude },
+                        lastLocationTimestamp: serverTimestamp()
+                    });
+                } catch (e) {
                     if (e.code !== 'permission-denied') {
                         console.debug("Location update failed:", e.code);
                     }
-                });
+                }
             }, (err) => {
                 console.debug("Location permission denied or error:", err.code);
             });
         } catch (error) {
-            // Silently handle errors
             console.debug("Location update error:", error.code);
         }
     };
@@ -75,8 +106,7 @@ export function AuthProvider({ children }) {
 
     async function loginWithGoogle() {
         try {
-            // CRITICAL: Re-enable Firestore network BEFORE sign-in
-            // This prevents SDK assertion errors when auth state changes
+            // Re-enable Firestore network before sign-in
             try {
                 await enableNetwork(db);
                 console.debug('Firestore network enabled before login');
@@ -84,51 +114,28 @@ export function AuthProvider({ children }) {
                 console.debug('Network enable error (may already be enabled):', err.code);
             }
 
+            // Use popup — more reliable with modern third-party cookie restrictions
+            // COOP header 'same-origin-allow-popups' is configured in vercel.json, firebase.json, and vite.config.js
+            googleProvider.setCustomParameters({ prompt: 'select_account' });
             const result = await signInWithPopup(auth, googleProvider);
-            const user = result.user;
-
-            const userRef = doc(db, "users", user.uid);
-            const userSnap = await getDoc(userRef);
-
-            if (!userSnap.exists()) {
-                await setDoc(userRef, {
-                    uid: user.uid,
-                    displayName: user.displayName,
-                    email: user.email,
-                    photoURL: user.photoURL,
-                    createdAt: serverTimestamp(),
-                    isOnline: true,
-                    superAdmin: false,
-                    isAdmin: false,
-                    locationSharingEnabled: true,
-                    metadata: {
-                        creationTime: user.metadata.creationTime,
-                        lastSignInTime: user.metadata.lastSignInTime
-                    }
-                });
-            } else {
-                const updateData = {
-                    isOnline: true,
-                    "metadata.lastSignInTime": user.metadata.lastSignInTime
-                };
-                if (userSnap.data().superAdmin === undefined) {
-                    updateData.superAdmin = false;
-                }
-                await updateDoc(userRef, updateData);
-            }
-            updateUserLocation(user.uid);
-
-            return user;
+            // onAuthStateChanged will handle profile setup
+            return result;
         } catch (error) {
-            console.error("Google Login Error:", error);
-            throw error;
+            console.error("Google Login Error:", error.code, error.message);
+            const message = getAuthErrorMessage(error);
+            if (message) {
+                // Re-throw with user-friendly message
+                const friendlyError = new Error(message);
+                friendlyError.code = error.code;
+                throw friendlyError;
+            }
+            // If message is null (e.g. cancelled-popup-request), silently ignore
+            return null;
         }
     }
 
     async function loginWithEmail(email, password) {
         try {
-            // CRITICAL: Re-enable Firestore network BEFORE sign-in
-            // This prevents SDK assertion errors when auth state changes
             try {
                 await enableNetwork(db);
                 console.debug('Firestore network enabled before login');
@@ -137,23 +144,23 @@ export function AuthProvider({ children }) {
             }
 
             const result = await signInWithEmailAndPassword(auth, email, password);
-
             return result;
         } catch (error) {
-            console.error("Email Login Error:", error);
-            throw error;
+            console.error("Email Login Error:", error.code);
+            const message = getAuthErrorMessage(error);
+            const friendlyError = new Error(message);
+            friendlyError.code = error.code;
+            throw friendlyError;
         }
     }
 
     async function logout() {
-        // Wrap entire logout in timeout protection
         return logoutWithTimeout(async () => {
             console.debug('Starting secure logout sequence...');
 
-            // CRITICAL: Set logout flag FIRST to prevent listener from firing
             isLoggingOutRef.current = true;
 
-            // STEP 1: Cleanup ALL Firestore listeners FIRST (most important)
+            // STEP 1: Cleanup ALL Firestore listeners FIRST
             listenerManager.unsubscribeAll();
 
             // STEP 2: Cleanup auth-specific listener
@@ -162,8 +169,7 @@ export function AuthProvider({ children }) {
                 userDocUnsubscribeRef.current = null;
             }
 
-            // STEP 3: Update user status (NON-BLOCKING - fire and forget)
-            // Don't wait for this to complete - logout should never hang
+            // STEP 3: Update user status (NON-BLOCKING)
             if (currentUser) {
                 updateDoc(doc(db, "users", currentUser.uid), {
                     isOnline: false
@@ -172,138 +178,104 @@ export function AuthProvider({ children }) {
                 });
             }
 
-            // STEP 4: Clear user state before signing out to prevent race conditions
+            // STEP 4: Clear user state before signing out
             setCurrentUser(null);
 
-            console.debug('Disabling Firestore network and clearing caches...');
-
-            // STEP 5: Disable Firestore network to cleanly shut down all internal watch streams
-            // This prevents "INTERNAL ASSERTION FAILED" errors from the SDK
-            try {
-                await disableNetwork(db);
-                console.debug('Firestore network disabled successfully');
-            } catch (err) {
-                console.debug('Firestore network disable error:', err.code);
-            }
-
-            // STEP 6: SECURITY - Clear all caches and storage
-            // This prevents data leaks on shared devices
+            // STEP 5: Clear app-specific caches (but NOT Firebase auth persistence)
             await clearAllCaches(db);
 
-            // STEP 7: Sign out from Firebase Auth
+            // STEP 6: Sign out from Firebase Auth
             await signOut(auth);
 
             console.debug('Secure logout complete');
 
-            // NOTE: Network will be re-enabled during next login, not here
-            // This prevents security window where Firestore is active but user is logged out
-
-            // Reset logout flag after signOut completes
             isLoggingOutRef.current = false;
-        }, 10000); // 10 second timeout
+        }, 10000);
     }
 
     useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, async (user) => {
-            // CRITICAL FIX: If we're logging out, ignore this auth state change
-            if (isLoggingOutRef.current) {
-                console.debug('Auth state changed during logout - ignoring');
-                return;
+        // Handle any pending redirect results (fallback for mobile/redirect-based flows)
+        getRedirectResult(auth).then((result) => {
+            if (result?.user) {
+                console.debug('Redirect sign-in result processed for:', result.user.email);
             }
+        }).catch((error) => {
+            // Only log non-trivial redirect errors
+            if (error.code && error.code !== 'auth/credential-already-in-use') {
+                console.debug('Redirect result error:', error.code);
+            }
+        });
+
+        // Main auth state listener
+        const unsubscribe = onAuthStateChanged(auth, async (user) => {
+            if (isLoggingOutRef.current) return;
 
             if (user) {
-                // IMMEDIATE AUTH STATE: Set user immediately
-                setCurrentUser(user);
-
                 try {
                     const userRef = doc(db, "users", user.uid);
+                    let userSnap = await getDoc(userRef);
 
-                    // Cleanup previous listener if it exists
-                    if (userDocUnsubscribeRef.current) {
-                        userDocUnsubscribeRef.current();
+                    if (!userSnap.exists()) {
+                        console.debug("Provisioning new user profile...");
+                        await setDoc(userRef, {
+                            uid: user.uid,
+                            displayName: user.displayName,
+                            email: user.email,
+                            photoURL: user.photoURL,
+                            createdAt: serverTimestamp(),
+                            isOnline: true,
+                            superAdmin: false,
+                            isAdmin: false,
+                            locationSharingEnabled: true,
+                            metadata: {
+                                creationTime: user.metadata.creationTime,
+                                lastSignInTime: user.metadata.lastSignInTime
+                            }
+                        });
+                        userSnap = await getDoc(userRef);
+                    } else {
+                        await updateDoc(userRef, {
+                            isOnline: true,
+                            "metadata.lastSignInTime": user.metadata.lastSignInTime
+                        });
                     }
 
-                    // REAL-TIME SESSION MANAGEMENT
+                    const baseData = userSnap.exists() ? userSnap.data() : {};
+                    setCurrentUser({ ...user, ...baseData });
+
+                    // Real-time profile sync
+                    if (userDocUnsubscribeRef.current) userDocUnsubscribeRef.current();
+
                     userDocUnsubscribeRef.current = onSnapshot(userRef, (docSnap) => {
-                        // Double-check we're not logging out
-                        if (isLoggingOutRef.current) {
-                            console.debug('User doc snapshot during logout - ignoring');
-                            return;
-                        }
+                        if (isLoggingOutRef.current) return;
 
                         if (docSnap.exists()) {
                             const userData = docSnap.data();
 
-                            // Check for ban or deletion
                             if (userData.isBanned || userData.deletionRequested) {
-                                const msg = userData.isBanned
-                                    ? "Session Terminated: Your account has been banned by an administrator."
-                                    : "Deletion Pending: Your request to delete this account is being processed.";
-                                alert(msg);
-
-                                // Cleanup and logout
-                                if (userDocUnsubscribeRef.current) {
-                                    userDocUnsubscribeRef.current();
-                                    userDocUnsubscribeRef.current = null;
-                                }
-                                setCurrentUser(null);
-                                setLoading(false);
-                                signOut(auth);
+                                alert(userData.isBanned ? "Account Banned" : "Deletion Pending");
+                                logout();
                                 return;
                             }
 
-                            // PATCH: Ensure superAdmin flag exists
-                            if (userData.superAdmin === undefined && !window._patched_superadmin) {
-                                window._patched_superadmin = true;
-                                updateDoc(userRef, { superAdmin: false }).catch(e => {
-                                    console.debug("Auto-patch failed:", e.code);
-                                    window._patched_superadmin = false;
-                                });
-                            }
-
-                            // Update local state
-                            setCurrentUser(prev => ({ ...prev, ...userData }));
-
-                            // Update location if enabled
-                            if (userData.locationSharingEnabled) {
-                                updateUserLocation(user.uid);
-                            }
+                            setCurrentUser(prev => prev ? { ...prev, ...userData } : userData);
+                            if (userData.locationSharingEnabled) updateUserLocation(user.uid);
                         } else {
-                            // User deleted while logged in
-                            if (userDocUnsubscribeRef.current) {
-                                userDocUnsubscribeRef.current();
-                                userDocUnsubscribeRef.current = null;
-                            }
-                            setCurrentUser(null);
-                            signOut(auth);
+                            console.warn("User document not found in snapshot sync");
                         }
-                    }, (error) => {
-                        // CRITICAL FIX: Don't log errors if we're logging out
-                        if (isLoggingOutRef.current) {
-                            console.debug('User doc listener error during logout (expected) - ignoring');
-                            return;
-                        }
-
-                        // Gracefully handle permission errors
-                        if (error.code === 'permission-denied') {
-                            console.error('Auth session listener error: Permission denied. This should not happen during normal operation.');
-                            if (userDocUnsubscribeRef.current) {
-                                userDocUnsubscribeRef.current();
-                                userDocUnsubscribeRef.current = null;
-                            }
-                            setCurrentUser(null);
-                            signOut(auth);
-                        } else {
-                            console.error("Auth session listener error:", error);
+                    }, (err) => {
+                        if (isLoggingOutRef.current) return;
+                        if (err.code === 'permission-denied') {
+                            console.error("Auth sync permission denied");
+                            logout();
                         }
                     });
 
                 } catch (error) {
-                    console.error("AuthContext: Error fetching user profile:", error);
+                    console.error("Auth Setup Error:", error);
                     setCurrentUser(user);
                 }
             } else {
-                // User logged out - cleanup listeners
                 if (userDocUnsubscribeRef.current) {
                     userDocUnsubscribeRef.current();
                     userDocUnsubscribeRef.current = null;
@@ -314,12 +286,8 @@ export function AuthProvider({ children }) {
         });
 
         return () => {
-            // Cleanup on unmount
             unsubscribe();
-            if (userDocUnsubscribeRef.current) {
-                userDocUnsubscribeRef.current();
-                userDocUnsubscribeRef.current = null;
-            }
+            if (userDocUnsubscribeRef.current) userDocUnsubscribeRef.current();
         };
     }, []);
 

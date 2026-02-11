@@ -10,6 +10,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useFileUpload } from "../hooks/useFileUpload";
 import { getDownloadURL } from "firebase/storage";
 
+import { useFriend } from "../contexts/FriendContext";
+
 // Modular Components
 import ChatHeader from "./chat/ChatHeader";
 import MessageList from "./chat/MessageList";
@@ -316,6 +318,11 @@ export default function ChatWindow({ chat, setChat }) {
         return localMatches;
     }, [messages, searchQuery, serverResults, chat, currentUser.uid]);
 
+    // Friend Status Check
+    const { getFriendStatus } = useFriend();
+    const friendStatus = otherUser.uid ? getFriendStatus(otherUser.uid) : 'none';
+    const canMessage = otherUser.isGroup || friendStatus === 'friend' || otherUser.isGemini;
+
     return (
         <div className="flex flex-col h-full bg-background relative overflow-hidden">
             {/* Background Pattern Layer */}
@@ -332,6 +339,7 @@ export default function ChatWindow({ chat, setChat }) {
                 onToggleSearch={() => setShowSearch(!showSearch)}
                 showSearch={showSearch}
                 onDeleteChat={handleDeleteChat}
+                canMessage={canMessage}
             />
 
             <AnimatePresence>
@@ -411,19 +419,30 @@ export default function ChatWindow({ chat, setChat }) {
                 />
             </div>
 
-            <MessageInput
-                newMessage={newMessage}
-                setNewMessage={setNewMessage}
-                handleInputChange={handleInputChange}
-                handleSendMessage={handleSendMessage}
-                handleFileUpload={handleFileUpload}
-                replyTo={replyTo}
-                setReplyTo={setReplyTo}
-                inputRef={inputRef}
-                chat={chat}
-                otherUser={otherUser}
-                messages={filteredMessages}
-            />
+            {!canMessage ? (
+                <div className="p-4 bg-surface-elevated border-t border-border/30 text-center">
+                    <p className="text-text-2 text-sm">
+                        You are not friends with this user. <br className="sm:hidden" />
+                        <button onClick={() => setShowContactInfo(true)} className="text-primary font-bold hover:underline">
+                            Add to contacts
+                        </button> to send messages.
+                    </p>
+                </div>
+            ) : (
+                <MessageInput
+                    newMessage={newMessage}
+                    setNewMessage={setNewMessage}
+                    handleInputChange={handleInputChange}
+                    handleSendMessage={handleSendMessage}
+                    handleFileUpload={handleFileUpload}
+                    replyTo={replyTo}
+                    setReplyTo={setReplyTo}
+                    inputRef={inputRef}
+                    chat={chat}
+                    otherUser={otherUser}
+                    messages={filteredMessages}
+                />
+            )}
 
             <AnimatePresence>
                 {showContactInfo && (

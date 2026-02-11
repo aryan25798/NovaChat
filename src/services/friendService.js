@@ -1,8 +1,18 @@
-import { db } from "../firebase";
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, doc, updateDoc, deleteDoc, arrayUnion, arrayRemove, getDocs, getDoc } from "firebase/firestore";
+import { db, functions } from "../firebase";
+import {
+    collection, query, where, onSnapshot, doc
+} from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 import { listenerManager } from "../utils/ListenerManager";
 
-// --- Real-time Listeners ---
+// --- Cloud Function References ---
+const sendFriendRequestFn = httpsCallable(functions, 'sendFriendRequest');
+const acceptFriendRequestFn = httpsCallable(functions, 'acceptFriendRequest');
+const rejectFriendRequestFn = httpsCallable(functions, 'rejectFriendRequest');
+const cancelFriendRequestFn = httpsCallable(functions, 'cancelFriendRequest');
+const removeFriendFn = httpsCallable(functions, 'removeFriend');
+
+// --- Real-time Listeners (client-side, read-only) ---
 
 export const subscribeToFriends = (userId, callback) => {
     const listenerKey = `friends-${userId}`;
@@ -80,86 +90,51 @@ export const subscribeToOutgoingRequests = (userId, callback) => {
     };
 };
 
-// --- Actions ---
+// --- Actions (All via Cloud Functions) ---
 
+/**
+ * Send a friend request via Cloud Function.
+ * Server validates: auth, rate limit, blocks, duplicates, super admin.
+ */
 export const sendFriendRequest = async (currentUserId, currentUserData, toUserId) => {
-    if (currentUserId === toUserId) throw new Error("You cannot send a friend request to yourself.");
-
-    // 1. Check if recipient is a Super Admin
-    const toUserSnap = await getDoc(doc(db, "users", toUserId));
-    if (!toUserSnap.exists()) throw new Error("User does not exist.");
-    if (toUserSnap.data().superAdmin) throw new Error("Cannot send friend requests to system administrators.");
-
-    // 2. Check if already friends
-    const fromUserSnap = await getDoc(doc(db, "users", currentUserId));
-    if (fromUserSnap.data().friends?.includes(toUserId)) {
-        throw new Error("You are already friends with this user.");
-    }
-
-    // 3. Check for existing pending request (either direction)
-    const q1 = query(collection(db, "friend_requests"),
-        where("from", "==", currentUserId),
-        where("to", "==", toUserId),
-        where("status", "==", "pending"));
-    const q2 = query(collection(db, "friend_requests"),
-        where("from", "==", toUserId),
-        where("to", "==", currentUserId),
-        where("status", "==", "pending"));
-
-    const [snap1, snap2] = await Promise.all([getDocs(q1), getDocs(q2)]);
-
-    if (!snap1.empty || !snap2.empty) {
-        throw new Error("A friend request is already pending between you and this user.");
-    }
-
-    // 4. Add request
-    await addDoc(collection(db, "friend_requests"), {
-        from: currentUserId,
-        to: toUserId,
-        status: "pending",
-        fromName: currentUserData.displayName,
-        fromPhoto: currentUserData.photoURL,
-        timestamp: serverTimestamp()
-    });
+    const result = await sendFriendRequestFn({ toUserId });
+    return result.data;
 };
 
-export const cancelFriendRequest = async (requestId) => {
-    await deleteDoc(doc(db, "friend_requests", requestId));
-};
-
+/**
+ * Accept a friend request via Cloud Function.
+ * Server validates: request exists, is pending, current user is recipient.
+ * Atomically adds to both friend lists and deletes request.
+ */
 export const acceptFriendRequest = async (requestId, fromUserId, currentUserId) => {
-    try {
-        const { writeBatch, doc, updateDoc, deleteDoc, arrayUnion } = await import("firebase/firestore");
-        const batch = writeBatch(db);
-
-        // 1. Add to both users' friend lists
-        const userRef = doc(db, "users", currentUserId);
-        const friendRef = doc(db, "users", fromUserId);
-
-        batch.update(userRef, { friends: arrayUnion(fromUserId) });
-        batch.update(friendRef, { friends: arrayUnion(currentUserId) });
-
-        // 2. Delete the request
-        const requestRef = doc(db, "friend_requests", requestId);
-        batch.delete(requestRef);
-
-        await batch.commit();
-    } catch (e) {
-        console.error("Error accepting request:", e);
-        throw e;
-    }
+    const result = await acceptFriendRequestFn({ requestId });
+    return result.data;
 };
 
+/**
+ * Cancel a friend request via Cloud Function.
+ * Server validates: request exists, current user is sender.
+ */
+export const cancelFriendRequest = async (requestId) => {
+    const result = await cancelFriendRequestFn({ requestId });
+    return result.data;
+};
+
+/**
+ * Reject a friend request via Cloud Function.
+ * Server validates: request exists, current user is recipient.
+ */
 export const rejectFriendRequest = async (requestId) => {
-    await deleteDoc(doc(db, "friend_requests", requestId));
+    const result = await rejectFriendRequestFn({ requestId });
+    return result.data;
 };
 
+/**
+ * Remove a friend via Cloud Function.
+ * Server validates: friendship exists.
+ * Atomically removes from both friend lists.
+ */
 export const removeFriend = async (currentUserId, friendId) => {
-    const { writeBatch, doc, arrayRemove } = await import("firebase/firestore");
-    const batch = writeBatch(db);
-
-    batch.update(doc(db, "users", currentUserId), { friends: arrayRemove(friendId) });
-    batch.update(doc(db, "users", friendId), { friends: arrayRemove(currentUserId) });
-
-    await batch.commit();
+    const result = await removeFriendFn({ friendId });
+    return result.data;
 };

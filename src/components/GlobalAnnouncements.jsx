@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { db } from '../firebase';
 import { collection, query, where, orderBy, limit, onSnapshot } from 'firebase/firestore';
 import { X, Bell, AlertTriangle, Info, Megaphone, Activity, Zap, ShieldAlert } from 'lucide-react';
+import { listenerManager } from '../utils/ListenerManager';
 
 const GlobalAnnouncements = () => {
     const [latestAnnouncement, setLatestAnnouncement] = useState(null);
@@ -37,14 +38,15 @@ const GlobalAnnouncements = () => {
                 setIsVisible(false);
             }
         }, (error) => {
-            console.error("Announcement Node Error:", error);
-            // Fallback to simpler query if index missing (for dev safety)
-            if (error.code === 'failed-precondition') {
-                console.warn("Announcement index missing. Falling back to non-filtered query.");
-            }
+            listenerManager.handleListenerError(error, 'Announcements');
         });
 
-        return () => unsubscribe();
+        // Register with ListenerManager so it gets cleaned up during logout
+        listenerManager.subscribe('global-announcements', unsubscribe);
+
+        return () => {
+            listenerManager.unsubscribe('global-announcements');
+        };
     }, [dismissedId]);
 
     const handleDismiss = () => {

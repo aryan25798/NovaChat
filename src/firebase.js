@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider } from "firebase/auth";
+import { getAuth, GoogleAuthProvider, browserLocalPersistence, setPersistence } from "firebase/auth";
 import { getStorage } from "firebase/storage";
 import { getMessaging } from "firebase/messaging";
 
@@ -19,6 +19,7 @@ import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
+setPersistence(auth, browserLocalPersistence);
 export const googleProvider = new GoogleAuthProvider();
 
 // Initialize Firestore with persistence settings
@@ -33,5 +34,19 @@ import { getFunctions } from "firebase/functions";
 
 export const rtdb = getDatabase(app);
 export const storage = getStorage(app);
-export const messaging = getMessaging(app);
 export const functions = getFunctions(app);
+
+// Lazy-initialize messaging to prevent crash if SW not registered
+let _messaging = null;
+export function getMessagingInstance() {
+    if (!_messaging) {
+        try {
+            _messaging = getMessaging(app);
+        } catch (err) {
+            console.debug('Firebase Messaging init deferred:', err.message);
+        }
+    }
+    return _messaging;
+}
+// Keep backward-compatible export (lazy getter)
+export const messaging = null; // Use getMessagingInstance() instead

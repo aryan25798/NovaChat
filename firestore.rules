@@ -95,7 +95,11 @@ service cloud.firestore {
         ))
         || (isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isBanned']))
         // Allow user to request deletion or cancel it
-        || (isOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deletionRequested', 'deletionRequestedAt']));
+        || (isOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deletionRequested', 'deletionRequestedAt']))
+        // Allow ANY authenticated user to modify ONLY the 'friends' field (for accept/unfriend flows)
+        // Security: restricted to friends-only change, requires auth + not banned
+        || (isSignedIn() && isNotBanned() && 
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['friends']));
     }
 
     // 2. Recursive Messages Access (For Admin CollectionGroup Queries)

@@ -1,5 +1,3 @@
-import { clearIndexedDbPersistence } from "firebase/firestore";
-
 /**
  * Wraps logout with timeout protection
  * @param {Function} logoutFn - The logout function to execute
@@ -16,7 +14,6 @@ export async function logoutWithTimeout(logoutFn, timeoutMs = 10000) {
     } catch (error) {
         if (error.message === 'Logout timeout') {
             console.error('Logout timed out - forcing cleanup');
-            // Force cleanup even on timeout
             clearAllStorage();
         }
         throw error;
@@ -24,32 +21,40 @@ export async function logoutWithTimeout(logoutFn, timeoutMs = 10000) {
 }
 
 /**
- * Clears all client-side caches and storage
- * @param {Object} db - Firestore database instance
+ * Clears all client-side caches and storage.
+ * NOTE: clearIndexedDbPersistence is intentionally NOT used here.
+ * It requires a fully terminated Firestore instance (terminate(db) first),
+ * and calling it on a running instance corrupts the client state, causing
+ * "Missing or insufficient permissions" on subsequent reads/writes.
+ * disableNetwork + selective storage clearing is the production-grade pattern.
+ * @param {Object} db - Firestore database instance (unused, kept for API compat)
  * @returns {Promise<void>}
  */
 export async function clearAllCaches(db) {
-    try {
-        await clearIndexedDbPersistence(db);
-        console.debug('Firestore cache cleared successfully');
-    } catch (err) {
-        // Expected errors:
-        // - failed-precondition: Already cleared or network active
-        // - invalid-argument: DB instance issue
-        console.debug('Cache clear error (may already be cleared):', err.code);
-    }
-
     clearAllStorage();
 }
 
 /**
- * Clears localStorage and sessionStorage
+ * Clears app-specific storage while preserving Firebase Auth persistence.
+ * SECURITY FIX: localStorage.clear() was destroying Firebase Auth tokens,
+ * making re-login impossible. Now selectively clears non-Firebase keys.
  */
 export function clearAllStorage() {
     try {
-        localStorage.clear();
+        // Selectively clear localStorage — preserve Firebase auth keys
+        const keysToRemove = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            // Firebase Auth persistence uses keys starting with 'firebase:'
+            if (key && !key.startsWith('firebase:')) {
+                keysToRemove.push(key);
+            }
+        }
+        keysToRemove.forEach(key => localStorage.removeItem(key));
+
+        // sessionStorage is safe to clear entirely
         sessionStorage.clear();
-        console.debug('Browser storage cleared successfully');
+        console.debug(`Browser storage cleared (${keysToRemove.length} app keys removed, Firebase auth preserved)`);
     } catch (err) {
         console.debug('Storage clear error:', err);
     }

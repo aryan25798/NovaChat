@@ -14,28 +14,58 @@ import { useAuth } from "../contexts/AuthContext";
 const ContactsPage = () => {
     const { startCall } = useCall();
     const { currentUser } = useAuth();
-    const { sendRequest, acceptRequest, rejectRequest, getFriendStatus, incomingRequests } = useFriend();
-    const [contacts, setContacts] = useState([]);
+    const { sendRequest, acceptRequest, rejectRequest, getFriendStatus, incomingRequests, friends } = useFriend();
+    const [searchResults, setSearchResults] = useState([]);
     const [searchTerm, setSearchTerm] = useState("");
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(false);
     const [view, setView] = useState('all'); // 'all' or 'requests'
 
+    // Fetch full user details for friend IDs
+    const [friendUsers, setFriendUsers] = useState([]);
+
     useEffect(() => {
-        const fetchUsers = async () => {
-            if (!currentUser) return;
+        const fetchFriendDetails = async () => {
+            if (friends.length === 0) {
+                setFriendUsers([]);
+                return;
+            }
+            // In a real app, you might have a better way to bulk fetch or cache these
+            // For now, we fetch them to ensure we have latest names/photos
+            // Optimization: Filter out friends whose details we already have if cached
             try {
-                const { searchUsers } = await import("../services/userService");
-                const users = await searchUsers("", currentUser.uid);
-                setContacts(users);
-            } catch (error) {
-                console.error("Error fetching contacts:", error);
-            } finally {
-                setLoading(false);
+                const { doc, getDoc } = await import("firebase/firestore");
+                const promises = friends.map(fid => getDoc(doc(db, "users", fid)));
+                const snaps = await Promise.all(promises);
+                const users = snaps.map(s => s.exists() ? { id: s.id, ...s.data() } : null).filter(Boolean);
+                setFriendUsers(users);
+            } catch (e) {
+                console.error("Error fetching friend details:", e);
             }
         };
+        fetchFriendDetails();
+    }, [friends]);
 
-        fetchUsers();
-    }, [currentUser]);
+    // Handle Search
+    useEffect(() => {
+        const delayDebounce = setTimeout(async () => {
+            if (searchTerm.trim().length > 0) {
+                setLoading(true);
+                try {
+                    const { searchUsers } = await import("../services/userService");
+                    const results = await searchUsers(searchTerm, currentUser.uid);
+                    setSearchResults(results);
+                } catch (error) {
+                    console.error("Error searching:", error);
+                } finally {
+                    setLoading(false);
+                }
+            } else {
+                setSearchResults([]);
+            }
+        }, 500);
+
+        return () => clearTimeout(delayDebounce);
+    }, [searchTerm, currentUser.uid]);
 
     const handleCall = (e, contact, type) => {
         e.stopPropagation();
@@ -54,9 +84,8 @@ const ContactsPage = () => {
         sendRequest(uid);
     }
 
-    const filteredContacts = contacts.filter(contact =>
-        (contact.displayName || contact.name || "").toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    // Combined list: If searching, show search results. If not, show friends.
+    const displayList = searchTerm ? searchResults : friendUsers;
 
     return (
         <div className="flex flex-col h-full bg-surface relative shadow-sm max-w-full">
@@ -67,7 +96,11 @@ const ContactsPage = () => {
                 </Link>
                 <div className="flex flex-col">
                     <h1 className="text-lg font-bold leading-tight">Select Contact</h1>
-                    <p className="text-xs text-white/80">{contacts.length} contacts</p>
+                    <p className="text-xs text-white/80">
+                        {view === 'all'
+                            ? (searchTerm ? `${searchResults.length} results` : `${friendUsers.length} friends`)
+                            : `${incomingRequests.length} requests`}
+                    </p>
                 </div>
             </div>
 
@@ -109,7 +142,7 @@ const ContactsPage = () => {
                                 <BsSearch className="w-4 h-4" />
                             </span>
                             <Input
-                                placeholder="Search friends"
+                                placeholder="Search friends or find new people"
                                 value={searchTerm}
                                 onChange={(e) => setSearchTerm(e.target.value)}
                                 className="pl-10 h-10 bg-surface-elevated border-none placeholder:text-text-2/60 focus-visible:ring-1 focus-visible:ring-primary/50 rounded-xl text-sm transition-all"
@@ -119,7 +152,7 @@ const ContactsPage = () => {
                 )}
 
                 {loading ? (
-                    <div className="p-8 text-center text-text-2 animate-pulse">Loading contacts...</div>
+                    <div className="p-8 text-center text-text-2 animate-pulse">Searching...</div>
                 ) : view === 'requests' ? (
                     <div className="pb-4">
                         {incomingRequests.length === 0 ? (
@@ -149,12 +182,16 @@ const ContactsPage = () => {
                     </div>
                 ) : (
                     <div className="pb-4">
-                        {filteredContacts.length === 0 ? (
+                        {!searchTerm && friendUsers.length === 0 ? (
                             <div className="p-8 text-center text-text-2">
-                                <p>No contacts found.</p>
+                                <p>No friends yet. Search above to find people!</p>
+                            </div>
+                        ) : displayList.length === 0 ? (
+                            <div className="p-8 text-center text-text-2">
+                                <p>No results found.</p>
                             </div>
                         ) : (
-                            filteredContacts.map(contact => {
+                            displayList.map(contact => {
                                 const status = getFriendStatus(contact.id);
                                 const isFriend = status === 'friend';
                                 const isSent = status === 'sent';

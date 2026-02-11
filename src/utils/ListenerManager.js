@@ -77,7 +77,7 @@ class ListenerManager {
         setTimeout(() => {
             this.isShuttingDown = false;
             console.debug('[ListenerManager] Shutdown complete, ready for new session');
-        }, 1000); // 1 second grace period
+        }, 2000); // 2 second grace period
     }
 
     /**
@@ -105,6 +105,9 @@ class ListenerManager {
         } else if (error.code === 'unavailable') {
             // Network issue - log to debug
             console.debug(`[${context}] Service unavailable (network issue)`);
+        } else if (error.message?.includes('Target ID already exists')) {
+            // Transient Firestore reconnection conflict — not actionable
+            console.debug(`[${context}] Target ID conflict (transient, resolves on reconnect)`);
         } else {
             // Unexpected error - log to console
             console.error(`[${context}] Listener error:`, error);

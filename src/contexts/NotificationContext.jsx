@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
-import { messaging, db } from '../firebase';
+import { getMessagingInstance, db } from '../firebase';
 import { getToken, onMessage } from 'firebase/messaging';
 import { doc, updateDoc, arrayUnion, getDoc } from 'firebase/firestore';
 import { useAuth } from './AuthContext';
@@ -39,7 +39,13 @@ export function NotificationProvider({ children }) {
                     return;
                 }
 
-                const currentToken = await getToken(messaging, {
+                const msg = getMessagingInstance();
+                if (!msg) {
+                    console.debug('Firebase Messaging not available — push notifications disabled.');
+                    return;
+                }
+
+                const currentToken = await getToken(msg, {
                     vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY,
                     serviceWorkerRegistration: registration
                 });
@@ -48,13 +54,9 @@ export function NotificationProvider({ children }) {
                     setToken(currentToken);
                     const existingTokens = currentUser?.fcmTokens || [];
                     if (!existingTokens.includes(currentToken)) {
-                        try {
-                            await updateDoc(doc(db, "users", currentUser.uid), {
-                                fcmTokens: arrayUnion(currentToken)
-                            });
-                        } catch (e) {
-                            console.warn("FCM token update failed:", e.message);
-                        }
+                        await updateDoc(doc(db, "users", currentUser.uid), {
+                            fcmTokens: arrayUnion(currentToken)
+                        });
                     }
                 }
             }
@@ -70,15 +72,22 @@ export function NotificationProvider({ children }) {
     };
 
     useEffect(() => {
-        if (currentUser?.uid) {
+        // Wait for the FULL user profile to be loaded from Firestore (not just auth uid).
+        // AuthContext sets currentUser with Firestore fields (like createdAt) AFTER
+        // the user doc is created/synced. This prevents the race condition where
+        // we try to updateDoc before the user doc exists.
+        if (currentUser?.uid && currentUser?.createdAt) {
             permissionRequested.current = false; // Reset on user change
             requestPermission();
         }
-    }, [currentUser?.uid]);
+    }, [currentUser?.uid, currentUser?.createdAt]);
 
     // 2. Foreground FCM Messages (Existing)
     useEffect(() => {
-        const unsubscribe = onMessage(messaging, async (payload) => {
+        const msg = getMessagingInstance();
+        if (!msg) return; // Messaging not available yet
+
+        const unsubscribe = onMessage(msg, async (payload) => {
             console.log('Foreground Message:', payload);
 
             const chatId = payload.data?.chatId;

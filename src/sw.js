@@ -72,38 +72,9 @@ messaging.onBackgroundMessage(async (payload) => {
     console.log('[firebase-messaging-sw.js] 🔔 Received background message ', payload);
 
     // BACKGROUND DELIVERY LOGIC (Double Ticks)
-    try {
-        const { chatId, senderId } = payload.data || {};
+    // BACKGROUND DELIVERY LOGIC - REMOVED due to permission issues in SW
+    // The client will mark messages as delivered when it connects/focuses.
 
-        if (chatId && senderId) {
-            console.log(`[SW] Attempting to mark messages in chat ${chatId} from ${senderId} as delivered...`);
-
-            // Query for undelivered messages from this specific sender
-            const messagesRef = db.collection('chats').doc(chatId).collection('messages');
-            const q = messagesRef
-                .where('delivered', '==', false)
-                .where('senderId', '==', senderId); // Only mark incoming messages from the notifier
-
-            const snapshot = await q.get();
-
-            if (!snapshot.empty) {
-                const batch = db.batch();
-                let count = 0;
-
-                snapshot.forEach(doc => {
-                    batch.update(doc.ref, { delivered: true });
-                    count++;
-                });
-
-                if (count > 0) {
-                    await batch.commit();
-                    console.log(`[SW] Successfully marked ${count} messages as delivered.`);
-                }
-            }
-        }
-    } catch (error) {
-        console.error('[SW] Error updating delivery status:', error);
-    }
 
     // Customize notification here
     const notificationTitle = payload.notification.title;

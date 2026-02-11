@@ -53,7 +53,7 @@ const LocationTracker = () => {
                 // Graceful error handling
                 if (error.code === 'permission-denied') {
                     // User logged out or permissions changed - stop tracking
-                    console.warn('Location tracking stopped: Permission denied');
+                    console.debug('Location tracking stopped: Permission denied');
                     if (watchIdRef.current) {
                         navigator.geolocation.clearWatch(watchIdRef.current);
                         watchIdRef.current = null;

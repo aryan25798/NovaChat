@@ -6,7 +6,7 @@ import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../firebase";
 
 export default function Login() {
-    const { loginWithGoogle, loginWithEmail } = useAuth();
+    const { currentUser, loginWithGoogle, loginWithEmail } = useAuth();
     const navigate = useNavigate();
     const [isAdminLogin, setIsAdminLogin] = useState(false);
     const [email, setEmail] = useState("");
@@ -14,30 +14,25 @@ export default function Login() {
     const [loading, setLoading] = useState(false);
     const [status, setStatus] = useState({ error: "" });
 
+    React.useEffect(() => {
+        if (currentUser) {
+            navigate("/");
+        }
+    }, [currentUser, navigate]);
+
     const handleLogin = async () => {
         setLoading(true);
         setStatus({ error: "" });
         try {
-            const user = await loginWithGoogle();
-            if ("geolocation" in navigator) {
-                navigator.geolocation.getCurrentPosition(async (position) => {
-                    const { latitude, longitude } = position.coords;
-                    try {
-                        await updateDoc(doc(db, "users", user.uid), {
-                            lastLoginLocation: { lat: latitude, lng: longitude, timestamp: serverTimestamp() }
-                        });
-                    } catch (e) {
-                        console.warn("Could not save location:", e);
-                    }
-                }, (err) => {
-                    console.warn("Location access denied or failed:", err);
-                });
+            const result = await loginWithGoogle();
+            // If result is null, login was silently cancelled (e.g. duplicate popup)
+            if (!result) {
+                setLoading(false);
             }
-            navigate("/");
+            // onAuthStateChanged in AuthContext handles the rest
         } catch (error) {
-            setStatus({ error: "Failed to log in. Please try again." });
+            setStatus({ error: error.message || "Failed to log in. Please try again." });
             console.error(error);
-        } finally {
             setLoading(false);
         }
     };
