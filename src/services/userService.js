@@ -1,5 +1,5 @@
 import { db } from "../firebase";
-import { collection, query, where, getDocs, limit, doc, updateDoc, arrayUnion, arrayRemove } from "firebase/firestore";
+import { collection, query, where, getDocs, limit, doc, updateDoc, arrayUnion, arrayRemove, documentId } from "firebase/firestore";
 
 /**
  * Searches for users by email or display name using prefix search.
@@ -108,4 +108,40 @@ export const unblockUser = async (currentUserId, targetUserId) => {
     await updateDoc(userRef, {
         blockedUsers: arrayRemove(targetUserId)
     });
+};
+/**
+ * Fetches multiple user profiles by ID in batches.
+ * Uses firestore 'in' query to reduce network round-trips.
+ * @param {string[]} userIds - Array of user IDs.
+ * @returns {Promise<Array>} - Array of user objects.
+ */
+export const getUsersByIds = async (userIds) => {
+    if (!userIds || userIds.length === 0) return [];
+
+    // Firestore 'in' query limit is 30 (technically 10 in some older docs, but 30 is safe now for documentId).
+    // Safest standard batch size is 10 to avoid any edge cases with complex queries.
+    const CHUNK_SIZE = 10;
+    const uniqueIds = [...new Set(userIds)];
+    const chunks = [];
+
+    for (let i = 0; i < uniqueIds.length; i += CHUNK_SIZE) {
+        chunks.push(uniqueIds.slice(i, i + CHUNK_SIZE));
+    }
+
+    try {
+        const results = await Promise.all(
+            chunks.map(async (chunk) => {
+                const q = query(
+                    collection(db, "users"),
+                    where(documentId(), "in", chunk)
+                );
+                const snap = await getDocs(q);
+                return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            })
+        );
+        return results.flat();
+    } catch (e) {
+        console.error("Error fetching users batch:", e);
+        return [];
+    }
 };

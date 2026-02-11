@@ -1,76 +1,6 @@
 {
     "indexes": [
         {
-            "collectionGroup": "chats",
-            "queryScope": "COLLECTION",
-            "fields": [
-                {
-                    "fieldPath": "participants",
-                    "arrayConfig": "CONTAINS"
-                },
-                {
-                    "fieldPath": "lastMessageTimestamp",
-                    "order": "DESCENDING"
-                }
-            ]
-        },
-        {
-            "collectionGroup": "messages",
-            "queryScope": "COLLECTION_GROUP",
-            "fields": [
-                {
-                    "fieldPath": "senderId",
-                    "order": "ASCENDING"
-                },
-                {
-                    "fieldPath": "timestamp",
-                    "order": "DESCENDING"
-                }
-            ]
-        },
-        {
-            "collectionGroup": "messages",
-            "queryScope": "COLLECTION_GROUP",
-            "fields": [
-                {
-                    "fieldPath": "isFlagged",
-                    "order": "ASCENDING"
-                },
-                {
-                    "fieldPath": "timestamp",
-                    "order": "DESCENDING"
-                }
-            ]
-        },
-        {
-            "collectionGroup": "announcements",
-            "queryScope": "COLLECTION",
-            "fields": [
-                {
-                    "fieldPath": "active",
-                    "order": "ASCENDING"
-                },
-                {
-                    "fieldPath": "timestamp",
-                    "order": "DESCENDING"
-                }
-            ]
-        },
-        {
-            "collectionGroup": "notifications",
-            "queryScope": "COLLECTION",
-            "fields": [
-                {
-                    "fieldPath": "toUserId",
-                    "order": "ASCENDING"
-                },
-                {
-                    "fieldPath": "createdAt",
-                    "order": "DESCENDING"
-                }
-            ]
-        },
-        {
             "collectionGroup": "users",
             "queryScope": "COLLECTION",
             "fields": [
@@ -93,22 +23,44 @@
                     "order": "ASCENDING"
                 },
                 {
-                    "fieldPath": "displayName",
+                    "fieldPath": "searchableName",
                     "order": "ASCENDING"
                 }
             ]
         },
         {
-            "collectionGroup": "messages",
-            "queryScope": "COLLECTION_GROUP",
+            "collectionGroup": "friend_requests",
+            "queryScope": "COLLECTION",
             "fields": [
                 {
-                    "fieldPath": "delivered",
+                    "fieldPath": "to",
                     "order": "ASCENDING"
                 },
                 {
-                    "fieldPath": "senderId",
+                    "fieldPath": "status",
                     "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "timestamp",
+                    "order": "DESCENDING"
+                }
+            ]
+        },
+        {
+            "collectionGroup": "friend_requests",
+            "queryScope": "COLLECTION",
+            "fields": [
+                {
+                    "fieldPath": "from",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "status",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "timestamp",
+                    "order": "DESCENDING"
                 }
             ]
         }

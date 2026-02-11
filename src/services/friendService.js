@@ -1,6 +1,6 @@
 import { db, functions } from "../firebase";
 import {
-    collection, query, where, onSnapshot, doc
+    collection, query, where, onSnapshot, doc, limit, orderBy
 } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { listenerManager } from "../utils/ListenerManager";
@@ -42,7 +42,9 @@ export const subscribeToIncomingRequests = (userId, callback) => {
     const q = query(
         collection(db, "friend_requests"),
         where("to", "==", userId),
-        where("status", "==", "pending")
+        where("status", "==", "pending"),
+        orderBy("timestamp", "desc"),
+        limit(50)
     );
 
     const listenerKey = `friend-requests-incoming-${userId}`;
@@ -68,7 +70,9 @@ export const subscribeToOutgoingRequests = (userId, callback) => {
     const q = query(
         collection(db, "friend_requests"),
         where("from", "==", userId),
-        where("status", "==", "pending")
+        where("status", "==", "pending"),
+        orderBy("timestamp", "desc"),
+        limit(50)
     );
 
     const listenerKey = `friend-requests-outgoing-${userId}`;

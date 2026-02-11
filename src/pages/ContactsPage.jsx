@@ -36,13 +36,10 @@ const ContactsPage = () => {
 
             if (uncachedIds.length > 0) {
                 try {
-                    const { doc, getDoc } = await import("firebase/firestore");
-                    const promises = uncachedIds.map(fid => getDoc(doc(db, "users", fid)));
-                    const results = await Promise.allSettled(promises);
-                    results.forEach(result => {
-                        if (result.status === 'fulfilled' && result.value.exists()) {
-                            friendCacheRef.current.set(result.value.id, { id: result.value.id, ...result.value.data() });
-                        }
+                    const { getUsersByIds } = await import("../services/userService");
+                    const users = await getUsersByIds(uncachedIds);
+                    users.forEach(user => {
+                        friendCacheRef.current.set(user.id, user);
                     });
                 } catch (e) {
                     console.error("Error fetching friend details:", e);
