@@ -1,7 +1,7 @@
 import React, { useContext, useState, useEffect, useRef, useCallback } from "react";
 import { auth, googleProvider, db } from "../firebase";
 import { signInWithPopup, getRedirectResult, signOut, onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
-import { doc, setDoc, getDoc, serverTimestamp, updateDoc, onSnapshot, enableNetwork } from "firebase/firestore";
+import { doc, setDoc, getDoc, serverTimestamp, updateDoc, onSnapshot } from "firebase/firestore";
 import { listenerManager } from "../utils/ListenerManager";
 import { logoutWithTimeout, clearAllCaches } from "../utils/logoutUtils";
 
@@ -112,13 +112,7 @@ export function AuthProvider({ children }) {
 
     const loginWithGoogle = useCallback(async function () {
         try {
-            // Re-enable Firestore network before sign-in
-            try {
-                await enableNetwork(db);
-                console.debug('Firestore network enabled before login');
-            } catch (err) {
-                console.debug('Network enable error (may already be enabled):', err.code);
-            }
+            // Firestore network is managed automatically by the SDK
 
             // Use popup — more reliable with modern third-party cookie restrictions
             // COOP header 'same-origin-allow-popups' is configured in vercel.json, firebase.json, and vite.config.js
@@ -142,12 +136,7 @@ export function AuthProvider({ children }) {
 
     const loginWithEmail = useCallback(async function (email, password) {
         try {
-            try {
-                await enableNetwork(db);
-                console.debug('Firestore network enabled before login');
-            } catch (err) {
-                console.debug('Network enable error (may already be enabled):', err.code);
-            }
+
 
             const result = await signInWithEmailAndPassword(auth, email, password);
             return result;

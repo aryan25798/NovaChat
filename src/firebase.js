@@ -13,7 +13,7 @@ const firebaseConfig = {
     databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL
 };
 
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from "firebase/firestore";
+import { initializeFirestore, persistentLocalCache } from "firebase/firestore";
 
 // ... (imports remain)
 
@@ -23,10 +23,9 @@ setPersistence(auth, browserLocalPersistence);
 export const googleProvider = new GoogleAuthProvider();
 
 // Initialize Firestore with persistence settings
+// Using default single-tab persistence for stability
 export const db = initializeFirestore(app, {
-    localCache: persistentLocalCache({
-        tabManager: persistentMultipleTabManager()
-    })
+    localCache: persistentLocalCache()
 });
 
 import { getDatabase } from "firebase/database";
