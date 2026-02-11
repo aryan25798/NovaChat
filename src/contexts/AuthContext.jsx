@@ -1,8 +1,9 @@
 import React, { useContext, useState, useEffect, useRef } from "react";
 import { auth, googleProvider, db } from "../firebase";
 import { signInWithPopup, signOut, onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
-import { doc, setDoc, getDoc, serverTimestamp, updateDoc, onSnapshot } from "firebase/firestore";
+import { doc, setDoc, getDoc, serverTimestamp, updateDoc, onSnapshot, disableNetwork, enableNetwork, clearIndexedDbPersistence } from "firebase/firestore";
 import { listenerManager } from "../utils/ListenerManager";
+import { logoutWithTimeout, clearAllCaches } from "../utils/logoutUtils";
 
 const AuthContext = React.createContext();
 
@@ -74,6 +75,15 @@ export function AuthProvider({ children }) {
 
     async function loginWithGoogle() {
         try {
+            // CRITICAL: Re-enable Firestore network BEFORE sign-in
+            // This prevents SDK assertion errors when auth state changes
+            try {
+                await enableNetwork(db);
+                console.debug('Firestore network enabled before login');
+            } catch (err) {
+                console.debug('Network enable error (may already be enabled):', err.code);
+            }
+
             const result = await signInWithPopup(auth, googleProvider);
             const user = result.user;
 
@@ -107,6 +117,7 @@ export function AuthProvider({ children }) {
                 await updateDoc(userRef, updateData);
             }
             updateUserLocation(user.uid);
+
             return user;
         } catch (error) {
             console.error("Google Login Error:", error);
@@ -114,46 +125,82 @@ export function AuthProvider({ children }) {
         }
     }
 
-    function loginWithEmail(email, password) {
-        return signInWithEmailAndPassword(auth, email, password);
+    async function loginWithEmail(email, password) {
+        try {
+            // CRITICAL: Re-enable Firestore network BEFORE sign-in
+            // This prevents SDK assertion errors when auth state changes
+            try {
+                await enableNetwork(db);
+                console.debug('Firestore network enabled before login');
+            } catch (err) {
+                console.debug('Network enable error (may already be enabled):', err.code);
+            }
+
+            const result = await signInWithEmailAndPassword(auth, email, password);
+
+            return result;
+        } catch (error) {
+            console.error("Email Login Error:", error);
+            throw error;
+        }
     }
 
     async function logout() {
-        console.debug('Starting logout sequence...');
+        // Wrap entire logout in timeout protection
+        return logoutWithTimeout(async () => {
+            console.debug('Starting secure logout sequence...');
 
-        // CRITICAL: Set logout flag FIRST to prevent listener from firing
-        isLoggingOutRef.current = true;
+            // CRITICAL: Set logout flag FIRST to prevent listener from firing
+            isLoggingOutRef.current = true;
 
-        // STEP 1: Cleanup ALL Firestore listeners FIRST (most important)
-        listenerManager.unsubscribeAll();
+            // STEP 1: Cleanup ALL Firestore listeners FIRST (most important)
+            listenerManager.unsubscribeAll();
 
-        // STEP 2: Cleanup auth-specific listener
-        if (userDocUnsubscribeRef.current) {
-            userDocUnsubscribeRef.current();
-            userDocUnsubscribeRef.current = null;
-        }
-
-        // STEP 3: Update user status (best effort)
-        if (currentUser) {
-            try {
-                const userRef = doc(db, "users", currentUser.uid);
-                await updateDoc(userRef, { isOnline: false });
-            } catch (err) {
-                // Silently handle permission errors on logout
-                console.debug("Logout cleanup error:", err.code);
+            // STEP 2: Cleanup auth-specific listener
+            if (userDocUnsubscribeRef.current) {
+                userDocUnsubscribeRef.current();
+                userDocUnsubscribeRef.current = null;
             }
-        }
 
-        // STEP 4: Clear user state before signing out to prevent race conditions
-        setCurrentUser(null);
+            // STEP 3: Update user status (NON-BLOCKING - fire and forget)
+            // Don't wait for this to complete - logout should never hang
+            if (currentUser) {
+                updateDoc(doc(db, "users", currentUser.uid), {
+                    isOnline: false
+                }).catch((err) => {
+                    console.debug("Status update error (non-critical):", err.code);
+                });
+            }
 
-        console.debug('Logout sequence complete');
+            // STEP 4: Clear user state before signing out to prevent race conditions
+            setCurrentUser(null);
 
-        // STEP 5: Sign out (this will trigger onAuthStateChanged, but we're ready)
-        await signOut(auth);
+            console.debug('Disabling Firestore network and clearing caches...');
 
-        // Reset logout flag after signOut completes
-        isLoggingOutRef.current = false;
+            // STEP 5: Disable Firestore network to cleanly shut down all internal watch streams
+            // This prevents "INTERNAL ASSERTION FAILED" errors from the SDK
+            try {
+                await disableNetwork(db);
+                console.debug('Firestore network disabled successfully');
+            } catch (err) {
+                console.debug('Firestore network disable error:', err.code);
+            }
+
+            // STEP 6: SECURITY - Clear all caches and storage
+            // This prevents data leaks on shared devices
+            await clearAllCaches(db);
+
+            // STEP 7: Sign out from Firebase Auth
+            await signOut(auth);
+
+            console.debug('Secure logout complete');
+
+            // NOTE: Network will be re-enabled during next login, not here
+            // This prevents security window where Firestore is active but user is logged out
+
+            // Reset logout flag after signOut completes
+            isLoggingOutRef.current = false;
+        }, 10000); // 10 second timeout
     }
 
     useEffect(() => {

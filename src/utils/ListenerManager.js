@@ -20,6 +20,18 @@ class ListenerManager {
      * @param {Function} unsubscribe - The unsubscribe function from onSnapshot
      */
     subscribe(key, unsubscribe) {
+        // CRITICAL: Don't register new listeners during shutdown
+        if (this.isShuttingDown) {
+            console.debug(`[ListenerManager] Rejecting new listener during shutdown: ${key}`);
+            // Immediately unsubscribe it
+            try {
+                unsubscribe();
+            } catch (e) {
+                // Ignore
+            }
+            return;
+        }
+
         // Unsubscribe existing listener with same key if it exists
         if (this.listeners.has(key)) {
             const existing = this.listeners.get(key);
@@ -60,7 +72,12 @@ class ListenerManager {
         });
 
         this.listeners.clear();
-        this.isShuttingDown = false;
+
+        // Keep shutdown flag set for a moment to prevent race conditions
+        setTimeout(() => {
+            this.isShuttingDown = false;
+            console.debug('[ListenerManager] Shutdown complete, ready for new session');
+        }, 1000); // 1 second grace period
     }
 
     /**
@@ -78,6 +95,7 @@ class ListenerManager {
     handleListenerError(error, context = 'Unknown') {
         if (this.isShuttingDown) {
             // Ignore all errors during shutdown
+            console.debug(`[${context}] Error during shutdown (expected) - ignoring`);
             return;
         }
 
