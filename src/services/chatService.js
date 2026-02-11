@@ -56,37 +56,32 @@ export const subscribeToMessages = (chatId, currentUserId, callback, updateReadS
 const markMessagesAsRead = async (chatId, currentUserId, messageDocs) => {
     if (!messageDocs || messageDocs.length === 0) return;
 
-    const chatRef = doc(db, CHATS_COLLECTION, chatId);
-
-    // 1. Reset unread count on the chat document
-    // We update this even if we don't find individual messages to mark as read, 
-    // to ensure the badge clears if the count and message state got out of sync.
-    updateDoc(chatRef, {
-        [`unreadCount.${currentUserId}`]: 0
-    }).catch(err => console.error("Error resetting unread count:", err));
-
-    // 2. Identify messages to mark as read
+    // Identify messages to mark as read
     const unreadMsgs = messageDocs.filter(d => {
         const data = d.data();
-        // Include Gemini messages in the reading process
         return !data.read && data.senderId !== currentUserId;
     });
 
-    if (unreadMsgs.length === 0) return;
+    // Resetting count and marking messages as read should be ATOMIC to prevent sync issues.
+    const batch = writeBatch(db);
+    const chatRef = doc(db, CHATS_COLLECTION, chatId);
 
-    // Mark individual messages as read (batched)
-    const msgsToUpdate = unreadMsgs.slice(-50);
+    // 1. Reset unread count on the chat document
+    batch.update(chatRef, {
+        [`unreadCount.${currentUserId}`]: 0
+    });
 
-    if (msgsToUpdate.length > 0) {
-        const batch = writeBatch(db);
-        msgsToUpdate.forEach(mDoc => {
+    // 2. Mark individual messages as read (limit to 50 for batch safety)
+    if (unreadMsgs.length > 0) {
+        unreadMsgs.slice(-50).forEach(mDoc => {
             batch.update(mDoc.ref, { read: true });
         });
-        try {
-            await batch.commit();
-        } catch (error) {
-            console.error(`Error marking ${msgsToUpdate.length} messages as read:`, error);
-        }
+    }
+
+    try {
+        await batch.commit();
+    } catch (error) {
+        console.error("Atomic markRead batch failed:", error);
     }
 };
 

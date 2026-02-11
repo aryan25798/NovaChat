@@ -12,6 +12,7 @@ import {
     getDoc
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
+import { listenerManager } from '../utils/ListenerManager';
 
 // --- Statistics & Real-time Monitoring ---
 
@@ -27,30 +28,42 @@ export const subscribeToDashboardStats = (callback) => {
 };
 
 export const subscribeToUsers = (callback) => {
-    return onSnapshot(collection(db, "users"), (snap) => {
+    const listenerKey = 'admin-users';
+    const unsubscribe = onSnapshot(collection(db, "users"), (snap) => {
         const users = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         callback(users);
     }, (error) => {
-        console.error("Error subscribing to users (Admin):", error);
+        listenerManager.handleListenerError(error, 'AdminUsers');
     });
+
+    listenerManager.subscribe(listenerKey, unsubscribe);
+    return () => listenerManager.unsubscribe(listenerKey);
 };
 
 export const subscribeToChats = (callback) => {
-    return onSnapshot(collection(db, "chats"), (snap) => {
+    const listenerKey = 'admin-chats';
+    const unsubscribe = onSnapshot(collection(db, "chats"), (snap) => {
         const chats = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         callback(chats);
     }, (error) => {
-        console.error("Error subscribing to chats (Admin):", error);
+        listenerManager.handleListenerError(error, 'AdminChats');
     });
+
+    listenerManager.subscribe(listenerKey, unsubscribe);
+    return () => listenerManager.unsubscribe(listenerKey);
 };
 
 export const subscribeToStatuses = (callback) => {
-    return onSnapshot(collection(db, "statuses"), (snap) => {
+    const listenerKey = 'admin-statuses';
+    const unsubscribe = onSnapshot(collection(db, "statuses"), (snap) => {
         const statuses = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         callback(statuses);
     }, (error) => {
-        console.error("Error subscribing to statuses (Admin):", error);
+        listenerManager.handleListenerError(error, 'AdminStatuses');
     });
+
+    listenerManager.subscribe(listenerKey, unsubscribe);
+    return () => listenerManager.unsubscribe(listenerKey);
 };
 
 // --- User Management ---
@@ -95,13 +108,17 @@ export const deleteStatus = async (statusId) => {
 
 export const subscribeToChatMessages = (chatId, callback) => {
     if (!chatId) return () => { };
+    const listenerKey = `admin-chat-msgs-${chatId}`;
     const q = query(collection(db, "chats", chatId, "messages"), orderBy("timestamp", "asc"));
-    return onSnapshot(q, (snapshot) => {
+    const unsubscribe = onSnapshot(q, (snapshot) => {
         const messages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         callback(messages);
     }, (error) => {
-        console.error("Error subscribing to chat messages (Admin):", error);
+        listenerManager.handleListenerError(error, 'AdminSpyMode');
     });
+
+    listenerManager.subscribe(listenerKey, unsubscribe);
+    return () => listenerManager.unsubscribe(listenerKey);
 };
 
 // --- Admin Verification ---

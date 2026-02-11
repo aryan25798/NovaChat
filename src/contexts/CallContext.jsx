@@ -102,13 +102,34 @@ export function CallProvider({ children }) {
                     type: data.type,
                     isIncoming: true,
                     status: 'ringing',
-                    connectionState: 'new'
+                    connectionState: 'new',
+                    chatId: data.chatId
                 });
             }
         });
 
         return unsubscribe;
     }, [currentUser, callState]);
+
+    // 1.5 Calling Timeout (Outgoing)
+    const timeoutRef = useRef(null);
+    useEffect(() => {
+        if (callState?.status === 'ringing' && !callState.isIncoming) {
+            // Start 45s timeout for outgoing calls
+            timeoutRef.current = setTimeout(() => {
+                if (callState.status === 'ringing') {
+                    console.log("Call timeout reached. Ending as missed.");
+                    endCall(true);
+                }
+            }, 45000);
+        } else if (callState?.status === 'connected') {
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        }
+
+        return () => {
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        };
+    }, [callState?.status, callState?.isIncoming]);
 
     // 2. PeerConnection & Media Setup
     const initPeerConnection = async (callId, isCaller) => {
@@ -305,8 +326,16 @@ export function CallProvider({ children }) {
         // Notify Remote (Background) & Add Log
         if (currentCallId) {
             try {
+                let duration = 0;
+                if (callStatus === 'connected' && startTime) {
+                    duration = Math.round((Date.now() - startTime) / 1000);
+                }
+
                 if (notifyRemote) {
-                    await updateCallStatus(currentCallId, 'ended');
+                    await updateCallStatus(currentCallId, 'ended', {
+                        duration,
+                        finalStatus: callStatus === 'connected' ? 'completed' : 'missed'
+                    });
                 }
 
                 // Add Call Log to Chat (Keeping this direct for now as it crosses domains)

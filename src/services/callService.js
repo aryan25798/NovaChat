@@ -11,6 +11,7 @@ import {
     getDoc,
     setDoc
 } from "firebase/firestore";
+import { listenerManager } from "../utils/ListenerManager";
 
 // --- Signaling & Call Management ---
 
@@ -46,13 +47,17 @@ export const addCandidate = async (callId, type, candidate) => {
 };
 
 export const subscribeToCall = (callId, onUpdate) => {
-    return onSnapshot(doc(db, "calls", callId), (snap) => {
+    const listenerKey = `call-${callId}`;
+    const unsubscribe = onSnapshot(doc(db, "calls", callId), (snap) => {
         if (snap.exists()) {
             onUpdate(snap.data());
         }
     }, (error) => {
-        console.error("Error subscribing to call:", error);
+        listenerManager.handleListenerError(error, 'SubscribeToCall');
     });
+
+    listenerManager.subscribe(listenerKey, unsubscribe);
+    return () => listenerManager.unsubscribe(listenerKey);
 };
 
 export const subscribeToIncomingCalls = (userId, onCallReceived) => {
@@ -62,28 +67,37 @@ export const subscribeToIncomingCalls = (userId, onCallReceived) => {
         where("status", "==", "ringing")
     );
 
-    return onSnapshot(q, (snapshot) => {
+    const listenerKey = `incoming-calls-${userId}`;
+    const unsubscribe = onSnapshot(q, (snapshot) => {
         snapshot.docChanges().forEach(change => {
             if (change.type === "added") {
                 onCallReceived(change.doc.id, change.doc.data());
             }
         });
     }, (error) => {
-        console.error("Error subscribing to incoming calls:", error);
+        listenerManager.handleListenerError(error, 'IncomingCalls');
     });
+
+    listenerManager.subscribe(listenerKey, unsubscribe);
+    return () => listenerManager.unsubscribe(listenerKey);
 };
 
 export const subscribeToCandidates = (callId, type, onCandidate) => {
     const collectionName = type === 'caller' ? 'calleeCandidates' : 'callerCandidates';
-    return onSnapshot(collection(db, "calls", callId, collectionName), (snap) => {
+    const listenerKey = `candidates-${callId}-${type}`;
+
+    const unsubscribe = onSnapshot(collection(db, "calls", callId, collectionName), (snap) => {
         snap.docChanges().forEach(change => {
             if (change.type === 'added') {
                 onCandidate(change.doc.data());
             }
         });
     }, (error) => {
-        console.error("Error subscribing to candidates:", error);
+        listenerManager.handleListenerError(error, 'CallCandidates');
     });
+
+    listenerManager.subscribe(listenerKey, unsubscribe);
+    return () => listenerManager.unsubscribe(listenerKey);
 };
 
 export const setLocalDescription = async (callId, description, type) => {

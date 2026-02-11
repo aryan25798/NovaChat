@@ -3,6 +3,7 @@ import { rtdb, auth, db } from "../firebase";
 import { ref, onValue, onDisconnect, set, serverTimestamp as rtdbServerTimestamp } from "firebase/database";
 import { doc, updateDoc, serverTimestamp as firestoreServerTimestamp } from "firebase/firestore"; // Sync to Firestore for querying
 import { useAuth } from "./AuthContext";
+import { listenerManager } from "../utils/ListenerManager";
 
 const PresenceContext = createContext();
 
@@ -35,6 +36,7 @@ export function PresenceProvider({ children }) {
         };
 
         const connectedRef = ref(rtdb, '.info/connected');
+        const listenerKey = `presence-${currentUser.uid}`;
 
         const unsubscribe = onValue(connectedRef, async (snapshot) => {
             if (snapshot.val() === false) {
@@ -48,9 +50,16 @@ export function PresenceProvider({ children }) {
             set(userStatusDatabaseRef, isOnlineForDatabase);
         });
 
+        listenerManager.subscribe(listenerKey, unsubscribe);
+
         return () => {
-            unsubscribe();
-            // We don't manually set offline here because onDisconnect handles it on the server side
+            listenerManager.unsubscribe(listenerKey);
+            // We set offline manually on unmount for immediate feedback, but only if still authenticated
+            if (auth.currentUser) {
+                set(userStatusDatabaseRef, isOfflineForDatabase).catch(err => {
+                    console.debug("Presence cleanup suppressed (already signed out)");
+                });
+            }
         };
     }, [currentUser?.uid]);
 

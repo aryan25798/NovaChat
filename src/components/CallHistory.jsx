@@ -71,6 +71,14 @@ export default function CallHistory() {
         return format(date, 'MMM d, HH:mm');
     };
 
+    const formatDuration = (seconds) => {
+        if (!seconds) return "";
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        if (mins > 0) return `${mins}m ${secs}s`;
+        return `${secs}s`;
+    };
+
     const handleCallAction = (item, type) => {
         const otherUser = item.direction === 'outgoing'
             ? { uid: item.receiverId, displayName: item.receiverName || "User", photoURL: item.receiverPhoto }
@@ -115,6 +123,7 @@ export default function CallHistory() {
                                         <BsArrowDownLeft className={`${isMissed ? 'text-red-500' : 'text-green-500'} w-3.5 h-3.5`} />
                                     )}
                                     <span>{formatCallTime(item.timestamp)}</span>
+                                    {item.duration > 0 && <span className="opacity-60">• {formatDuration(item.duration)}</span>}
                                 </div>
                             </div>
 

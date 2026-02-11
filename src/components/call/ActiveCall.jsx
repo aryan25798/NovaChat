@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useAuth } from "../../contexts/AuthContext";
 import { FaMicrophone, FaMicrophoneSlash, FaVideo, FaVideoSlash, FaPhoneSlash, FaExpand, FaClock } from 'react-icons/fa';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -12,6 +13,7 @@ export default function ActiveCall({
     isMuted,
     isVideoEnabled
 }) {
+    const { currentUser } = useAuth();
     const [duration, setDuration] = useState(0);
     const { otherUser, connectionState } = callState;
 
@@ -39,12 +41,21 @@ export default function ActiveCall({
             <div className="remote-video-wrap-v9">
                 <video ref={remoteVideoRef} autoPlay playsInline className="remote-video-v9" />
 
-                {connectionState === 'disconnected' && (
-                    <div className="reconnect-overlay-v9">
-                        <div className="spinner-v9"></div>
-                        <p>Reconnecting...</p>
-                    </div>
-                )}
+                <AnimatePresence>
+                    {(connectionState === 'disconnected' || connectionState === 'failed') && (
+                        <motion.div
+                            className="reconnect-overlay-v9"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                        >
+                            <div className="spinner-v9"></div>
+                            <p className="reconnect-text-v9">
+                                {connectionState === 'failed' ? 'Connection lost, trying again...' : 'Reconnecting...'}
+                            </p>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
 
                 <div className="call-header-v9">
                     <div className="header-info-v9">
@@ -64,7 +75,7 @@ export default function ActiveCall({
                 <video ref={localVideoRef} autoPlay playsInline muted className="local-video-v9" />
                 {!isVideoEnabled && (
                     <div className="video-off-ui-v9">
-                        <img src={callState.myPhoto} alt="Me" />
+                        <img src={currentUser?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser?.uid}`} alt="Me" />
                     </div>
                 )}
             </motion.div>
@@ -165,9 +176,14 @@ export default function ActiveCall({
                 @keyframes spin-v9 { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
                 .reconnect-overlay-v9 {
                     position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-                    background: rgba(0,0,0,0.6);
+                    background: rgba(0,0,0,0.8);
+                    backdrop-filter: blur(8px);
                     display: flex; flex-direction: column; align-items: center; justify-content: center;
                     color: white; z-index: 100;
+                }
+                .reconnect-text-v9 {
+                    font-size: 16px; font-weight: 500; color: rgba(255,255,255,0.9);
+                    margin-top: 10px; text-shadow: 0 2px 4px rgba(0,0,0,0.3);
                 }
             `}</style>
         </motion.div>
