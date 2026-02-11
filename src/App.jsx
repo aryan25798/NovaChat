@@ -91,48 +91,51 @@ import LocationTracker from './components/LocationTracker';
 import GlobalAnnouncements from './components/GlobalAnnouncements'; // Import New Component
 
 import ErrorBoundary from './components/ErrorBoundary';
+import PermissionErrorBoundary from './components/PermissionErrorBoundary';
 
 const App = () => {
   return (
     <ErrorBoundary>
-      <NotificationProvider>
-        <LocationTracker />
-        <DeliveryStatusListener />
-        <GlobalAnnouncements />
-        <FriendProvider>
-          <StatusProvider>
-            <ConnectivityMonitor>
-              <Router>
-                <Suspense fallback={<Loading />}>
-                  <Routes>
-                    <Route path="/login" element={<Login />} />
-                    <Route path="/share" element={<PrivateRoute><SharePage /></PrivateRoute>} />
-                    <Route path="/admin" element={<PrivateRoute><AdminDashboard /></PrivateRoute>} />
-                    <Route
-                      path="/"
-                      element={
-                        <PrivateRoute>
-                          <MainLayout />
-                        </PrivateRoute>
-                      }
-                    >
-                      <Route index element={<EmptyState />} />
-                      <Route path="c/:id" element={<ChatPage />} />
-                      <Route path="profile" element={<ProfilePage />} />
-                      <Route path="settings" element={<Navigate to="/profile" />} />
-                      <Route path="status" element={<StatusPage />} />
-                      <Route path="calls" element={<CallsPage />} />
-                      <Route path="contacts" element={<ContactsPage />} />
-                    </Route>
+      <PermissionErrorBoundary>
+        <NotificationProvider>
+          <LocationTracker />
+          <DeliveryStatusListener />
+          <GlobalAnnouncements />
+          <FriendProvider>
+            <StatusProvider>
+              <ConnectivityMonitor>
+                <Router>
+                  <Suspense fallback={<Loading />}>
+                    <Routes>
+                      <Route path="/login" element={<Login />} />
+                      <Route path="/share" element={<PrivateRoute><SharePage /></PrivateRoute>} />
+                      <Route path="/admin" element={<PrivateRoute><AdminDashboard /></PrivateRoute>} />
+                      <Route
+                        path="/"
+                        element={
+                          <PrivateRoute>
+                            <MainLayout />
+                          </PrivateRoute>
+                        }
+                      >
+                        <Route index element={<EmptyState />} />
+                        <Route path="c/:id" element={<ChatPage />} />
+                        <Route path="profile" element={<ProfilePage />} />
+                        <Route path="settings" element={<Navigate to="/profile" />} />
+                        <Route path="status" element={<StatusPage />} />
+                        <Route path="calls" element={<CallsPage />} />
+                        <Route path="contacts" element={<ContactsPage />} />
+                      </Route>
 
-                    <Route path="*" element={<Navigate to="/" />} />
-                  </Routes>
-                </Suspense>
-              </Router>
-            </ConnectivityMonitor>
-          </StatusProvider>
-        </FriendProvider>
-      </NotificationProvider>
+                      <Route path="*" element={<Navigate to="/" />} />
+                    </Routes>
+                  </Suspense>
+                </Router>
+              </ConnectivityMonitor>
+            </StatusProvider>
+          </FriendProvider>
+        </NotificationProvider>
+      </PermissionErrorBoundary>
     </ErrorBoundary>
   );
 };

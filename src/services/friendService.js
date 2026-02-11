@@ -1,18 +1,31 @@
 import { db } from "../firebase";
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, doc, updateDoc, deleteDoc, arrayUnion, arrayRemove, getDocs, getDoc } from "firebase/firestore";
+import { listenerManager } from "../utils/ListenerManager";
 
 // --- Real-time Listeners ---
 
 export const subscribeToFriends = (userId, callback) => {
-    return onSnapshot(doc(db, "users", userId), (docSnap) => {
-        if (docSnap.exists()) {
-            callback(docSnap.data().friends || []);
-        } else {
+    const listenerKey = `friends-${userId}`;
+
+    const unsubscribe = onSnapshot(doc(db, "users", userId),
+        (docSnap) => {
+            if (docSnap.exists()) {
+                callback(docSnap.data().friends || []);
+            } else {
+                callback([]);
+            }
+        },
+        (error) => {
+            listenerManager.handleListenerError(error, 'Friends');
             callback([]);
         }
-    }, (error) => {
-        console.error("Error subscribing to friends:", error);
-    });
+    );
+
+    listenerManager.subscribe(listenerKey, unsubscribe);
+
+    return () => {
+        listenerManager.unsubscribe(listenerKey);
+    };
 };
 
 export const subscribeToIncomingRequests = (userId, callback) => {
@@ -21,11 +34,24 @@ export const subscribeToIncomingRequests = (userId, callback) => {
         where("to", "==", userId),
         where("status", "==", "pending")
     );
-    return onSnapshot(q, (snap) => {
-        callback(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, (error) => {
-        console.error("Error subscribing to incoming friend requests:", error);
-    });
+
+    const listenerKey = `friend-requests-incoming-${userId}`;
+
+    const unsubscribe = onSnapshot(q,
+        (snap) => {
+            callback(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        },
+        (error) => {
+            listenerManager.handleListenerError(error, 'IncomingFriendRequests');
+            callback([]);
+        }
+    );
+
+    listenerManager.subscribe(listenerKey, unsubscribe);
+
+    return () => {
+        listenerManager.unsubscribe(listenerKey);
+    };
 };
 
 export const subscribeToOutgoingRequests = (userId, callback) => {
@@ -34,11 +60,24 @@ export const subscribeToOutgoingRequests = (userId, callback) => {
         where("from", "==", userId),
         where("status", "==", "pending")
     );
-    return onSnapshot(q, (snap) => {
-        callback(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, (error) => {
-        console.error("Error subscribing to outgoing friend requests:", error);
-    });
+
+    const listenerKey = `friend-requests-outgoing-${userId}`;
+
+    const unsubscribe = onSnapshot(q,
+        (snap) => {
+            callback(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        },
+        (error) => {
+            listenerManager.handleListenerError(error, 'OutgoingFriendRequests');
+            callback([]);
+        }
+    );
+
+    listenerManager.subscribe(listenerKey, unsubscribe);
+
+    return () => {
+        listenerManager.unsubscribe(listenerKey);
+    };
 };
 
 // --- Actions ---

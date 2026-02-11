@@ -1,6 +1,7 @@
 import { db } from '../firebase';
 import { collection, addDoc, query, where, orderBy, onSnapshot, updateDoc, doc, serverTimestamp, limit } from 'firebase/firestore';
 import { auth } from '../firebase';
+import { listenerManager } from '../utils/ListenerManager';
 
 // Collection reference
 const NOTIFICATIONS_COLLECTION = 'notifications';
@@ -63,25 +64,26 @@ export const subscribeToNotifications = (userId, callback) => {
         limit(50)
     );
 
-    return onSnapshot(q, (snapshot) => {
-        const notifications = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-        }));
-        callback(notifications);
-    }, (error) => {
-        // Handle specific error cases
-        if (error.code === 'failed-precondition' && error.message.includes('index')) {
-            console.error("Error listening to notifications: The required Firestore index is still building. Please wait a few minutes and refresh the page.", error);
-            // Return empty array instead of crashing
-            callback([]);
-        } else if (error.code === 'permission-denied') {
-            console.error("Error listening to notifications: Permission denied. Please check Firestore security rules.", error);
-            callback([]);
-        } else {
-            console.error("Error listening to notifications:", error);
+    const listenerKey = `notifications-${userId}`;
+
+    const unsubscribe = onSnapshot(q,
+        (snapshot) => {
+            const notifications = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            }));
+            callback(notifications);
+        },
+        (error) => {
+            listenerManager.handleListenerError(error, 'Notifications');
             callback([]);
         }
-    });
+    );
+
+    listenerManager.subscribe(listenerKey, unsubscribe);
+
+    return () => {
+        listenerManager.unsubscribe(listenerKey);
+    };
 };
 

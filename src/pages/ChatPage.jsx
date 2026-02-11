@@ -4,6 +4,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { db } from "../firebase";
 import { doc, getDoc, collection, query, where, getDocs, limit, onSnapshot } from "firebase/firestore";
 import ChatWindow from "../components/ChatWindow";
+import { listenerManager } from "../utils/ListenerManager";
 
 const ChatPage = () => {
     const { id } = useParams(); // Could be a chat ID OR a user ID for legacy links
@@ -78,6 +79,8 @@ const ChatPage = () => {
                 }
 
                 // Now listen to the target chat document (Real-time)
+                const listenerKey = `chat-${targetRef.id}`;
+
                 unsubscribe = onSnapshot(targetRef, async (docSnap) => {
                     if (docSnap.exists()) {
                         const data = docSnap.data();
@@ -137,10 +140,13 @@ const ChatPage = () => {
                     }
                     setLoading(false);
                 }, (err) => {
-                    console.error("Chat listener error:", err);
-                    setChat(null); // Or set a permission denied state
+                    listenerManager.handleListenerError(err, 'ChatPage');
+                    setChat(null);
                     setLoading(false);
                 });
+
+                // Register with manager
+                listenerManager.subscribe(listenerKey, unsubscribe);
 
             } catch (error) {
                 console.error("Critical error resolving chat:", error);

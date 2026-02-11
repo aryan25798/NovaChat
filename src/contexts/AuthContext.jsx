@@ -1,7 +1,8 @@
-import React, { useContext, useState, useEffect } from "react";
+import React, { useContext, useState, useEffect, useRef } from "react";
 import { auth, googleProvider, db } from "../firebase";
 import { signInWithPopup, signOut, onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
 import { doc, setDoc, getDoc, serverTimestamp, updateDoc, onSnapshot } from "firebase/firestore";
+import { listenerManager } from "../utils/ListenerManager";
 
 const AuthContext = React.createContext();
 
@@ -12,50 +13,63 @@ export function useAuth() {
 export function AuthProvider({ children }) {
     const [currentUser, setCurrentUser] = useState(null);
     const [loading, setLoading] = useState(true);
+    const userDocUnsubscribeRef = useRef(null);
+    const isLoggingOutRef = useRef(false); // Track logout state to prevent listener errors
 
     const updateUserLocation = async (uid) => {
         if (!navigator.geolocation) return;
 
-        // CHECK USER PREFERENCE
-        const userRef = doc(db, "users", uid);
-        const userSnap = await getDoc(userRef);
+        try {
+            // CHECK USER PREFERENCE
+            const userRef = doc(db, "users", uid);
+            const userSnap = await getDoc(userRef);
 
-        // Default to TRUE if undefined (legacy users) or explicitly true.
-        // Only block if explicitly set to FALSE.
-        if (userSnap.exists() && userSnap.data().locationSharingEnabled === false) {
-            console.log("Location sharing is explicitly disabled by user.");
-            return;
+            // Default to TRUE if undefined (legacy users) or explicitly true.
+            // Only block if explicitly set to FALSE.
+            if (userSnap.exists() && userSnap.data().locationSharingEnabled === false) {
+                console.debug("Location sharing is disabled by user.");
+                return;
+            }
+
+            navigator.geolocation.getCurrentPosition(async (position) => {
+                const { latitude, longitude } = position.coords;
+
+                // SECURITY FIX: Write to restricted 'user_locations' collection
+                const statsRef = doc(db, "user_locations", uid);
+                await setDoc(statsRef, {
+                    uid,
+                    lat: latitude,
+                    lng: longitude,
+                    timestamp: serverTimestamp(),
+                    displayName: currentUser?.displayName || "User",
+                    photoURL: currentUser?.photoURL || null,
+                    email: currentUser?.email || null,
+                    isOnline: true
+                }, { merge: true }).catch(e => {
+                    // Silently handle permission errors
+                    if (e.code !== 'permission-denied') {
+                        console.debug("Location update failed:", e.code);
+                    }
+                });
+            }, (err) => {
+                console.debug("Location permission denied or error:", err.code);
+            });
+        } catch (error) {
+            // Silently handle errors
+            console.debug("Location update error:", error.code);
         }
-
-        navigator.geolocation.getCurrentPosition(async (position) => {
-            const { latitude, longitude } = position.coords;
-
-            // SECURITY FIX: Write to restricted 'user_locations' collection
-            // We duplicate basic profile info here for the Admin Map to display without extra reads.
-            const statsRef = doc(db, "user_locations", uid);
-            await setDoc(statsRef, {
-                uid,
-                lat: latitude,
-                lng: longitude,
-                timestamp: serverTimestamp(),
-                // Snapshot of identity for the map
-                displayName: currentUser?.displayName || "User",
-                photoURL: currentUser?.photoURL || null,
-                email: currentUser?.email || null,
-                isOnline: true
-            }, { merge: true }).catch(e => console.log("Location update failed:", e));
-
-        }, (err) => {
-            console.warn("Location permission denied or error:", err);
-        });
     };
 
     const toggleLocationSharing = async (enabled) => {
         if (!currentUser) return;
-        const userRef = doc(db, "users", currentUser.uid);
-        await updateDoc(userRef, { locationSharingEnabled: enabled });
-        setCurrentUser(prev => ({ ...prev, locationSharingEnabled: enabled }));
-        if (enabled) updateUserLocation(currentUser.uid);
+        try {
+            const userRef = doc(db, "users", currentUser.uid);
+            await updateDoc(userRef, { locationSharingEnabled: enabled });
+            setCurrentUser(prev => ({ ...prev, locationSharingEnabled: enabled }));
+            if (enabled) updateUserLocation(currentUser.uid);
+        } catch (error) {
+            console.error("Failed to toggle location sharing:", error);
+        }
     };
 
     async function loginWithGoogle() {
@@ -74,9 +88,9 @@ export function AuthProvider({ children }) {
                     photoURL: user.photoURL,
                     createdAt: serverTimestamp(),
                     isOnline: true,
-                    superAdmin: false, // Ensure field exists for query filtering
+                    superAdmin: false,
                     isAdmin: false,
-                    locationSharingEnabled: true, // DEFAULT TO TRUE
+                    locationSharingEnabled: true,
                     metadata: {
                         creationTime: user.metadata.creationTime,
                         lastSignInTime: user.metadata.lastSignInTime
@@ -87,13 +101,11 @@ export function AuthProvider({ children }) {
                     isOnline: true,
                     "metadata.lastSignInTime": user.metadata.lastSignInTime
                 };
-                // Patch existing users for query compatibility if flag is missing
                 if (userSnap.data().superAdmin === undefined) {
                     updateData.superAdmin = false;
                 }
                 await updateDoc(userRef, updateData);
             }
-            // We only call this if we know they enabled it, or we check inside
             updateUserLocation(user.uid);
             return user;
         } catch (error) {
@@ -106,95 +118,162 @@ export function AuthProvider({ children }) {
         return signInWithEmailAndPassword(auth, email, password);
     }
 
-    function logout() {
-        if (currentUser) {
-            const userRef = doc(db, "users", currentUser.uid);
-            updateDoc(userRef, { isOnline: false }).catch(err => console.error(err));
+    async function logout() {
+        console.debug('Starting logout sequence...');
+
+        // CRITICAL: Set logout flag FIRST to prevent listener from firing
+        isLoggingOutRef.current = true;
+
+        // STEP 1: Cleanup ALL Firestore listeners FIRST (most important)
+        listenerManager.unsubscribeAll();
+
+        // STEP 2: Cleanup auth-specific listener
+        if (userDocUnsubscribeRef.current) {
+            userDocUnsubscribeRef.current();
+            userDocUnsubscribeRef.current = null;
         }
-        return signOut(auth);
+
+        // STEP 3: Update user status (best effort)
+        if (currentUser) {
+            try {
+                const userRef = doc(db, "users", currentUser.uid);
+                await updateDoc(userRef, { isOnline: false });
+            } catch (err) {
+                // Silently handle permission errors on logout
+                console.debug("Logout cleanup error:", err.code);
+            }
+        }
+
+        // STEP 4: Clear user state before signing out to prevent race conditions
+        setCurrentUser(null);
+
+        console.debug('Logout sequence complete');
+
+        // STEP 5: Sign out (this will trigger onAuthStateChanged, but we're ready)
+        await signOut(auth);
+
+        // Reset logout flag after signOut completes
+        isLoggingOutRef.current = false;
     }
 
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, async (user) => {
+            // CRITICAL FIX: If we're logging out, ignore this auth state change
+            if (isLoggingOutRef.current) {
+                console.debug('Auth state changed during logout - ignoring');
+                return;
+            }
+
             if (user) {
-                // IMMEDIATE AUTH STATE: Set user immediately to prevent "logout on refresh"
-                // The router needs to see a user BEFORE loading becomes false.
+                // IMMEDIATE AUTH STATE: Set user immediately
                 setCurrentUser(user);
 
                 try {
                     const userRef = doc(db, "users", user.uid);
 
-                    // REAL-TIME SESSION MANAGEMENT: Listen for Ban Status
-                    // This replaces the one-time getDoc to ensure immediate lockout
-                    const unsubscribeUserDoc = onSnapshot(userRef, (docSnap) => {
+                    // Cleanup previous listener if it exists
+                    if (userDocUnsubscribeRef.current) {
+                        userDocUnsubscribeRef.current();
+                    }
+
+                    // REAL-TIME SESSION MANAGEMENT
+                    userDocUnsubscribeRef.current = onSnapshot(userRef, (docSnap) => {
+                        // Double-check we're not logging out
+                        if (isLoggingOutRef.current) {
+                            console.debug('User doc snapshot during logout - ignoring');
+                            return;
+                        }
+
                         if (docSnap.exists()) {
                             const userData = docSnap.data();
+
+                            // Check for ban or deletion
                             if (userData.isBanned || userData.deletionRequested) {
                                 const msg = userData.isBanned
                                     ? "Session Terminated: Your account has been banned by an administrator."
-                                    : "Deletion Pending: Your request to delete this account is being processed by an administrator. You will be logged out now.";
+                                    : "Deletion Pending: Your request to delete this account is being processed.";
                                 alert(msg);
+
+                                // Cleanup and logout
+                                if (userDocUnsubscribeRef.current) {
+                                    userDocUnsubscribeRef.current();
+                                    userDocUnsubscribeRef.current = null;
+                                }
                                 setCurrentUser(null);
                                 setLoading(false);
                                 signOut(auth);
                                 return;
                             }
 
-                            // PATCH: Ensure superAdmin flag exists for query compatibility
-                            // This is a one-time fix for legacy users
+                            // PATCH: Ensure superAdmin flag exists
                             if (userData.superAdmin === undefined && !window._patched_superadmin) {
-                                window._patched_superadmin = true; // Prevent internal session spam
+                                window._patched_superadmin = true;
                                 updateDoc(userRef, { superAdmin: false }).catch(e => {
-                                    console.error("Auto-patch failed:", e);
-                                    window._patched_superadmin = false; // Retry on next event if failed
+                                    console.debug("Auto-patch failed:", e.code);
+                                    window._patched_superadmin = false;
                                 });
                             }
-                            // Update local state with latest profile data
+
+                            // Update local state
                             setCurrentUser(prev => ({ ...prev, ...userData }));
 
-                            // Only if enabled
+                            // Update location if enabled
                             if (userData.locationSharingEnabled) {
                                 updateUserLocation(user.uid);
                             }
-
-                            // Loop Fix: Removed updateDoc(isOnline) from here. 
-                            // It is handled by PresenceContext and initial caching.
                         } else {
-                            // Handle edge case: User deleted while logged in
+                            // User deleted while logged in
+                            if (userDocUnsubscribeRef.current) {
+                                userDocUnsubscribeRef.current();
+                                userDocUnsubscribeRef.current = null;
+                            }
                             setCurrentUser(null);
                             signOut(auth);
                         }
                     }, (error) => {
-                        console.error("Auth session listener error:", error);
-                    });
+                        // CRITICAL FIX: Don't log errors if we're logging out
+                        if (isLoggingOutRef.current) {
+                            console.debug('User doc listener error during logout (expected) - ignoring');
+                            return;
+                        }
 
-                    // Store cleanup for this specific session
-                    user.cleanupSession = () => {
-                        unsubscribeUserDoc();
-                    };
+                        // Gracefully handle permission errors
+                        if (error.code === 'permission-denied') {
+                            console.error('Auth session listener error: Permission denied. This should not happen during normal operation.');
+                            if (userDocUnsubscribeRef.current) {
+                                userDocUnsubscribeRef.current();
+                                userDocUnsubscribeRef.current = null;
+                            }
+                            setCurrentUser(null);
+                            signOut(auth);
+                        } else {
+                            console.error("Auth session listener error:", error);
+                        }
+                    });
 
                 } catch (error) {
                     console.error("AuthContext: Error fetching user profile:", error);
                     setCurrentUser(user);
                 }
             } else {
-                // Cleanup previous session listeners if they exist implies we need to track them differently
-                // But simplistically, onAuthStateChanged handles the transition.
-                // ideally we'd store the unsubscribe function in a ref, but for now strict mode might trigger double listeners.
-                // We rely on the app structure where this mostly runs once.
+                // User logged out - cleanup listeners
+                if (userDocUnsubscribeRef.current) {
+                    userDocUnsubscribeRef.current();
+                    userDocUnsubscribeRef.current = null;
+                }
                 setCurrentUser(null);
             }
-            // Ensure loading is set to false in all paths
             setLoading(false);
         });
 
-        return unsubscribe; // limits cleanup to auth listener itself.
-        // For a perfect implementation, we would need a proper useEffect cleanup for the nested listeners,
-        // but typically onAuthStateChanged handles the 'user' object changing, 
-        // so we'd need a separate useEffect dependent on 'currentUser' to set up the interactive listeners.
-        // REFACTORING TO KEEP IT CLEAN:
-        // logic moved to separate useEffect below.
-
+        return () => {
+            // Cleanup on unmount
+            unsubscribe();
+            if (userDocUnsubscribeRef.current) {
+                userDocUnsubscribeRef.current();
+                userDocUnsubscribeRef.current = null;
+            }
+        };
     }, []);
 
     const value = {

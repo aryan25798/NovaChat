@@ -11,6 +11,7 @@ import {
     serverTimestamp,
     limit
 } from "firebase/firestore";
+import { listenerManager } from "../utils/ListenerManager";
 
 export const subscribeToUserChats = (userId, callback) => {
     if (!userId) return () => { };
@@ -22,15 +23,30 @@ export const subscribeToUserChats = (userId, callback) => {
         limit(20)
     );
 
-    return onSnapshot(q, (snapshot) => {
-        const chats = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-        }));
-        callback(chats);
-    }, (error) => {
-        console.error("Error subscribing to user chats:", error);
-    });
+    const listenerKey = `chats-${userId}`;
+
+    const unsubscribe = onSnapshot(q,
+        (snapshot) => {
+            const chats = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            }));
+            callback(chats);
+        },
+        (error) => {
+            listenerManager.handleListenerError(error, 'ChatList');
+            // Return empty array on error to prevent UI crashes
+            callback([]);
+        }
+    );
+
+    // Register with manager
+    listenerManager.subscribe(listenerKey, unsubscribe);
+
+    // Return cleanup function
+    return () => {
+        listenerManager.unsubscribe(listenerKey);
+    };
 };
 
 export const createPrivateChat = async (currentUser, otherUser) => {

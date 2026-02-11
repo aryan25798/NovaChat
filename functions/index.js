@@ -371,6 +371,7 @@ async function handleGeminiReply(chatId, userText, senderName) {
             text: aiResponseText,
             senderId: GEMINI_BOT_ID,
             senderName: "Gemini AI",
+            senderPhoto: "https://uxwing.com/wp-content/themes/uxwing/download/brands-and-social-media/google-gemini-icon.png",
             timestamp: admin.firestore.FieldValue.serverTimestamp(),
             read: false,
             delivered: true,
