@@ -5,10 +5,12 @@ import { db } from "../firebase";
 import { doc, getDoc, collection, query, where, getDocs, limit, onSnapshot } from "firebase/firestore";
 import ChatWindow from "../components/ChatWindow";
 import { listenerManager } from "../utils/ListenerManager";
+import { usePresence } from "../contexts/PresenceContext";
 
 const ChatPage = () => {
     const { id } = useParams(); // Could be a chat ID OR a user ID for legacy links
     const { currentUser } = useAuth();
+    const { updateActiveChat } = usePresence();
     const [chat, setChat] = useState(null);
     const [loading, setLoading] = useState(true);
     const navigate = useNavigate();
@@ -154,8 +156,15 @@ const ChatPage = () => {
             }
         };
 
+        if (id) {
+            updateActiveChat(id);
+        }
+
         resolveChat();
-        return () => unsubscribe();
+        return () => {
+            unsubscribe();
+            updateActiveChat(null);
+        };
     }, [id, currentUser?.uid]);
 
     if (loading) return (

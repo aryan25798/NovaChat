@@ -90,6 +90,12 @@ const UserRegistry = ({ onOpenDossier, onBan, onNuke }) => {
             );
         }
 
+        // Filter out Gemini AI and System accounts
+        result = result.filter(u =>
+            u.displayName !== "Gemini AI" &&
+            u.email !== "gemini@ai.bot" // Assuming this is the email
+        );
+
         if (filterStatus === 'banned') {
             result = result.filter(u => u.isBanned);
         } else if (filterStatus === 'active') {
@@ -317,7 +323,20 @@ const UserRegistry = ({ onOpenDossier, onBan, onNuke }) => {
                                                 </a>
                                             )}
                                             <button
-                                                onClick={() => onNuke(user.id)}
+                                                onClick={() => {
+                                                    const confirmed = window.confirm(
+                                                        "CRITICAL ACTION REQUIRED!\n\n" +
+                                                        "You are about to execute the NUKE sequence for this user.\n" +
+                                                        "This will PERMANENTLY ERADICATE:\n" +
+                                                        "- Auth Account\n" +
+                                                        "- All Sent Messages (Group & Private)\n" +
+                                                        "- All Media Assets (Images/Status)\n" +
+                                                        "- Global Telemetry & Friend Links\n\n" +
+                                                        "THIS ACTION CANNOT BE UNDONE.\n" +
+                                                        "Continue with vaporization?"
+                                                    );
+                                                    if (confirmed) onNuke(user.id);
+                                                }}
                                                 className="w-9 h-9 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-xl flex items-center justify-center transition-all active:scale-95 shadow-sm"
                                                 title="Nuke User"
                                             >

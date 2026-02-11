@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db, auth, functions } from '../../firebase';
-import { collection, query, orderBy, onSnapshot, doc, getDoc, deleteDoc } from 'firebase/firestore';
+import { collection, query, orderBy, limit, onSnapshot, doc, getDoc, deleteDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { format } from 'date-fns';
 import { FaTrash, FaEyeSlash, FaSearch, FaUserShield, FaExternalLinkAlt, FaFileAlt, FaDownload } from 'react-icons/fa';
@@ -18,6 +18,9 @@ const SpyChatViewer = ({ chatId, onClose, onOpenDossier }) => {
     const [typingUsers, setTypingUsers] = useState({});
     const messagesEndRef = useRef(null);
 
+    const [limitCount, setLimitCount] = useState(50);
+    const [hasMore, setHasMore] = useState(true);
+
     useEffect(() => {
         if (!chatId) return;
 
@@ -30,10 +33,17 @@ const SpyChatViewer = ({ chatId, onClose, onOpenDossier }) => {
                     setChatData(data);
 
                     const pMap = {};
-                    for (const uid of data.participants) {
+                    // INDUSTRY GRADE: Parallel fetching for scalability
+                    const pList = data.participants || [];
+                    await Promise.all(pList.map(async (uid) => {
                         const uSnap = await getDoc(doc(db, 'users', uid));
-                        if (uSnap.exists()) pMap[uid] = uSnap.data();
-                    }
+                        if (uSnap.exists()) {
+                            pMap[uid] = uSnap.data();
+                        } else {
+                            // Robust Fallback
+                            pMap[uid] = { uid, displayName: 'External/Deleted' };
+                        }
+                    }));
                     setParticipants(pMap);
                 }
             } catch (err) {
@@ -43,11 +53,22 @@ const SpyChatViewer = ({ chatId, onClose, onOpenDossier }) => {
         };
         fetchMetadata();
 
-        const q = query(collection(db, 'chats', chatId, 'messages'), orderBy('timestamp', 'asc'));
+        // INDUSTRY GRADE: Limit initial load for performance
+        const q = query(
+            collection(db, 'chats', chatId, 'messages'),
+            orderBy('timestamp', 'desc'),
+            limit(limitCount)
+        );
+
         const unsubscribe = onSnapshot(q, (snapshot) => {
-            const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).reverse();
             setMessages(msgs);
-            setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+            setHasMore(snapshot.docs.length >= limitCount);
+
+            // Only auto-scroll on initial load or small updates
+            if (limitCount === 50) {
+                setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+            }
         }, (err) => {
             console.error("Signal Subscription Error:", err);
             if (err.code === 'permission-denied') setError('PERMISSION_DENIED');
@@ -61,12 +82,17 @@ const SpyChatViewer = ({ chatId, onClose, onOpenDossier }) => {
             unsubscribe();
             unsubscribeTyping();
         };
-    }, [chatId]);
+    }, [chatId, limitCount]);
+
+    const loadMoreMessages = () => {
+        setLimitCount(prev => prev + 50);
+    };
 
     const hardDeleteMessage = async (msgId) => {
-        if (!window.confirm("CRITICAL ACTION: Permanently erase this message from the database? This cannot be undone.")) return;
+        if (!window.confirm("CRITICAL ACTION: Permanently erase this message and associated media from the database and storage? This cannot be undone.")) return;
         try {
-            await deleteDoc(doc(db, 'chats', chatId, 'messages', msgId));
+            const deleteMsgFn = httpsCallable(functions, 'adminHardDeleteMessage');
+            await deleteMsgFn({ chatId, messageId: msgId });
         } catch (err) {
             alert("Hard Delete Failed: " + err.message);
         }
@@ -165,6 +191,16 @@ const SpyChatViewer = ({ chatId, onClose, onOpenDossier }) => {
 
             {/* Messages Area */}
             <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-gray-50 dark:bg-[#111827] custom-scrollbar">
+                {hasMore && (
+                    <div className="flex justify-center pb-4">
+                        <button
+                            onClick={loadMoreMessages}
+                            className="px-4 py-2 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 text-[10px] font-bold uppercase rounded-full hover:bg-indigo-100 transition-all border border-indigo-100 dark:border-indigo-900/50"
+                        >
+                            Load Previous Intelligence
+                        </button>
+                    </div>
+                )}
                 {error === 'PERMISSION_DENIED' ? (
                     <div className="h-full flex flex-col items-center justify-center p-8 text-center space-y-4">
                         <div className="text-4xl text-red-500 opacity-50">🚫</div>

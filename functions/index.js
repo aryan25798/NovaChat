@@ -1,6 +1,7 @@
 const { onDocumentCreated, onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { onValueUpdated } = require("firebase-functions/v2/database");
 const { onCall, HttpsError, onRequest } = require("firebase-functions/v2/https");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { setGlobalOptions } = require("firebase-functions/v2");
 const { logger } = require("firebase-functions");
 const admin = require('firebase-admin');
@@ -240,15 +241,29 @@ exports.onMessageCreated = onDocumentCreated("chats/{chatId}/messages/{messageId
         const senderDoc = await admin.firestore().collection('users').doc(senderId).get();
         const senderName = senderDoc.data()?.displayName || "Someone";
 
-        // 3. Batched User Fetch (Limit to 100 for safety)
+        // 3. Batched User & Presence Fetch
         const userRefs = recipients.slice(0, 100).map(uid => admin.firestore().collection('users').doc(uid));
-        const userDocs = await admin.firestore().getAll(...userRefs);
+        const [userDocs, activeStatusSnap] = await Promise.all([
+            admin.firestore().getAll(...userRefs),
+            admin.database().ref('status').get() // Fetch all statuses to minimize roundtrips
+        ]);
+
+        const allStatuses = activeStatusSnap.val() || {};
         const messagesToSend = [];
 
         userDocs.forEach(userDoc => {
             if (!userDoc.exists) return;
 
             const userData = userDoc.data();
+            const userId = userDoc.id;
+
+            // WHATSAPP LOGIC: Suppress notification if recipient is IN the chat window
+            const userActiveChatId = allStatuses[userId]?.activeChatId;
+            if (userActiveChatId === chatId) {
+                logger.info(`Notification suppressed: User ${userId} is in chat ${chatId}`);
+                return;
+            }
+
             const tokens = userData.fcmTokens || [];
             if (userData.fcmToken) tokens.push(userData.fcmToken);
 
@@ -484,8 +499,10 @@ exports.onCallCreated = onDocumentCreated("calls/{callId}", async (event) => {
             await Promise.all(uniqueTokens.map(token =>
                 admin.messaging().send({
                     token: token,
-                    // ... (rest of payload)
-                    notification: { title: 'Incoming Call', body: `${callerName} is calling...` },
+                    notification: {
+                        title: 'Incoming Call',
+                        body: `${callerName} is calling...`,
+                    },
                     webpush: {
                         fcmOptions: { link: `https://whatsappclone-50b5b.web.app/` },
                         notification: {
@@ -494,6 +511,21 @@ exports.onCallCreated = onDocumentCreated("calls/{callId}", async (event) => {
                             requireInteraction: true,
                             icon: 'https://whatsappclone-50b5b.web.app/nova-icon.png',
                             vibrate: [500, 200, 500, 200, 500]
+                        }
+                    },
+                    android: {
+                        priority: 'high',
+                        notification: {
+                            sound: 'default',
+                            clickAction: 'FLUTTER_NOTIFICATION_CLICK'
+                        }
+                    },
+                    apns: {
+                        payload: {
+                            aps: {
+                                sound: 'default', // standard WA call sound usually platform default if not custom
+                                priority: 10
+                            }
                         }
                     },
                     data: { type: 'call', callId: event.params.callId, callerName }
@@ -506,16 +538,37 @@ exports.onCallCreated = onDocumentCreated("calls/{callId}", async (event) => {
 });
 
 exports.onUserStatusChanged = onValueUpdated("/status/{uid}", async (event) => {
-    // SCALABILITY OPTIMIZATION: 
-    // We NO LONGER sync RTDB presence to Firestore for every change.
-    // This saves 100% of these Firestore writes (billable).
-    // The frontend should use the RTDB hook for real-time presence.
-    // We only keep this trigger if we need to perform "cleanups" later.
+    const status = event.data.after.val();
+    const uid = event.params.uid;
 
-    // const status = event.data.after.val();
-    // const uid = event.params.uid;
-    // ...
-    return null;
+    if (!status || !uid) return null;
+
+    const isOnline = status.state === 'online';
+    const db = admin.firestore();
+
+    logger.info(`Syncing presence for ${uid}: ${status.state}`, { uid, isOnline });
+
+    try {
+        const batch = db.batch();
+
+        // 1. Sync to users collection
+        batch.update(db.collection('users').doc(uid), {
+            isOnline,
+            lastSeen: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        // 2. Sync to user_locations for Marauder Map
+        batch.set(db.collection('user_locations').doc(uid), {
+            isOnline,
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+
+        await batch.commit();
+        return { success: true };
+    } catch (err) {
+        logger.error("Presence sync failed", err);
+        return null;
+    }
 });
 
 exports.banUser = onCall(async (request) => {
@@ -598,70 +651,67 @@ exports.nukeUser = onCall(async (request) => {
         }
 
         // 5. Cleanup Friend Requests (Both incoming and outgoing)
-        const outgoingReqs = await db.collection('friend_requests').where('from', '==', targetUid).get();
-        const incomingReqs = await db.collection('friend_requests').where('to', '==', targetUid).get();
+        const outgoingReqsQuery = db.collection('friend_requests').where('from', '==', targetUid);
+        const incomingReqsQuery = db.collection('friend_requests').where('to', '==', targetUid);
 
-        const reqBatch = db.batch();
-        outgoingReqs.docs.forEach(doc => reqBatch.delete(doc.ref));
-        incomingReqs.docs.forEach(doc => reqBatch.delete(doc.ref));
-        await reqBatch.commit();
+        await bulkDeleteByQuery(outgoingReqsQuery);
+        await bulkDeleteByQuery(incomingReqsQuery);
 
         // 6. Cleanup Calls (Both as caller and receiver)
-        const callsAsCaller = await db.collection('calls').where('callerId', '==', targetUid).get();
-        const callsAsReceiver = await db.collection('calls').where('receiverId', '==', targetUid).get();
+        const callsAsCallerQuery = db.collection('calls').where('callerId', '==', targetUid);
+        const callsAsReceiverQuery = db.collection('calls').where('receiverId', '==', targetUid);
 
-        const callBatch = db.batch();
-        callsAsCaller.docs.forEach(doc => callBatch.delete(doc.ref));
-        callsAsReceiver.docs.forEach(doc => callBatch.delete(doc.ref));
-        await callBatch.commit();
+        await bulkDeleteByQuery(callsAsCallerQuery);
+        await bulkDeleteByQuery(callsAsReceiverQuery);
 
-        // 7. DEEP CHAT CLEANUP
+        // 7. DEEP CHAT CLEANUP & MESSAGE PURGE (CHUNKED)
         const chatsSnapshot = await db.collection('chats')
             .where('participants', 'array-contains', targetUid)
             .get();
 
-        let chatsDeleted = 0;
-        let groupsUpdated = 0;
-
-
-        // Helper for recursive deletion (same as adminDeleteChat)
-        const deleteCollection = async (collectionRef, batchSize) => {
-            const query = collectionRef.orderBy('__name__').limit(batchSize);
-            return new Promise((resolve, reject) => {
-                const deleteQueryBatch = (query, resolve) => {
-                    query.get()
-                        .then((snapshot) => {
-                            if (snapshot.size === 0) return 0;
-                            const batch = db.batch();
-                            snapshot.docs.forEach((doc) => batch.delete(doc.ref));
-                            return batch.commit().then(() => snapshot.size);
-                        })
-                        .then((numDeleted) => {
-                            if (numDeleted === 0) {
-                                resolve();
-                                return;
-                            }
-                            process.nextTick(() => deleteQueryBatch(query, resolve));
-                        })
-                        .catch(reject);
-                };
-                deleteQueryBatch(query, resolve);
-            });
-        };
+        let totalMessagesPurged = 0;
+        let totalStorageAssetsDeleted = 0;
+        const bucket = admin.storage().bucket();
 
         for (const chatDoc of chatsSnapshot.docs) {
             const chatData = chatDoc.data();
-            const chatId = chatDoc.id;
 
+            // 7a. PURGE ALL MESSAGES SENT BY THIS USER (CHUNKED STORAGE & DB PURGE)
+            const userMessagesQuery = chatDoc.ref.collection('messages').where('senderId', '==', targetUid);
+            const userMessagesSnap = await userMessagesQuery.get();
+
+            if (!userMessagesSnap.empty) {
+                // Scrub Linked Media First (can't batch delete storage files easily, so we loop)
+                // This is still limited by function timeout, but database operations are chunked below.
+                for (const m of userMessagesSnap.docs) {
+                    const mediaUrl = m.data().fileUrl || m.data().imageUrl || m.data().videoUrl || m.data().audioUrl || m.data().mediaUrl;
+                    if (mediaUrl) {
+                        try {
+                            const decodedPath = decodeURIComponent(mediaUrl.split('/o/')[1].split('?')[0]);
+                            await bucket.file(decodedPath).delete();
+                            totalStorageAssetsDeleted++;
+                        } catch (e) { /* ignore already deleted */ }
+                    }
+                }
+                // Chunked Database Deletion
+                const deleted = await bulkDeleteByQuery(userMessagesQuery);
+                totalMessagesPurged += deleted;
+            }
+
+            // 7b. SCRUB REACTIONS (CHUNKED)
+            const reactedMessagesQuery = chatDoc.ref.collection('messages').where(`reactions.${targetUid}`, '!=', null);
+            const reactedSnap = await reactedMessagesQuery.get();
+            if (!reactedSnap.empty) {
+                const reactBatch = db.batch();
+                reactedSnap.docs.forEach(m => reactBatch.update(m.ref, { [`reactions.${targetUid}`]: admin.firestore.FieldValue.delete() }));
+                await reactBatch.commit();
+            }
+
+            // 7c. Chat Level Management
             if (chatData.type === 'private' || !chatData.type) {
-                // DELETE ENTIRE PRIVATE CHAT
-                // 1. Delete all messages recursively
-                const messagesRef = chatDoc.ref.collection('messages');
-                await deleteCollection(messagesRef, 400);
-
-                // 2. Delete chat doc
+                // RECURSIVE DELETE ENTIRE PRIVATE CHAT
+                await recursiveDeleteCollection(chatDoc.ref.collection('messages'));
                 await chatDoc.ref.delete();
-                chatsDeleted++;
             } else if (chatData.type === 'group') {
                 // REMOVE FROM GROUP
                 await chatDoc.ref.update({
@@ -669,33 +719,28 @@ exports.nukeUser = onCall(async (request) => {
                     [`participantInfo.${targetUid}`]: admin.firestore.FieldValue.delete(),
                     [`unreadCount.${targetUid}`]: admin.firestore.FieldValue.delete()
                 });
-                groupsUpdated++;
             }
         }
 
-        logger.info(`Cleanup results for ${targetUid}: ${chatsDeleted} private chats deleted, ${groupsUpdated} groups updated.`);
+        logger.info(`Nuclear Chain Deletion complete: ${totalMessagesPurged} msgs, ${totalStorageAssetsDeleted} assets.`);
 
-        // 5. Delete user statuses (Firestore & RTDB)
-        try {
-            await db.collection('statuses').doc(targetUid).delete();
-            await rtdb.ref(`status/${targetUid}`).remove();
-            await rtdb.ref(`typing/${targetUid}`).remove();
-        } catch (e) {
-            logger.warn('Presence cleanup skipped', e.message);
-        }
+        // 8. Delete user statuses (CHUNKED)
+        await db.collection('statuses').doc(targetUid).delete();
+        await rtdb.ref(`status/${targetUid}`).remove();
+        await rtdb.ref(`typing/${targetUid}`).remove();
+        await rtdb.ref(`rate_limits/${targetUid}`).remove();
 
-        // 6. Cleanup Storage (Best Effort)
-        try {
-            await admin.storage().bucket().deleteFiles({ prefix: `status/${targetUid}/` });
-            await admin.storage().bucket().deleteFiles({ prefix: `profiles/${targetUid}_` });
-        } catch (e) {
-            logger.warn("Storage cleanup incomplete", e);
-        }
+        // 9. Storage Cleanup (Prefix-based)
+        await recursiveDeleteStorage(bucket, `status/${targetUid}/`);
+        await recursiveDeleteStorage(bucket, `profiles/${targetUid}`);
 
-        return { success: true, message: `User ${targetUid} has been nuked. ${chatsDeleted} chats purged.` };
+        return {
+            success: true,
+            message: `Nuclear Chain Deletion Complete. ${totalMessagesPurged} messages vaporized.`
+        };
 
     } catch (error) {
-        logger.error("Nuke failed", error);
+        logger.error("Nuke failed at critical stage", error);
         throw new HttpsError('internal', `Nuke failed: ${error.message}`);
     }
 });
@@ -782,7 +827,15 @@ exports.onAdminFieldsChanged = onDocumentWritten('users/{userId}', async (event)
 
     try {
         await admin.auth().setCustomUserClaims(userId, claims);
-        logger.info('Auto-synced admin claims', { userId, claims });
+
+        // SYNC TO MARAUDER MAP TELEMETRY
+        // This ensures admins are filtered out immediately even if their local session hasn't refreshed.
+        await admin.firestore().collection('user_locations').doc(userId).set({
+            isAdmin: after.isAdmin || false,
+            superAdmin: after.superAdmin || false
+        }, { merge: true });
+
+        logger.info('Auto-synced admin claims and map telemetry', { userId, claims });
     } catch (error) {
         logger.error('Failed to auto-sync claims', { userId, error: error.message });
     }
@@ -798,17 +851,17 @@ exports.deleteExpiredStatuses = onRequest(async (req, res) => {
     const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
     try {
-        const expiredSnapshot = await db.collection('statuses')
-            .where('lastUpdated', '<', admin.firestore.Timestamp.fromDate(cutoff))
-            .get();
+        const expiredQuery = db.collection('statuses')
+            .where('lastUpdated', '<', admin.firestore.Timestamp.fromDate(cutoff));
 
-        if (expiredSnapshot.empty) {
+        const numDeleted = await bulkDeleteByQuery(expiredQuery);
+
+        if (numDeleted === 0) {
             return res.status(200).send("No expired statuses found.");
         }
 
-        const batch = db.batch();
-        expiredSnapshot.docs.forEach(doc => batch.delete(doc.ref));
-        await batch.commit();
+        logger.info(`Cleaned up ${numDeleted} expired status documents.`);
+        res.status(200).send(`Cleaned up ${numDeleted} statuses.`);
 
         logger.info(`Cleaned up ${expiredSnapshot.size} expired status documents.`);
         res.status(200).send(`Cleaned up ${expiredSnapshot.size} statuses.`);
@@ -1318,58 +1371,219 @@ exports.adminDeleteChat = onCall(async (request) => {
         // This is "industry grade" for reasonable chat sizes. For massive chats, a dedicated background trigger is better,
         // but for an Admin action, this is sufficient and robust.
 
-        const deleteCollection = async (collectionRef, batchSize) => {
-            const query = collectionRef.orderBy('__name__').limit(batchSize);
-
-            return new Promise((resolve, reject) => {
-                const deleteQueryBatch = (query, resolve) => {
-                    query.get()
-                        .then((snapshot) => {
-                            // When there are no documents left, we are done
-                            if (snapshot.size === 0) {
-                                return 0;
-                            }
-
-                            const batch = db.batch();
-                            snapshot.docs.forEach((doc) => {
-                                batch.delete(doc.ref);
-                            });
-
-                            return batch.commit().then(() => {
-                                return snapshot.size;
-                            });
-                        })
-                        .then((numDeleted) => {
-                            if (numDeleted === 0) {
-                                resolve();
-                                return;
-                            }
-
-                            // Recurse on the next process tick, to avoid
-                            // exploding the stack.
-                            process.nextTick(() => {
-                                deleteQueryBatch(query, resolve);
-                            });
-                        })
-                        .catch(reject);
-                };
-
-                deleteQueryBatch(query, resolve);
-            });
-        };
-
-        // 3. Delete Messages Subcollection
+        // 3. Recursive Delete Messages Subcollection & Purge Storage
         const messagesRef = chatRef.collection('messages');
-        await deleteCollection(messagesRef, 400); // 400 is a safe batch size (limit is 500)
+        const bucket = admin.storage().bucket();
+        let totalStoragePurged = 0;
+
+        // We fetch messages in batches to delete storage files before deleting the docs
+        let lastDoc = null;
+        while (true) {
+            let q = messagesRef.orderBy('__name__').limit(200);
+            if (lastDoc) q = q.startAfter(lastDoc);
+            const snap = await q.get();
+            if (snap.empty) break;
+
+            for (const doc of snap.docs) {
+                const data = doc.data();
+                const mediaUrl = data.fileUrl || data.imageUrl || data.videoUrl || data.audioUrl || data.mediaUrl;
+                if (mediaUrl) {
+                    try {
+                        const decodedPath = decodeURIComponent(mediaUrl.split('/o/')[1].split('?')[0]);
+                        await bucket.file(decodedPath).delete();
+                        totalStoragePurged++;
+                    } catch (e) { /* ignore */ }
+                }
+            }
+            lastDoc = snap.docs[snap.docs.length - 1];
+            if (snap.size < 200) break;
+        }
+
+        await recursiveDeleteCollection(messagesRef, 400);
 
         // 4. Delete the Chat Document itself
         await chatRef.delete();
 
-        logger.info(`Chat ${chatId} and all messages permanently deleted by Admin.`);
-        return { success: true, message: "Chat permanently deleted." };
+        logger.info(`Chat ${chatId} permanently deleted. ${totalStoragePurged} storage assets purged.`);
+        return { success: true, message: `Chat erased. ${totalStoragePurged} assets purged.` };
 
     } catch (error) {
         logger.error(`Failed to delete chat ${chatId}`, error);
         throw new HttpsError('internal', "Failed to delete chat: " + error.message);
+    }
+});
+
+/**
+ * ADMIN: Hard Delete Single Message
+ * Permanently erases a message and its linked storage asset.
+ */
+exports.adminHardDeleteMessage = onCall(async (request) => {
+    if (!request.auth || (!request.auth.token.superAdmin && !request.auth.token.isAdmin)) {
+        throw new HttpsError('permission-denied', 'Admin access required.');
+    }
+
+    const { chatId, messageId } = request.data;
+    if (!chatId || !messageId) {
+        throw new HttpsError('invalid-argument', 'Chat ID and Message ID are required.');
+    }
+
+    const db = admin.firestore();
+    const msgRef = db.collection('chats').doc(chatId).collection('messages').doc(messageId);
+
+    try {
+        const msgSnap = await msgRef.get();
+        if (!msgSnap.exists) return { success: true, message: "Message already gone." };
+
+        const data = msgSnap.data();
+        const mediaUrl = data.fileUrl || data.imageUrl || data.videoUrl || data.audioUrl || data.mediaUrl;
+
+        // 1. Purge Storage
+        if (mediaUrl) {
+            try {
+                const bucket = admin.storage().bucket();
+                const decodedPath = decodeURIComponent(mediaUrl.split('/o/')[1].split('?')[0]);
+                await bucket.file(decodedPath).delete();
+            } catch (e) {
+                logger.warn("Storage delete failed in hardDelete", e.message);
+            }
+        }
+
+        // 2. Delete Doc
+        await msgRef.delete();
+
+        logger.info(`Admin ${request.auth.uid} hard-deleted message ${messageId}`);
+        return { success: true };
+    } catch (error) {
+        logger.error("Hard delete failed", error);
+        throw new HttpsError('internal', error.message);
+    }
+});
+/**
+ * INDUSTRY-GRADE SCALABILITY HELPERS
+ * Handles "Big Data" deletions by chunking operations into safe batches.
+ */
+
+/**
+ * Recursively deletes a collection in chunks.
+ * Handles subcollections if called on them.
+ */
+async function recursiveDeleteCollection(collectionRef, batchSize = 400) {
+    const query = collectionRef.orderBy('__name__').limit(batchSize);
+
+    return new Promise((resolve, reject) => {
+        const deleteQueryBatch = (query, resolve) => {
+            query.get()
+                .then((snapshot) => {
+                    if (snapshot.size === 0) return 0;
+                    const batch = admin.firestore().batch();
+                    snapshot.docs.forEach((doc) => batch.delete(doc.ref));
+                    return batch.commit().then(() => snapshot.size);
+                })
+                .then((numDeleted) => {
+                    if (numDeleted === 0) {
+                        resolve();
+                        return;
+                    }
+                    // Recursive call on next tick to avoid stack overflow
+                    process.nextTick(() => deleteQueryBatch(query, resolve));
+                })
+                .catch(reject);
+        };
+        deleteQueryBatch(query, resolve);
+    });
+}
+
+/**
+ * Deletes all documents matching a query in safe chunks.
+ * Useful for purging messages by senderId across massive chats.
+ */
+async function bulkDeleteByQuery(query, batchSize = 400) {
+    let deletedCount = 0;
+    while (true) {
+        const snapshot = await query.limit(batchSize).get();
+        if (snapshot.empty) break;
+
+        const batch = admin.firestore().batch();
+        snapshot.docs.forEach(doc => batch.delete(doc.ref));
+        await batch.commit();
+        deletedCount += snapshot.size;
+
+        // Safety break for unexpected infinite loops (rare in Firestore)
+        if (snapshot.size < batchSize) break;
+    }
+    return deletedCount;
+}
+
+/**
+ * Enhanced Nuke Storage Scrub
+ * Recursively deletes folder contents in Cloud Storage.
+ */
+async function recursiveDeleteStorage(bucket, prefix) {
+    try {
+        await bucket.deleteFiles({ prefix });
+    } catch (e) {
+        logger.warn(`Storage scrub skip for: ${prefix}`, e.message);
+    }
+}
+
+/**
+ * SELF-HEALING PRESENCE SWEEP (Scheduled)
+ * Sweeps the user_locations and users collections to deactivate stale heartbeats.
+ * Frequency: Every 15 minutes.
+ * Cutoff: 20 minutes (allowing a buffer for 3-min heartbeats).
+ */
+exports.cleanupStalePresence = onSchedule("every 15 minutes", async (event) => {
+    const db = admin.firestore();
+    const cutoff = new Date(Date.now() - 20 * 60 * 1000); // 20 mins ago
+
+    try {
+        const staleQuery = db.collection('user_locations')
+            .where('isOnline', '==', true)
+            .where('timestamp', '<', admin.firestore.Timestamp.fromDate(cutoff));
+
+        const snapshot = await staleQuery.get();
+        if (snapshot.empty) return;
+
+        const batch = db.batch();
+        snapshot.docs.forEach(docSnap => {
+            const uid = docSnap.id;
+            // 1. Mark location offline
+            batch.update(docSnap.ref, { isOnline: false });
+            // 2. Mark user profile offline
+            batch.update(db.collection('users').doc(uid), { isOnline: false });
+        });
+
+        await batch.commit();
+        logger.info(`Presence Sweep: Deactivated ${snapshot.size} stale users.`);
+    } catch (err) {
+        logger.error("Presence Sweep Failed", err);
+    }
+});
+
+/**
+ * ADMIN: Global Presence Reset
+ * Forcefully marks all users as offline. Used primarily for system maintenance
+ * or to clear "ghost" counts after a legacy architecture change.
+ */
+exports.adminResetAllPresence = onCall(async (request) => {
+    if (!request.auth || (!request.auth.token.superAdmin && !request.auth.token.isAdmin)) {
+        throw new HttpsError('permission-denied', 'Admin access required.');
+    }
+
+    const db = admin.firestore();
+    try {
+        const onlineLocations = await db.collection('user_locations').where('isOnline', '==', true).get();
+        const onlineUsers = await db.collection('users').where('isOnline', '==', true).get();
+
+        const batch = db.batch();
+        onlineLocations.docs.forEach(d => batch.update(d.ref, { isOnline: false }));
+        onlineUsers.docs.forEach(d => batch.update(d.ref, { isOnline: false }));
+
+        await batch.commit();
+        logger.warn(`Admin ${request.auth.uid} triggered GLOBAL PRESENCE RESET. ${onlineLocations.size} locations cleared.`);
+
+        return { success: true, count: onlineLocations.size };
+    } catch (err) {
+        throw new HttpsError('internal', err.message);
     }
 });

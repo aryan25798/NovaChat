@@ -18,6 +18,7 @@ export const searchUsers = async (searchTerm, currentUserId) => {
             const q = query(
                 usersRef,
                 where("superAdmin", "==", false),
+                where("isAdmin", "==", false),
                 limit(MAX_RESULTS)
             );
             const snap = await getDocs(q);
@@ -51,6 +52,7 @@ export const searchUsers = async (searchTerm, currentUserId) => {
     const qEmail = query(
         usersRef,
         where('superAdmin', '==', false),
+        where('isAdmin', '==', false),
         where('email', '>=', term),
         where('email', '<=', term + '\uf8ff'),
         limit(MAX_RESULTS)
@@ -61,6 +63,7 @@ export const searchUsers = async (searchTerm, currentUserId) => {
     const qName = query(
         usersRef,
         where('superAdmin', '==', false),
+        where('isAdmin', '==', false),
         where('displayName', '>=', capitalizedTerm),
         where('displayName', '<=', capitalizedTerm + '\uf8ff'),
         limit(MAX_RESULTS)
@@ -77,7 +80,8 @@ export const searchUsers = async (searchTerm, currentUserId) => {
         emailSnap.forEach(doc => {
             const data = doc.data();
             // SECURITY: Exclude Super Admins if requester is not an admin (enforced by rules too, but better here)
-            if (doc.id !== currentUserId && !data.superAdmin) {
+            // SECURITY: Exclude Admins/Super Admins from search
+            if (doc.id !== currentUserId && !data.superAdmin && !data.isAdmin) {
                 userMap.set(doc.id, { id: doc.id, ...data });
             }
         });

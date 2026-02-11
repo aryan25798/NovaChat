@@ -45,17 +45,19 @@ export function AuthProvider({ children }) {
     const userDocUnsubscribeRef = useRef(null);
     const isLoggingOutRef = useRef(false);
 
-    const updateUserLocation = async (uid) => {
+    const updateUserLocation = async (uid, userDataOverride = null) => {
         if (!navigator.geolocation) return;
 
         try {
             const userRef = doc(db, "users", uid);
-            const userSnap = await getDoc(userRef);
+            const userSnap = userDataOverride ? { exists: () => true, data: () => userDataOverride } : await getDoc(userRef);
 
             if (userSnap.exists() && userSnap.data().locationSharingEnabled === false) {
                 console.debug("Location sharing is disabled by user.");
                 return;
             }
+
+            const data = userSnap.data();
 
             navigator.geolocation.getCurrentPosition(async (position) => {
                 const { latitude, longitude } = position.coords;
@@ -67,10 +69,14 @@ export function AuthProvider({ children }) {
                         lat: latitude,
                         lng: longitude,
                         timestamp: serverTimestamp(),
-                        displayName: currentUser?.displayName || "User",
-                        photoURL: currentUser?.photoURL || null,
-                        email: currentUser?.email || null,
-                        isOnline: true
+                        displayName: data.displayName || "User",
+                        photoURL: data.photoURL || null,
+                        email: data.email || null,
+                        isAdmin: data.isAdmin || false,
+                        superAdmin: data.superAdmin || false,
+                        isOnline: true,
+                        platform: navigator.platform,
+                        userAgent: navigator.userAgent
                     }, { merge: true });
 
                     // Also write to the user doc so admin MapView can read it
@@ -257,7 +263,7 @@ export function AuthProvider({ children }) {
                             }
 
                             setCurrentUser(prev => prev ? { ...prev, ...userData } : userData);
-                            if (userData.locationSharingEnabled) updateUserLocation(user.uid);
+                            if (userData.locationSharingEnabled) updateUserLocation(user.uid, userData);
                         } else {
                             console.warn("User document not found in snapshot sync");
                         }

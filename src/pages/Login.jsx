@@ -16,7 +16,11 @@ export default function Login() {
 
     React.useEffect(() => {
         if (currentUser) {
-            navigate("/");
+            if (currentUser.isAdmin || currentUser.superAdmin) {
+                navigate("/admin");
+            } else {
+                navigate("/");
+            }
         }
     }, [currentUser, navigate]);
 

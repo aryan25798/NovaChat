@@ -30,7 +30,26 @@ const Loading = () => (
 
 function PrivateRoute({ children }) {
   const { currentUser } = useAuth();
-  return currentUser ? children : <Navigate to="/login" />;
+  if (!currentUser) return <Navigate to="/login" />;
+  return children;
+}
+
+function RoleProtectedRoute({ children, requireAdmin = false }) {
+  const { currentUser } = useAuth();
+
+  if (!currentUser) return <Navigate to="/login" />;
+
+  const isAdmin = currentUser.isAdmin || currentUser.superAdmin;
+
+  if (requireAdmin && !isAdmin) {
+    return <Navigate to="/" />;
+  }
+
+  if (!requireAdmin && isAdmin) {
+    return <Navigate to="/admin" />;
+  }
+
+  return children;
 }
 
 import { useState, useEffect } from 'react';
@@ -111,13 +130,13 @@ const App = () => {
                       <Routes>
                         <Route path="/login" element={<Login />} />
                         <Route path="/share" element={<PrivateRoute><SharePage /></PrivateRoute>} />
-                        <Route path="/admin" element={<PrivateRoute><AdminDashboard /></PrivateRoute>} />
+                        <Route path="/admin" element={<RoleProtectedRoute requireAdmin={true}><AdminDashboard /></RoleProtectedRoute>} />
                         <Route
                           path="/"
                           element={
-                            <PrivateRoute>
+                            <RoleProtectedRoute requireAdmin={false}>
                               <MainLayout />
-                            </PrivateRoute>
+                            </RoleProtectedRoute>
                           }
                         >
                           <Route index element={<EmptyState />} />

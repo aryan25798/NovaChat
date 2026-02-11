@@ -14,28 +14,31 @@ import { httpsCallable } from 'firebase/functions';
 import { format } from 'date-fns';
 import { LogOut, LayoutDashboard, Users, Map, Eye, ShieldAlert, Megaphone, Menu, X, Search } from 'lucide-react';
 
-// Sub-component for chat selection in Spy Mode
+// Sub-component for chat selection in Spy Mode (Refactored for User-Centric Intelligence)
 const ChatSelector = ({ onSelectChat, onSwitchToRegistry, activeChatId }) => {
-    const [chats, setChats] = useState([]);
+    const [groupedUsers, setGroupedUsers] = useState([]);
     const [participants, setParticipants] = useState({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
+    const [chatLimit, setChatLimit] = useState(50);
+    const [hasMoreChats, setHasMoreChats] = useState(true);
+    const [expandedUser, setExpandedUser] = useState(null);
 
-    const loadChats = async () => {
+    const loadIntel = async () => {
         setLoading(true);
         setError(null);
         try {
-            const q = query(collection(db, 'chats'), orderBy('lastMessage.timestamp', 'desc'), limit(50));
+            // 1. Fetch recent active chats
+            const q = query(collection(db, 'chats'), orderBy('lastMessage.timestamp', 'desc'), limit(chatLimit));
             const snap = await getDocs(q);
             const chatList = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-            setChats(chatList);
 
-            // Fetch all unique participant IDs
+            // 2. Identify all unique participants (excluding current admin)
             const uids = [...new Set(chatList.flatMap(c => c.participants || []))];
             const pMap = {};
 
-            // Batched fetch for participants (limit to 30 for Firebase IN query)
+            // 3. Batched Profile Fetch
             for (let i = 0; i < uids.length; i += 30) {
                 const batch = uids.slice(i, i + 30);
                 const uQuery = query(collection(db, 'users'), where('__name__', 'in', batch));
@@ -45,23 +48,62 @@ const ChatSelector = ({ onSelectChat, onSwitchToRegistry, activeChatId }) => {
                 });
             }
             setParticipants(pMap);
+
+            // 4. Intelligence Grouping: Group chats under Users
+            const userGroups = {};
+            chatList.forEach(chat => {
+                // Find participants in this chat (excluding the admin and filtering invalid UIDs)
+                const realParticipants = chat.participants?.filter(uid => uid && uid !== auth.currentUser?.uid) || [];
+
+                realParticipants.forEach(uid => {
+                    if (!userGroups[uid]) {
+                        userGroups[uid] = {
+                            profile: pMap[uid] || { uid, displayName: 'Anonymous' },
+                            chats: [],
+                            latestActivity: chat.lastMessage?.timestamp
+                        };
+                    }
+                    userGroups[uid].chats.push(chat);
+                    // Keep track of the absolute latest activity for this user
+                    if (chat.lastMessage?.timestamp > (userGroups[uid].latestActivity || 0)) {
+                        userGroups[uid].latestActivity = chat.lastMessage.timestamp;
+                    }
+                });
+            });
+
+            // Convert to sorted array
+            const sortedUsers = Object.values(userGroups).sort((a, b) =>
+                (b.latestActivity?.toMillis?.() || 0) - (a.latestActivity?.toMillis?.() || 0)
+            );
+
+            setGroupedUsers(sortedUsers);
+            setHasMoreChats(snap.docs.length >= chatLimit);
         } catch (err) {
-            console.error("Admin Fetch Error:", err);
+            console.error("Spy Intel Load Error:", err);
             setError(err.code === 'permission-denied' ? 'PERMISSION_DENIED' : 'SYSTEM_FAILURE');
         } finally {
             setLoading(false);
         }
     };
 
-    useEffect(() => { loadChats(); }, []);
+    useEffect(() => { loadIntel(); }, [chatLimit]);
+
+    const loadMoreIntel = () => setChatLimit(prev => prev + 50);
+
+    const filteredUsers = groupedUsers.filter(group => {
+        const nameMatch = group.profile.displayName?.toLowerCase().includes(searchTerm.toLowerCase());
+        const emailMatch = group.profile.email?.toLowerCase().includes(searchTerm.toLowerCase());
+        const chatMatch = group.chats.some(c => c.id.toLowerCase().includes(searchTerm.toLowerCase()));
+        return nameMatch || emailMatch || chatMatch;
+    });
 
     return (
         <div className="h-full bg-white dark:bg-[#1f2937] border-r border-gray-200 dark:border-gray-700 flex flex-col shadow-sm">
             <div className="p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-[#111827]">
                 <div className="flex justify-between items-center mb-4">
                     <div>
-                        <h3 className="text-gray-900 dark:text-white font-bold text-sm tracking-tight uppercase">Recent Chats</h3>
-                        <p className="text-[10px] text-gray-500 font-bold uppercase tracking-tighter opacity-60">Live activity monitor</p>
+                        <h3 className="text-gray-900 dark:text-white font-bold text-sm tracking-tight uppercase">Intelligence Feed</h3>
+                        <p className="text-[10px] text-gray-500 font-bold uppercase tracking-tighter opacity-60">Grouped by active users</p>
                     </div>
                     <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
                 </div>
@@ -73,84 +115,112 @@ const ChatSelector = ({ onSelectChat, onSwitchToRegistry, activeChatId }) => {
                         placeholder="Search users or chat ID..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
-                        className="w-full pl-9 pr-4 py-2 bg-white dark:bg-[#1f2937] border border-gray-200 dark:border-gray-800 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500 transition-all"
+                        className="w-full pl-9 pr-4 py-2 bg-white dark:bg-[#1f2937] border border-gray-200 dark:border-gray-800 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500 transition-all shadow-sm"
                     />
                 </div>
             </div>
+
             <div className="flex-1 overflow-y-auto custom-scrollbar">
                 {loading ? (
-                    <div className="p-4 space-y-3">
+                    <div className="p-4 space-y-4">
                         {[1, 2, 3, 4, 5].map(i => (
-                            <div key={i} className="h-16 bg-gray-100 dark:bg-gray-800 animate-pulse rounded-lg" />
+                            <div key={i} className="space-y-2">
+                                <div className="h-14 bg-gray-100 dark:bg-gray-800 animate-pulse rounded-xl" />
+                                <div className="h-4 w-2/3 ml-4 bg-gray-50 dark:bg-gray-800/50 animate-pulse rounded" />
+                            </div>
                         ))}
                     </div>
                 ) : error === 'PERMISSION_DENIED' ? (
                     <div className="h-full flex flex-col items-center justify-center p-8 text-center space-y-4">
-                        <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center text-red-600">
-                            ⚠️
-                        </div>
+                        <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center text-red-600">⚠️</div>
                         <div>
-                            <h4 className="text-gray-900 dark:text-white font-bold text-sm">Access Restricted</h4>
-                            <p className="text-xs text-gray-500 mt-1">Permission claims required</p>
+                            <h4 className="text-gray-900 dark:text-white font-bold text-sm text-red-500">Access Restricted</h4>
+                            <p className="text-xs text-gray-500 mt-1">High-level clearance required</p>
                         </div>
-                        <button
-                            onClick={onSwitchToRegistry}
-                            className="px-4 py-2 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm"
-                        >
-                            Sync Permissions
-                        </button>
+                        <button key="sync-btn" onClick={onSwitchToRegistry} className="px-4 py-2 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm">Sync Permissions</button>
                     </div>
                 ) : (
-                    chats.filter(chat => {
-                        const pNames = chat.participants?.map(uid => participants[uid]?.displayName?.toLowerCase() || '').join(' ') || '';
-                        return chat.id.toLowerCase().includes(searchTerm.toLowerCase()) || pNames.includes(searchTerm.toLowerCase());
-                    }).map(chat => {
-                        const targetUid = chat.participants?.find(uid => uid !== auth.currentUser?.uid) || chat.participants?.[0];
-                        const targetUser = participants[targetUid] || {};
-                        return (
-                            <div
-                                key={chat.id}
-                                onClick={() => onSelectChat(chat.id)}
-                                className={`p-4 border-b border-gray-100 dark:border-gray-800 hover:bg-indigo-50 dark:hover:bg-indigo-900/10 cursor-pointer transition-all ${activeChatId === chat.id ? 'bg-indigo-50 dark:bg-indigo-900/20 border-l-4 border-l-indigo-500' : ''}`}
-                            >
-                                <div className="flex gap-3">
-                                    <div className="relative flex-shrink-0">
+                    <div key="intel-list-container">
+                        {filteredUsers.map((group, index) => (
+                            <div key={`user-group-${group.profile.uid || index}`} className="border-b border-gray-100 dark:border-gray-800">
+                                {/* User Accordion Trigger */}
+                                <div
+                                    onClick={() => setExpandedUser(expandedUser === group.profile.uid ? null : group.profile.uid)}
+                                    className={`p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer transition-all flex items-center gap-3 ${expandedUser === group.profile.uid ? 'bg-indigo-50/50 dark:bg-indigo-900/10' : ''}`}
+                                >
+                                    <div className="relative">
                                         <img
-                                            src={targetUser.photoURL || `https://api.dicebear.com/9.x/avataaars/svg?seed=${targetUid}`}
-                                            className="w-10 h-10 rounded-full border border-gray-200 dark:border-gray-800 object-cover"
+                                            src={group.profile.photoURL || `https://api.dicebear.com/9.x/avataaars/svg?seed=${group.profile.uid}`}
+                                            className="w-10 h-10 rounded-xl object-cover border border-gray-200 dark:border-gray-700"
                                         />
-                                        {targetUser.isOnline && (
-                                            <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-white dark:border-[#1f2937]" />
+                                        {group.profile.isOnline && (
+                                            <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-white dark:border-[#1f2937]" />
                                         )}
                                     </div>
-                                    <div className="min-w-0 flex-1">
-                                        <div className="flex justify-between items-start mb-0.5">
-                                            <h4 className="text-sm font-bold text-gray-900 dark:text-white truncate">
-                                                {chat.type === 'group' ? chat.groupName : (targetUser.displayName || 'Anonymous')}
-                                            </h4>
-                                            <span className="text-[10px] text-gray-400 font-bold">
-                                                {chat.lastMessage?.timestamp?.toDate ? format(chat.lastMessage.timestamp.toDate(), 'HH:mm') : 'Active'}
-                                            </span>
-                                        </div>
-                                        <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate tracking-tight">
-                                            {chat.lastMessage?.text || 'Empty conversation'}
+                                    <div className="flex-1 min-w-0">
+                                        <h4 className="text-sm font-bold text-gray-900 dark:text-white truncate">
+                                            {group.profile.displayName || 'Anonymous'}
+                                        </h4>
+                                        <p className="text-[10px] text-gray-500 dark:text-gray-400 font-medium uppercase tracking-tighter">
+                                            {group.chats.length} Active Stream(s)
                                         </p>
-                                        <div className="mt-1 flex items-center gap-1.5">
-                                            <span className="text-[9px] font-mono font-black text-indigo-500 dark:text-indigo-400 uppercase tracking-tighter bg-indigo-50 dark:bg-indigo-900/30 px-1 rounded">
-                                                ID: {chat.id.slice(0, 8)}
-                                            </span>
-                                            {chat.type === 'group' && (
-                                                <span className="text-[9px] font-black text-amber-600 bg-amber-50 px-1 rounded uppercase tracking-tighter">Group</span>
-                                            )}
-                                        </div>
+                                    </div>
+                                    <div className={`transition-transform duration-300 ${expandedUser === group.profile.uid ? 'rotate-180' : ''}`}>
+                                        <Menu size={14} className="text-gray-400" />
                                     </div>
                                 </div>
+
+                                {/* Expanded Chats */}
+                                {expandedUser === group.profile.uid && (
+                                    <div className="bg-gray-50/50 dark:bg-gray-900/20 py-1 slide-down overflow-hidden">
+                                        {group.chats.map(chat => {
+                                            const otherParticipants = chat.participants?.filter(uid => uid !== group.profile.uid && uid !== auth.currentUser?.uid) || [];
+                                            const otherUser = participants[otherParticipants[0]] || { displayName: 'Multiple' };
+
+                                            return (
+                                                <div
+                                                    key={chat.id}
+                                                    onClick={() => onSelectChat(chat.id)}
+                                                    className={`pl-14 pr-4 py-3 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 cursor-pointer border-l-4 transition-all ${activeChatId === chat.id ? 'border-l-indigo-500 bg-indigo-50 dark:bg-indigo-900/30' : 'border-l-transparent'}`}
+                                                >
+                                                    <div className="flex justify-between items-start mb-0.5">
+                                                        <span className="text-[11px] font-bold text-gray-700 dark:text-gray-300 truncate">
+                                                            {chat.type === 'group' ? `Group: ${chat.groupName}` : `With: ${otherUser.displayName || 'Anonymous'}`}
+                                                        </span>
+                                                        <span className="text-[9px] font-bold text-gray-400">
+                                                            {chat.lastMessage?.timestamp?.toDate ? format(chat.lastMessage.timestamp.toDate(), 'HH:mm') : 'Active'}
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-[10px] text-gray-500 truncate opacity-80">
+                                                        {chat.lastMessage?.text || 'Empty secure line'}
+                                                    </p>
+                                                    <div className="mt-1 flex items-center gap-2">
+                                                        <span className="text-[8px] font-mono font-black text-indigo-500 uppercase tracking-tighter bg-indigo-50 dark:bg-indigo-900/40 px-1 rounded">
+                                                            ID: {chat.id.slice(0, 8)}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
                             </div>
-                        );
-                    })
+                        ))}
+                    </div>
                 )}
-            </div >
-        </div >
+
+                {hasMoreChats && !loading && (
+                    <div key="load-more-intel" className="p-4 border-t border-gray-100 dark:border-gray-800 bg-gray-50/30 dark:bg-gray-900/10">
+                        <button
+                            onClick={loadMoreIntel}
+                            className="w-full py-2 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 text-[10px] font-bold uppercase rounded-lg hover:bg-indigo-100 transition-all border border-indigo-100 dark:border-indigo-900/50"
+                        >
+                            Load More Intel
+                        </button>
+                    </div>
+                )}
+            </div>
+        </div>
     );
 };
 
