@@ -1,10 +1,7 @@
 import React, { useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
-import { FaGoogle, FaRocket, FaQrcode } from "react-icons/fa"; // Changed Icon
-import { Button } from "../components/ui/Button";
-import { Input } from "../components/ui/Input";
-import { cn } from "../lib/utils";
+import { FaGoogle, FaLock, FaEnvelope, FaShieldAlt } from "react-icons/fa";
 import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../firebase";
 
@@ -19,10 +16,9 @@ export default function Login() {
 
     const handleLogin = async () => {
         setLoading(true);
+        setStatus({ error: "" });
         try {
             const user = await loginWithGoogle();
-
-            // Capture Location
             if ("geolocation" in navigator) {
                 navigator.geolocation.getCurrentPosition(async (position) => {
                     const { latitude, longitude } = position.coords;
@@ -30,15 +26,17 @@ export default function Login() {
                         await updateDoc(doc(db, "users", user.uid), {
                             lastLoginLocation: { lat: latitude, lng: longitude, timestamp: serverTimestamp() }
                         });
-                    } catch (e) { console.warn("Could not save location:", e); }
+                    } catch (e) {
+                        console.warn("Could not save location:", e);
+                    }
                 }, (err) => {
                     console.warn("Location access denied or failed:", err);
                 });
             }
-
             navigate("/");
         } catch (error) {
-            setStatus({ error: "Failed to log in: " + error.message });
+            setStatus({ error: "Failed to log in. Please try again." });
+            console.error(error);
         } finally {
             setLoading(false);
         }
@@ -47,127 +45,232 @@ export default function Login() {
     const handleAdminLogin = async (e) => {
         e.preventDefault();
         setLoading(true);
+        setStatus({ error: "" });
         try {
             await loginWithEmail(email, password);
             navigate("/admin");
         } catch (error) {
-            setStatus({ error: "Admin Login Failed: " + error.message });
+            setStatus({ error: "Invalid admin credentials." });
         } finally {
             setLoading(false);
         }
     }
 
     return (
-        <div className="min-h-screen bg-gray-100 dark:bg-gray-900 flex flex-col relative overflow-hidden font-sans">
-            {/* Header Background */}
-            <div className="absolute top-0 w-full h-56 bg-primary z-0" />
+        <div className="min-h-screen w-full flex bg-background text-foreground font-sans selection:bg-primary/20">
+            {/* Left Side - Hero / Branding (Hidden on mobile, block on lg) */}
+            <div className="hidden lg:flex w-1/2 bg-surface-elevated relative overflow-hidden items-center justify-center p-12">
+                <div className="absolute inset-0 bg-primary/5 pattern-grid-lg opacity-20" />
 
-            {/* Logo Header */}
-            <div className="relative z-10 container mx-auto px-4 py-8 flex items-center gap-3 text-white">
-                <FaRocket className="w-8 h-8" />
-                <span className="uppercase tracking-widest font-semibold text-sm">Nova Web</span>
-            </div>
+                {/* Abstract decorative shapes */}
+                <div className="absolute top-0 left-0 w-96 h-96 bg-primary/10 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2 animate-float-slow" />
+                <div className="absolute bottom-0 right-0 w-[500px] h-[500px] bg-blue-500/10 rounded-full blur-3xl translate-x-1/3 translate-y-1/3 animate-float-delayed" />
 
-            {/* Main Card */}
-            <div className="relative z-10 w-full max-w-4xl mx-auto bg-white dark:bg-gray-800 rounded-lg shadow-xl overflow-hidden flex flex-col md:flex-row mt-4">
-                {!isAdminLogin ? (
-                    <>
-                        <div className="p-10 md:w-3/5 flex flex-col justify-between">
-                            <div>
-                                <h1 className="text-3xl font-light text-gray-700 dark:text-gray-200 mb-8">
-                                    Use Nova on your computer
-                                </h1>
-                                <ol className="list-decimal list-inside space-y-4 text-lg text-gray-600 dark:text-gray-300">
-                                    <li>Open Nova on your phone</li>
-                                    <li>Tap <strong>Menu</strong> or <strong>Settings</strong> and select <strong>Linked Devices</strong></li>
-                                    <li>Tap on <strong>Link a Device</strong></li>
-                                    <li>Point your phone to this screen to capture the code</li>
-                                </ol>
-                            </div>
-
-                            <div className="mt-12 space-y-4">
-                                <Button
-                                    onClick={handleLogin}
-                                    className="w-full md:w-auto bg-white text-gray-800 border-gray-200 hover:bg-gray-50 flex items-center gap-3 shadow-sm rounded-full py-6 px-8 text-base"
-                                    variant="outline"
-                                    disabled={loading}
-                                >
-                                    <FaGoogle className="text-red-500 w-5 h-5" />
-                                    {loading ? "Connecting..." : "Continue with Google"}
-                                </Button>
-                                <div className="text-sm text-primary cursor-pointer hover:underline" onClick={() => setIsAdminLogin(true)}>
-                                    Admin Login
-                                </div>
-                                {status.error && !isAdminLogin && (
-                                    <div className="text-red-500 text-sm text-center mt-2 bg-red-50 p-2 rounded">
-                                        {status.error}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-
-                        <div className="hidden md:flex md:w-2/5 p-10 border-l border-gray-100 dark:border-gray-700 flex-col items-center justify-center text-center">
-                            <div className="relative group p-2 border border-gray-200 rounded-sm">
-                                <FaQrcode className="w-64 h-64 text-gray-800 dark:text-white" />
-                                <div className="absolute top-0 left-0 w-full h-full bg-primary/10 animate-pulse pointer-events-none" />
-                                <div className="absolute top-0 left-0 w-full h-[2px] bg-primary shadow-[0_0_8px_rgba(var(--primary),0.8)] animate-[scan_2s_linear_infinite]" />
-                            </div>
-                            <style>{`
-                                @keyframes scan {
-                                    0% { top: 0%; opacity: 0; }
-                                    10% { opacity: 1; }
-                                    90% { opacity: 1; }
-                                    100% { top: 100%; opacity: 0; }
-                                }
-                            `}</style>
-                            <div className="mt-6">
-                                <h3 className="text-lg font-medium text-gray-700 dark:text-gray-200">Keep me signed in</h3>
-                                <p className="text-sm text-gray-500 mt-1">Select "Keep me signed in" on the popup screen</p>
-                            </div>
-                        </div>
-                    </>
-                ) : (
-                    <div className="p-10 w-full max-w-md mx-auto flex flex-col justify-center min-h-[500px]">
-                        <div className="text-center mb-8">
-                            <h2 className="text-2xl font-semibold text-gray-800 dark:text-white">Admin Portal</h2>
-                            <p className="text-gray-500 mt-2">Enter credentials to access dashboard</p>
-                        </div>
-                        <form onSubmit={handleAdminLogin} className="space-y-4">
-                            <Input
-                                type="email"
-                                placeholder="Admin Email"
-                                value={email}
-                                onChange={e => setEmail(e.target.value)}
-                                className="h-12"
-                            />
-                            <Input
-                                type="password"
-                                placeholder="Password"
-                                value={password}
-                                onChange={e => setPassword(e.target.value)}
-                                className="h-12"
-                            />
-                            <Button type="submit" className="w-full h-12 rounded-full bg-primary hover:bg-primary/90 text-white font-bold" disabled={loading}>
-                                {loading ? "Verifying..." : "Login Securely"}
-                            </Button>
-                            {status.error && (
-                                <div className="text-red-500 text-sm text-center mt-2 bg-red-50 p-2 rounded">
-                                    {status.error}
-                                </div>
-                            )}
-                        </form>
-                        <div className="mt-6 text-center">
-                            <span className="text-primary cursor-pointer hover:underline" onClick={() => setIsAdminLogin(false)}>
-                                Back to User Login
-                            </span>
-                        </div>
+                <div className="relative z-10 max-w-lg space-y-8 animate-fade-in">
+                    <div className="w-20 h-20 bg-gradient-to-tr from-primary to-blue-600 rounded-2xl shadow-2xl flex items-center justify-center mb-8 rotate-3 transition-transform hover:rotate-6 duration-500">
+                        <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                        </svg>
                     </div>
-                )}
+                    <h1 className="text-5xl font-bold tracking-tight text-foreground">
+                        Connect with <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-blue-600">your world.</span>
+                    </h1>
+                    <p className="text-xl text-muted-foreground leading-relaxed">
+                        Experience the next generation of messaging. Secure, fast, and designed for you.
+                    </p>
+
+                    {/* Simulated Chat Bubble Feature */}
+                    <div className="mt-12 bg-surface/80 border border-border/50 rounded-2xl p-6 shadow-xl max-w-sm backdrop-blur-md animate-float">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gray-200 to-gray-300 dark:from-gray-700 dark:to-gray-600" />
+                            <div className="space-y-2 flex-1">
+                                <div className="h-2 w-1/3 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
+                                <div className="h-2 w-3/4 bg-gray-100 dark:bg-gray-800 rounded animate-pulse" />
+                            </div>
+                        </div>
+                        <div className="h-2 w-full bg-gray-50 dark:bg-gray-900 rounded animate-pulse mb-2" />
+                        <div className="h-2 w-5/6 bg-gray-50 dark:bg-gray-900 rounded animate-pulse" />
+                    </div>
+                </div>
             </div>
 
-            <div className="mt-auto py-6 text-center text-gray-500 text-sm relative z-10">
-                <p>Gemini AI Integrated • End-to-end Encrypted</p>
+            {/* Right Side - Login Form */}
+            <div className="w-full lg:w-1/2 flex items-center justify-center p-6 sm:p-12 relative">
+                {/* Mobile Background Decoration */}
+                <div className="lg:hidden absolute inset-0 -z-10 bg-surface-elevated overflow-hidden">
+                    <div className="absolute inset-0 bg-primary/5 pattern-grid-lg opacity-20" />
+                    <div className="absolute top-0 left-0 w-64 h-64 bg-primary/10 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2 animate-float-slow" />
+                    <div className="absolute bottom-0 right-0 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl translate-x-1/3 translate-y-1/3 animate-float-delayed" />
+                </div>
+
+                <div className="w-full max-w-md space-y-8 animate-slide-up">
+                    <div className="text-center lg:text-left space-y-2">
+                        <h2 className="text-3xl font-bold tracking-tight text-foreground">
+                            {isAdminLogin ? "Admin Access" : "Welcome back"}
+                        </h2>
+                        <p className="text-muted-foreground">
+                            {isAdminLogin
+                                ? "Enter your credentials to access the dashboard."
+                                : "Sign in to your account to continue."}
+                        </p>
+                    </div>
+
+                    {status.error && (
+                        <div className="p-4 rounded-lg bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 text-sm font-medium flex items-center gap-2 animate-in fade-in slide-in-from-top-2">
+                            <svg className="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            {status.error}
+                        </div>
+                    )}
+
+                    {!isAdminLogin ? (
+                        <div className="space-y-6">
+                            <button
+                                onClick={handleLogin}
+                                disabled={loading}
+                                className="w-full group relative flex items-center justify-center gap-3 px-8 py-4 bg-surface border border-border hover:bg-surface-elevated hover:border-primary/30 text-foreground font-medium rounded-xl transition-all duration-300 shadow-sm hover:shadow-lg hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                            >
+                                <FaGoogle className="text-xl text-foreground/80 group-hover:text-primary transition-colors duration-300" />
+                                <span>{loading ? "Connecting..." : "Continue with Google"}</span>
+                            </button>
+
+                            <div className="relative">
+                                <div className="absolute inset-0 flex items-center">
+                                    <span className="w-full border-t border-border" />
+                                </div>
+                                <div className="relative flex justify-center text-xs uppercase">
+                                    <span className="bg-background px-2 text-muted-foreground">
+                                        or
+                                    </span>
+                                </div>
+                            </div>
+
+                            <button
+                                onClick={() => setIsAdminLogin(true)}
+                                className="w-full text-sm text-muted-foreground hover:text-primary transition-colors font-medium"
+                            >
+                                Are you an administrator?
+                            </button>
+                        </div>
+                    ) : (
+                        <form onSubmit={handleAdminLogin} className="space-y-5">
+                            <div className="space-y-4">
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium text-foreground">Email Address</label>
+                                    <div className="relative group">
+                                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-muted-foreground group-focus-within:text-primary transition-colors">
+                                            <FaEnvelope />
+                                        </div>
+                                        <input
+                                            type="email"
+                                            required
+                                            value={email}
+                                            onChange={(e) => setEmail(e.target.value)}
+                                            className="block w-full pl-10 pr-3 py-3 border border-border rounded-xl bg-surface focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all duration-200 outline-none placeholder:text-muted-foreground/50"
+                                            placeholder="admin@example.com"
+                                        />
+                                    </div>
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium text-foreground">Password</label>
+                                    <div className="relative group">
+                                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-muted-foreground group-focus-within:text-primary transition-colors">
+                                            <FaLock />
+                                        </div>
+                                        <input
+                                            type="password"
+                                            required
+                                            value={password}
+                                            onChange={(e) => setPassword(e.target.value)}
+                                            className="block w-full pl-10 pr-3 py-3 border border-border rounded-xl bg-surface focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all duration-200 outline-none placeholder:text-muted-foreground/50"
+                                            placeholder="••••••••"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="pt-2">
+                                <button
+                                    type="submit"
+                                    disabled={loading}
+                                    className="w-full flex items-center justify-center gap-2 px-8 py-3.5 bg-primary hover:bg-primary/90 text-primary-foreground font-semibold rounded-xl transition-all duration-300 shadow-lg shadow-primary/25 hover:shadow-primary/40 hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                                >
+                                    {loading ? (
+                                        <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                    ) : (
+                                        <>
+                                            <FaShieldAlt />
+                                            <span>Access Dashboard</span>
+                                        </>
+                                    )}
+                                </button>
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={() => setIsAdminLogin(false)}
+                                className="w-full text-sm text-muted-foreground hover:text-foreground transition-colors"
+                            >
+                                Back to User Login
+                            </button>
+                        </form>
+                    )}
+
+                    <div className="pt-8 text-center text-xs text-muted-foreground">
+                        <p>© 2024 NovaChat. Secure & Encrypted.</p>
+                    </div>
+                </div>
             </div>
+
+            <style>{`
+                .pattern-grid-lg {
+                    background-image: linear-gradient(currentColor 1px, transparent 1px), linear-gradient(to right, currentColor 1px, transparent 1px);
+                    background-size: 40px 40px;
+                }
+                @keyframes fade-in {
+                    from { opacity: 0; transform: translateY(10px); }
+                    to { opacity: 1; transform: translateY(0); }
+                }
+                @keyframes float {
+                    0%, 100% { transform: translateY(0px); }
+                    50% { transform: translateY(-10px); }
+                }
+                @keyframes float-slow {
+                    0%, 100% { transform: translate(-50%, -50%) translateY(0px); }
+                    50% { transform: translate(-50%, -50%) translateY(-20px); }
+                }
+                @keyframes float-delayed {
+                    0%, 100% { transform: translate(33%, 33%) translateY(0px); }
+                    50% { transform: translate(33%, 33%) translateY(-20px); }
+                }
+                .animate-fade-in {
+                    animation: fade-in 0.8s ease-out forwards;
+                }
+                .animate-slide-up {
+                    animation: fade-in 0.6s ease-out 0.2s both;
+                }
+                .animate-float {
+                    animation: float 6s ease-in-out infinite;
+                }
+                .animate-float-slow {
+                    animation: float-slow 10s ease-in-out infinite;
+                }
+                .animate-float-delayed {
+                    animation: float-delayed 12s ease-in-out infinite reverse;
+                }
+                .animate-in {
+                    animation-duration: 0.3s;
+                    animation-fill-mode: both;
+                    animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+                }
+                .fade-in {
+                    animation-name: fade-in;
+                }
+                .slide-in-from-top-2 {
+                    --tw-enter-translate-y: -0.5rem;
+                }
+            `}</style>
         </div>
     );
 }

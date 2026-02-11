@@ -1,10 +1,10 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { messaging, db } from '../firebase';
 import { getToken, onMessage } from 'firebase/messaging';
 import { doc, updateDoc, arrayUnion, getDoc } from 'firebase/firestore';
 import { useAuth } from './AuthContext';
 import { subscribeToNotifications, markNotificationAsRead } from '../services/notificationService';
-import { toast } from 'react-hot-toast'; // Assuming react-hot-toast or similar is used, or we can use standard alerts/custom UI
+import { toast } from 'react-hot-toast';
 
 const NotificationContext = createContext();
 
@@ -17,26 +17,27 @@ export function NotificationProvider({ children }) {
     const [token, setToken] = useState(null);
     const [notifications, setNotifications] = useState([]);
     const [unreadCount, setUnreadCount] = useState(0);
+    const permissionRequested = useRef(false); // Prevent StrictMode double-invoke
 
-    // 1. Permission & Token Logic (Existing)
+    // 1. Permission & Token Logic
     const requestPermission = async () => {
+        // Guard against React StrictMode double-invocation
+        if (permissionRequested.current) return;
+        permissionRequested.current = true;
+
         try {
-            console.log("Requesting notification permission...");
             const rawPermission = await Notification.requestPermission();
-            console.log("Notification permission:", rawPermission);
 
             if (rawPermission === 'granted') {
                 let registration = await navigator.serviceWorker.getRegistration();
                 if (!registration) {
-                    console.log("SW not found via getRegistration, waiting for ready...");
                     registration = await navigator.serviceWorker.ready;
                 }
 
                 if (!registration) {
-                    console.error("No Service Worker registration found!");
+                    console.warn("No Service Worker registration found — push notifications disabled.");
                     return;
                 }
-                console.log("Using SW registration for FCM:", registration.scope);
 
                 const currentToken = await getToken(messaging, {
                     vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY,
@@ -44,32 +45,33 @@ export function NotificationProvider({ children }) {
                 });
 
                 if (currentToken) {
-                    // Check if token already exists to prevent redundant writes/loops
+                    setToken(currentToken);
                     const existingTokens = currentUser?.fcmTokens || [];
                     if (!existingTokens.includes(currentToken)) {
-                        console.log("Updating token in Firestore for user:", currentUser.uid);
                         try {
                             await updateDoc(doc(db, "users", currentUser.uid), {
                                 fcmTokens: arrayUnion(currentToken)
                             });
-                            console.log("Token updated successfully.");
                         } catch (e) {
-                            console.error("Token update failed:", e);
+                            console.warn("FCM token update failed:", e.message);
                         }
                     }
-                } else {
-                    console.warn("No FCM token returned. Check VAPID key and Firebase config.");
                 }
-            } else {
-                console.warn("Notification permission NOT granted.");
             }
         } catch (error) {
-            console.error("Notification permission error:", error);
+            // Push service errors are expected in localhost dev — silently ignore
+            if (error.name === 'AbortError' || error.message?.includes('push service')) {
+                // Silent in dev: FCM push can't register on localhost
+                if (import.meta.env.PROD) console.warn("Push service unavailable:", error.message);
+            } else {
+                console.error("Notification permission error:", error);
+            }
         }
     };
 
     useEffect(() => {
         if (currentUser?.uid) {
+            permissionRequested.current = false; // Reset on user change
             requestPermission();
         }
     }, [currentUser?.uid]);

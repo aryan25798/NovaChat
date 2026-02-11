@@ -1,18 +1,13 @@
-import React, { useState, useRef } from "react";
-import { useAuth } from "../contexts/AuthContext";
-import { FaTimes, FaImage, FaPalette, FaSmile, FaPaperPlane } from "react-icons/fa";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { postStatus } from "../services/statusService";
+import { useFileUpload } from "../hooks/useFileUpload";
+import UploadProgress from "./chat/UploadProgress";
 
 export default function StatusCreator({ onClose }) {
     const { currentUser } = useAuth();
     const [text, setText] = useState("");
-    const [bgColor, setBgColor] = useState("#d32f2f");
-    const [mediaFile, setMediaFile] = useState(null);
-    const [loading, setLoading] = useState(false);
-    const fileInputRef = useRef();
-
-    const colors = ["#d32f2f", "#7b1fa2", "#512da8", "#1976d2", "#0288d1", "#00796b", "#388e3c", "#fbc02d", "#e64a19", "#5d4037", "#455a64"];
+    const { uploads, startUpload, clearCompleted } = useFileUpload();
+    const [isFinalizing, setIsFinalizing] = useState(false);
 
     const handleFile = (e) => {
         if (e.target.files[0]) {
@@ -32,12 +27,28 @@ export default function StatusCreator({ onClose }) {
 
         try {
             const type = mediaFile ? (mediaFile.type.startsWith('video') ? 'video' : 'image') : 'text';
+            let contentUrl = text;
+
+            if (type !== 'text') {
+                const { uploadTask } = await startUpload(mediaFile, `status/${currentUser.uid}/${Date.now()}_${mediaFile.name}`);
+
+                // Wait for upload to complete
+                await new Promise((resolve, reject) => {
+                    uploadTask.on('state_changed', null, reject, async () => {
+                        const url = await getDownloadURL(uploadTask.snapshot.ref);
+                        contentUrl = url;
+                        resolve();
+                    });
+                });
+            }
+
+            setIsFinalizing(true);
             await postStatus(
                 currentUser,
                 type,
-                mediaFile || text, // If text, content is text; if media, content is logic handled in service
-                mediaFile ? text : "", // Caption if media
-                type === 'text' ? bgColor : null // Background if text
+                contentUrl,
+                mediaFile ? text : "",
+                type === 'text' ? bgColor : null
             );
 
             setLoading(false);
@@ -45,6 +56,7 @@ export default function StatusCreator({ onClose }) {
         } catch (err) {
             console.error("Error posting status:", err);
             setLoading(false);
+            setIsFinalizing(false);
         }
     };
 
@@ -136,6 +148,21 @@ export default function StatusCreator({ onClose }) {
                                 <FaPaperPlane className="ml-1" />
                             )}
                         </button>
+                    </div>
+                </div>
+            )}
+            {/* Upload Overlay */}
+            <UploadProgress
+                uploads={uploads}
+                onClear={clearCompleted}
+                onPause={() => { }} onResume={() => { }} onCancel={() => { }}
+            />
+
+            {isFinalizing && (
+                <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[100001] flex items-center justify-center">
+                    <div className="bg-surface p-6 rounded-2xl shadow-2xl flex flex-col items-center gap-4">
+                        <div className="w-10 h-10 border-4 border-primary/30 border-t-primary rounded-full animate-spin" />
+                        <p className="text-text-1 font-medium">Finishing up...</p>
                     </div>
                 </div>
             )}

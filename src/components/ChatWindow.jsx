@@ -3,7 +3,7 @@ import { FaTimes, FaSearch } from "react-icons/fa";
 import { useAuth } from "../contexts/AuthContext";
 import { useCall } from "../contexts/CallContext";
 import { useNavigate } from "react-router-dom";
-import { subscribeToMessages, sendMessage, sendMediaMessage, deleteMessage, addReaction, searchMessages } from "../services/chatService";
+import { subscribeToMessages, sendMessage, sendMediaMessage, deleteMessage, addReaction, searchMessages, clearChat, hideChat } from "../services/chatService";
 import { setTypingStatus, subscribeToTypingStatus } from "../services/typingService";
 import { usePresence } from "../contexts/PresenceContext";
 import { motion, AnimatePresence } from "framer-motion";
@@ -73,17 +73,34 @@ export default function ChatWindow({ chat, setChat }) {
         if (e) e.preventDefault();
         if ((newMessage.trim() === "" && !replyTo) || isSending) return;
 
-        setIsSending(true);
         const textToSend = newMessage;
-        setNewMessage("");
         const replyContext = replyTo;
+
+        // Optimistic UI update
+        const temporaryId = `temp-${Date.now()}`;
+        const tempMsg = {
+            id: temporaryId,
+            text: textToSend,
+            senderId: currentUser.uid,
+            timestamp: { toDate: () => new Date() }, // Mock timestamp
+            status: 'sending',
+            replyTo: replyContext
+        };
+
+        setMessages(prev => [...prev, tempMsg]);
+        setNewMessage("");
         setReplyTo(null);
+        setIsSending(true);
 
         try {
             await sendMessage(chat.id, currentUser, textToSend, replyContext, chat.type);
+            // The subscription will eventually replace the temp message with the real one
         } catch (err) {
             console.error("Failed to send message", err);
-            setNewMessage(textToSend); // Restore message on failure
+            // Remove temp message and restore input on failure
+            setMessages(prev => prev.filter(m => m.id !== temporaryId));
+            setNewMessage(textToSend);
+            setReplyTo(replyContext);
         } finally {
             setIsSending(false);
         }
@@ -128,6 +145,19 @@ export default function ChatWindow({ chat, setChat }) {
         await addReaction(chat.id, msgId, emoji, currentUser.uid);
     };
 
+    const handleDeleteChat = async () => {
+        try {
+            // First, hide the chat itself (removes from list)
+            await hideChat(chat.id, currentUser.uid);
+            // Second, set 'clearedAt' marker to hide history if user somehow re-enters the chat
+            await clearChat(chat.id, currentUser.uid);
+            setChat(null);
+            navigate('/');
+        } catch (err) {
+            console.error("Failed to clear/hide chat", err);
+        }
+    };
+
     const [messageLimit, setMessageLimit] = useState(50);
     const [hasMoreMessages, setHasMoreMessages] = useState(true);
 
@@ -149,7 +179,7 @@ export default function ChatWindow({ chat, setChat }) {
     }, [chat?.id]);
 
     useEffect(() => {
-        if (!chat?.id || !currentUser?.uid) return;
+        if (!chat?.id || !currentUser?.uid || chat.isGhost) return;
 
         const unsubscribe = subscribeToMessages(chat.id, currentUser.uid, (msgs) => {
             setMessages(msgs);
@@ -162,7 +192,7 @@ export default function ChatWindow({ chat, setChat }) {
         }, true, messageLimit);
 
         return () => unsubscribe();
-    }, [chat?.id, currentUser?.uid, messageLimit]);
+    }, [chat?.id, currentUser?.uid, messageLimit, chat?.isGhost]);
 
     useEffect(() => {
         // Only scroll to bottom if we are near bottom or it's initial load (limit 50)
@@ -176,7 +206,7 @@ export default function ChatWindow({ chat, setChat }) {
     }, [messages, messageLimit]);
 
     useEffect(() => {
-        if (!chat?.id || !currentUser?.uid) return;
+        if (!chat?.id || !currentUser?.uid || chat.isGhost) return;
         const unsubscribe = subscribeToTypingStatus(chat.id, currentUser.uid, (data) => {
             setTypingUsers(data);
         });
@@ -184,7 +214,7 @@ export default function ChatWindow({ chat, setChat }) {
             unsubscribe();
             setTypingStatus(chat.id, currentUser.uid, false);
         };
-    }, [chat?.id, currentUser?.uid]);
+    }, [chat?.id, currentUser?.uid, chat?.isGhost]);
 
     useEffect(() => {
         if (otherUid && !otherUser.isGroup) {
@@ -268,7 +298,8 @@ export default function ChatWindow({ chat, setChat }) {
         const localMatches = messages.filter(m => {
             const msgTime = m.timestamp?.toDate?.() || new Date();
             const matchesSearch = searchQuery ? m.text?.toLowerCase().includes(searchQuery.toLowerCase()) : true;
-            return msgTime > clearedAt && matchesSearch;
+            const isHidden = m.hiddenBy?.includes(currentUser.uid);
+            return msgTime > clearedAt && matchesSearch && !isHidden;
         });
 
         // 2. Merge with server results (deduplicate)
@@ -300,6 +331,7 @@ export default function ChatWindow({ chat, setChat }) {
                 onShowInfo={() => setShowContactInfo(true)}
                 onToggleSearch={() => setShowSearch(!showSearch)}
                 showSearch={showSearch}
+                onDeleteChat={handleDeleteChat}
             />
 
             <AnimatePresence>

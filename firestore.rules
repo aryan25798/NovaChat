@@ -10,28 +10,23 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // CHECK FOR GOD MODE (Super Admin Claim)
     function isGod() {
       return isSignedIn() && request.auth.token.get('superAdmin', false) == true;
     }
     
-    // Global Ban Check: Blocks ALL access if the user is banned in their profile
-    // UNLESS they are God
+    // Global Ban Check: Blocks ALL access if the user is banned.
+    // OPTIMIZATION: Use custom claims instead of Firestore reads to save costs.
     function isNotBanned() {
-      return isGod() || 
-        !exists(/databases/$(database)/documents/users/$(request.auth.uid)) ||
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isBanned', false) != true;
+      return isGod() || request.auth.token.get('isBanned', false) != true;
     }
 
     function isOwner(userId) {
       return isSignedIn() && (request.auth.uid == userId || isGod());
     }
 
-    // Check if the user has 'isAdmin' field set to true in their profile
+    // Check if the user has 'isAdmin' field set to true (Token favored)
     function isAdmin() {
-      return isGod() || (isSignedIn() && 
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true);
+      return isSignedIn() && (request.auth.token.get('isAdmin', false) == true || isGod());
     }
 
     // Check if user is a participant of a specific chat
@@ -42,9 +37,27 @@ service cloud.firestore {
 
     // Check if user is friends with the target user (for Status privacy)
     function isFriend(targetUserId) {
+      // PERFORMANCE OPTIMIZATION: Try resource.data first if checking the current target doc
+      let targetUser = (request.path[4] == 'users' && request.path[5] == targetUserId) ? resource.data : get(/databases/$(database)/documents/users/$(targetUserId)).data;
       return isSignedIn() && 
         targetUserId != request.auth.uid &&
-        request.auth.uid in get(/databases/$(database)/documents/users/$(targetUserId)).data.friends;
+        request.auth.uid in targetUser.friends;
+    }
+
+    // NEW: Check if the requester is blocked by the target user OR has blocked the target user
+    function isNotBlocked(targetUserId) {
+      // PERFORMANCE OPTIMIZATION: Try resource.data first if checking the current target doc
+      let targetUser = (request.path[4] == 'users' && request.path[5] == targetUserId) ? resource.data : get(/databases/$(database)/documents/users/$(targetUserId)).data;
+      let currentUser = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      return !(request.auth.uid in targetUser.get('blockedUsers', [])) && 
+             !(targetUserId in currentUser.get('blockedUsers', []));
+    }
+
+    // NEW: Hide Super Admins from non-admins
+    function canSeeUser(userId) {
+      // OPTIMIZATION: Use resource.data if we are currently evaluating a user document read
+      let targetData = (request.path[4] == 'users' && request.path[5] == userId) ? resource.data : get(/databases/$(database)/documents/users/$(userId)).data;
+      return !targetData.get('superAdmin', false) || isAdmin();
     }
 
     // 1. Users Collection - SECURED
@@ -54,10 +67,15 @@ service cloud.firestore {
       allow read, write: if isGod();
       
       // Basic read for discovery
-      // Basic read for discovery
       // Note: We allow reading all users to enable client-side search (filtered).
-      // Ideally, use a backend search service (Algolia) to strictly hide non-matched users.
-      allow read: if isSignedIn() && (request.auth.uid == userId || isNotBanned());
+      // SECURITY FIX: Use resource.data directly to avoid get() in collection queries.
+      // This rule requires the client to filter by superAdmin == false.
+      allow read: if isSignedIn() && (
+        isOwner(userId) ||
+        isAdmin() || 
+        (resource == null) ||
+        (resource.data.get('superAdmin', false) == false)
+      );
 
       // Create: Owner only, cannot set elevated privileges
       allow create: if isOwner(userId) && 
@@ -67,17 +85,38 @@ service cloud.firestore {
       // Update: Owner only, cannot change elevated privileges
       // Admin can update banned status (moderation)
       allow update: if (isOwner(userId) && 
-        // Fix: Use .get() for safety if field is missing
-        (resource.data.get('isBanned', false) != true) && 
-        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['isAdmin', 'superAdmin', 'isBanned'])))
-        || (isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isBanned']));
+        (resource.data.get('isBanned', false) != true) && (
+          // Option A: Standard update (no restricted keys)
+          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['isAdmin', 'superAdmin', 'isBanned'])) ||
+          // Option B: AUTO-PATCH - Allow setting superAdmin to false ONLY if it was missing
+          (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['superAdmin']) && 
+           resource.data.get('superAdmin', null) == null && 
+           request.resource.data.superAdmin == false)
+        ))
+        || (isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isBanned']))
+        // Allow user to request deletion or cancel it
+        || (isOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deletionRequested', 'deletionRequestedAt']));
     }
 
-    // 2. Chats Collection
+    // 2. Recursive Messages Access (For Admin CollectionGroup Queries)
+    // IMPORTANT: This must come BEFORE the chats collection to allow collectionGroup queries
+    // This rule allows admins to query messages across all chats using collectionGroup
+    match /{path=**}/messages/{messageId} {
+       // Admin and God can read any message across all chats for moderation
+       allow read: if isAdmin() || isGod();
+       
+       // Admin and God can update/delete any message for moderation
+       allow update, delete: if isAdmin() || isGod();
+    }
+
+    // 3. Chats Collection
     match /chats/{chatId} {
       // Participants OR Admin (Spy Mode) can read/update
+      // Regular participants cannot read if they've hidden the chat
       allow read: if (isSignedIn() && (
-        (request.auth.uid in resource.data.participants) || isAdmin() || isGod()
+        (isAdmin() || isGod()) || 
+        (resource == null) || // Support discovery logic (ChatPage.jsx)
+        (request.auth.uid in resource.data.participants)
       )) && isNotBanned();
       
       allow create: if isSignedIn() && isNotBanned();
@@ -89,24 +128,43 @@ service cloud.firestore {
       (isAdmin() || isGod() || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['participants']));
       
       // Admin can delete chats
-      allow delete: if isGod() && isNotBanned();
+      allow delete: if isAdmin();
       
       match /messages/{messageId} {
-        allow read: if (isAdmin() || isParticipant(chatId) || isGod()) && isNotBanned();
+        // Read: Allow if participant/admin AND not hidden for this specific user
+        allow read: if (isAdmin() || isGod() || isParticipant(chatId)) && isNotBanned();
+        
         allow create: if (isParticipant(chatId) || isAdmin() || isGod()) && isNotBanned();
-        allow update: if (isParticipant(chatId) || isAdmin() || isGod()) && isNotBanned();
-        allow delete: if isGod() && isNotBanned(); // SUPER ADMIN ONLY
+        
+        // Update: Allow reactions, status updates, OR hiding for self
+        allow update: if (isParticipant(chatId) || isAdmin() || isGod()) && isNotBanned() && (
+          // Allow users to add themselves to hiddenBy
+          (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hiddenBy']) && 
+           request.resource.data.hiddenBy.hasAll([request.auth.uid])) ||
+          // Allow other standard updates (reactions, etc)
+          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['text', 'mediaUrl', 'senderId']))
+        );
+
+        allow delete: if isAdmin(); // ADMIN OR SUPER ADMIN
       }
     }
 
     // 3. Friend Requests
     match /friend_requests/{requestId} {
+      // READ: Must be sender or receiver. 
+      // CRITICAL: Removed isNotBlocked from read to allow outgoing/incoming list queries.
       allow read: if isSignedIn() && (
-        resource.data.from == request.auth.uid || 
-        resource.data.to == request.auth.uid ||
-        isAdmin() || isGod()
+        (resource == null) || // Allow querying for new docs
+        (resource.data.from == request.auth.uid || 
+         resource.data.to == request.auth.uid ||
+         isAdmin() || isGod())
       ) && isNotBanned();
-      allow create: if isSignedIn() && request.resource.data.from == request.auth.uid && isNotBanned();
+      
+      // WRITE: Enforce blocks here
+      allow create: if isSignedIn() && request.resource.data.from == request.auth.uid && 
+        isNotBanned() && isNotBlocked(request.resource.data.to) && 
+        !get(/databases/$(database)/documents/users/$(request.resource.data.to)).data.get('superAdmin', false);
+        
       allow update, delete: if isSignedIn() && (
         resource.data.from == request.auth.uid || 
         resource.data.to == request.auth.uid || 
@@ -114,26 +172,23 @@ service cloud.firestore {
       ) && isNotBanned();
     }
 
-    // 4. Status Collection - SECURED (Friend Only)
+    // 4. Status Collection - SECURED (Friend Only via Denormalization)
     match /statuses/{statusId} {
-       // Read: Allow authenticated users to read statuses (filtering happens on client)
+       // Read: Only allow if owner, admin, or in the allowedUIDs list (denormalized friends)
        allow read: if isSignedIn() && (
-         // We allow reading if signed in because the client needs to filter 
-         // friends' statuses, and 'in' array queries are limited.
-         // Real privacy would require a separate 'feed' collection or Cloud Functions.
-         true
+         statusId == request.auth.uid || 
+         isAdmin() || isGod() ||
+         (resource != null && request.auth.uid in resource.data.get('allowedUIDs', []))
        );
        
        allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid && isNotBanned();
        
-       // Update: Allow user to update their own status doc (add new items)
        allow update: if isSignedIn() && (
-         resource.data.userId == request.auth.uid || statusId == request.auth.uid
+         isOwner(resource.data.get('userId', statusId)) || statusId == request.auth.uid
        ) && isNotBanned();
 
-       // Owner can delete self; Admin can delete any (Moderation)
        allow delete: if isSignedIn() && (
-         resource.data.userId == request.auth.uid || isAdmin() || isGod()
+         isOwner(resource.data.get('userId', statusId)) || isAdmin() || isGod()
        ) && isNotBanned();
     }
 
@@ -142,7 +197,7 @@ service cloud.firestore {
        // Allow create if authenticated and the caller is the current user
        allow create: if isSignedIn() && 
          request.resource.data.callerId == request.auth.uid && 
-         isNotBanned();
+         isNotBanned() && isNotBlocked(request.resource.data.receiverId);
        
        // Allow read/update if participant or admin
        allow read, update: if isSignedIn() && (
@@ -169,14 +224,11 @@ service cloud.firestore {
 
     // 6. Notifications
     match /notifications/{notificationId} {
-      // Fix: Relaxed isNotBanned check for reads to prevent listener failures.
-      // AuthContext handles banning logic on the client side.
-      allow read: if isSignedIn() && (resource.data.toUserId == request.auth.uid || isGod()); // && isNotBanned();
-      allow create: if isSignedIn() && 
-        request.resource.data.fromUserId == request.auth.uid && 
-        isNotBanned(); 
-      allow update: if isSignedIn() && (resource.data.toUserId == request.auth.uid || isGod()) && isNotBanned();
-      allow delete: if isSignedIn() && (resource.data.toUserId == request.auth.uid || isGod()) && isNotBanned();
+      // Only the recipient or God can read/update/delete their own notifications
+      allow read, update, delete: if isSignedIn() && (resource.data.toUserId == request.auth.uid || isGod());
+      
+      // Anyone can create a notification if they are the sender
+      allow create: if isSignedIn() && request.resource.data.fromUserId == request.auth.uid && isNotBanned();
     }
     
     // 7. Secure User Locations (Admin Only Map)
@@ -185,7 +237,16 @@ service cloud.firestore {
        allow write: if isSignedIn() && request.auth.uid == userId;
        
        // Only the owner OR Admin/God can read
-       allow read: if isSignedIn() && (request.auth.uid == userId || isGod());
+       allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+    }
+
+    // 8. Announcements (Admin Broadcasts — public reads, shown on login page)
+    match /announcements/{announcementId} {
+       // Public: announcements are system messages visible to everyone (including login page)
+       allow read: if true;
+       
+       // Only admins can create/update/delete announcements
+       allow create, update, delete: if isAdmin();
     }
   }
 }

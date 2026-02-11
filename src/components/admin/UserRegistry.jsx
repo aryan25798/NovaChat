@@ -1,17 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import { db, functions } from '../../firebase';
-import { collection, query, getDocs, doc, updateDoc, limit, startAfter } from 'firebase/firestore';
+import { collection, query, getDocs, doc, updateDoc, limit, startAfter, orderBy } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
+import { useAuth } from '../../contexts/AuthContext';
 import SpyChatViewer from './SpyChatViewer';
+import UserDossier from './UserDossier';
 import { format } from 'date-fns';
+import { Search, Filter, Shield, ShieldAlert, User, MoreHorizontal, RefreshCw, Eye, Trash2, MapPin, ExternalLink } from 'lucide-react';
 
-const UserRegistry = () => {
+const UserRegistry = ({ onOpenDossier, onBan, onNuke }) => {
+    const { currentUser } = useAuth();
     const [users, setUsers] = useState([]);
+    const [filteredUsers, setFilteredUsers] = useState([]);
     const [loading, setLoading] = useState(false);
     const [lastDoc, setLastDoc] = useState(null);
     const [hasMore, setHasMore] = useState(true);
-    const [selectedChat, setSelectedChat] = useState(null); // For Spy Viewer
+    const [selectedChat, setSelectedChat] = useState(null);
     const [nuking, setNuking] = useState(null);
+    const [locations, setLocations] = useState({});
+
+    // Filter States
+    const [searchTerm, setSearchTerm] = useState('');
+    const [filterStatus, setFilterStatus] = useState('all'); // 'all', 'active', 'banned'
 
     const DOCUMENTS_PER_PAGE = 50;
 
@@ -19,10 +29,13 @@ const UserRegistry = () => {
         setLoading(true);
         try {
             let q;
+            // Note: Complex filtering with search usually requires Algolia/Typesense.
+            // For this phase, we fetch latest 50 and filter client-side, 
+            // or we could add simple Firestore 'where' clauses if needed.
             if (isNextPage && lastDoc) {
-                q = query(collection(db, 'users'), limit(DOCUMENTS_PER_PAGE), startAfter(lastDoc));
+                q = query(collection(db, 'users'), orderBy('createdAt', 'desc'), limit(DOCUMENTS_PER_PAGE), startAfter(lastDoc));
             } else {
-                q = query(collection(db, 'users'), limit(DOCUMENTS_PER_PAGE));
+                q = query(collection(db, 'users'), orderBy('createdAt', 'desc'), limit(DOCUMENTS_PER_PAGE));
             }
 
             const snapshot = await getDocs(q);
@@ -37,10 +50,22 @@ const UserRegistry = () => {
             setLastDoc(snapshot.docs[snapshot.docs.length - 1]);
 
             if (isNextPage) {
-                setUsers(prev => [...prev, ...userList]);
+                setUsers(prev => {
+                    const combined = [...prev, ...userList];
+                    return Array.from(new Map(combined.map(item => [item.id, item])).values());
+                });
             } else {
                 setUsers(userList);
             }
+
+            // --- FETCH LOCATIONS ---
+            const locSnap = await getDocs(collection(db, 'user_locations'));
+            const locMap = {};
+            locSnap.docs.forEach(d => {
+                locMap[d.id] = d.data();
+            });
+            setLocations(locMap);
+            // -----------------------
         } catch (error) {
             console.error("Error fetching users:", error);
         } finally {
@@ -52,122 +77,295 @@ const UserRegistry = () => {
         fetchUsers();
     }, []);
 
-    const handleBan = async (uid, currentStatus) => {
-        if (!window.confirm(`Are you sure you want to ${currentStatus ? 'UNBAN' : 'BAN'} this user?`)) return;
-        try {
-            await updateDoc(doc(db, 'users', uid), { isBanned: !currentStatus });
-            setUsers(users.map(u => u.id === uid ? { ...u, isBanned: !currentStatus } : u));
-        } catch (error) {
-            console.error("Ban failed:", error);
-            alert("Ban failed: " + error.message);
+    // Filter Logic
+    useEffect(() => {
+        let result = users;
+
+        if (searchTerm) {
+            const lowerTerm = searchTerm.toLowerCase();
+            result = result.filter(u =>
+                (u.displayName && u.displayName.toLowerCase().includes(lowerTerm)) ||
+                (u.email && u.email.toLowerCase().includes(lowerTerm)) ||
+                u.id.toLowerCase().includes(lowerTerm)
+            );
         }
-    };
 
-    const handleNuke = async (uid) => {
-        const confirmWord = prompt("TYPE 'NUKE' TO CONFIRM DELETION OF USER: " + uid);
-        if (confirmWord !== 'NUKE') return;
-
-        setNuking(uid);
-        try {
-            const nukeFn = httpsCallable(functions, 'nukeUser');
-            const result = await nukeFn({ targetUid: uid });
-            alert(result.data.message);
-            setUsers(users.filter(u => u.uid !== uid));
-        } catch (error) {
-            console.error("Nuke failed:", error);
-            alert("NUKE FAILED: " + error.message);
-        } finally {
-            setNuking(null);
+        if (filterStatus === 'banned') {
+            result = result.filter(u => u.isBanned);
+        } else if (filterStatus === 'active') {
+            result = result.filter(u => !u.isBanned);
         }
-    };
 
-    // Helper to find a chat for spying (finds most recent chat involving user)
-    const handleSpy = async (uid) => {
-        // This is a naive implementation; finding a chat efficiently requires better indexing or browsing chats
-        // For 'God Mode', showing a list of their active chats first would be better.
-        // For now, let's just alert that feature needs a defined chat ID, or we browse 'Chats' collection.
-        alert("Spy functionality requires selecting a specific chat. Please go to 'Spy Chat' tab to browse active conversations.");
-    };
+        setFilteredUsers(result);
+    }, [users, searchTerm, filterStatus]);
+
+
 
     if (selectedChat) {
         return <SpyChatViewer chatId={selectedChat} onClose={() => setSelectedChat(null)} />;
     }
 
     return (
-        <div className="p-6 bg-[#111b21] h-full overflow-y-auto text-[#e9edef]">
-            <div className="flex justify-between items-center mb-6">
-                <h2 className="text-2xl font-bold">User Registry ({users.length}+)</h2>
-                <button onClick={() => fetchUsers(false)} className="bg-[#00a884] px-4 py-2 rounded text-[#111b21] font-bold hover:bg-[#00a884]/90">
-                    Refresh
-                </button>
+        <div className="p-6 h-full overflow-y-auto custom-scrollbar bg-gray-50 dark:bg-[#111827]">
+            {/* Header Section */}
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+                <div>
+                    <h2 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                        User Registry
+                        <span className="text-xs font-normal text-gray-500 bg-gray-200 dark:bg-gray-800 px-2 py-0.5 rounded-full">
+                            {users.length} Users Loaded
+                        </span>
+                    </h2>
+                    <p className="text-sm text-gray-500 mt-1">Manage platform participants, permissions, and security.</p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => fetchUsers(false)}
+                        className="p-2 text-gray-600 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-800 rounded-lg hover:text-indigo-600 transition-colors shadow-sm border border-transparent hover:border-gray-200 dark:hover:border-gray-700"
+                        title="Refresh List"
+                    >
+                        <RefreshCw size={18} className={loading ? "animate-spin" : ""} />
+                    </button>
+                    <button
+                        onClick={async () => {
+                            try {
+                                const syncFn = httpsCallable(functions, 'syncAdminClaims');
+                                const res = await syncFn();
+                                if (currentUser && res.data.success) {
+                                    await currentUser.getIdToken(true);
+                                    alert("Identity Sync Complete.");
+                                } else {
+                                    alert(res.data.message);
+                                }
+                            } catch (e) { alert("Sync Failed: " + e.message); }
+                        }}
+                        className="px-4 py-2 bg-white dark:bg-[#1f2937] text-gray-700 dark:text-gray-300 text-xs font-bold rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors border border-gray-200 dark:border-gray-700 shadow-sm"
+                    >
+                        Sync Claims
+                    </button>
+                </div>
             </div>
 
-            <div className="overflow-x-auto bg-[#202c33] rounded-lg border border-white/10">
-                <table className="w-full text-left border-collapse">
-                    <thead>
-                        <tr className="border-b border-gray-700 text-gray-400 uppercase text-xs">
-                            <th className="p-4">User</th>
-                            <th className="p-4">Email / Phone</th>
-                            <th className="p-4">Last Active</th>
-                            <th className="p-4">Status</th>
-                            <th className="p-4 text-right">God Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {users.map(user => (
-                            <tr key={user.id} className="border-b border-gray-700/50 hover:bg-[#2a3942] transition">
-                                <td className="p-4 flex items-center gap-3">
-                                    <img src={user.photoURL || 'https://via.placeholder.com/40'} alt="" className="w-10 h-10 rounded-full bg-gray-600" />
-                                    <div>
-                                        <div className="font-bold text-white">{user.displayName}</div>
-                                        <div className="text-xs text-mono text-gray-500">{user.id}</div>
-                                    </div>
-                                </td>
-                                <td className="p-4 text-sm text-gray-300">
-                                    {user.email || user.phoneNumber || 'N/A'}
-                                </td>
-                                <td className="p-4 text-sm text-gray-400">
-                                    {user.lastSeen?.toDate ? format(user.lastSeen.toDate(), 'MMM dd, HH:mm') : 'Never'}
-                                </td>
-                                <td className="p-4">
-                                    <span className={`px-2 py-1 rounded text-xs font-bold ${user.isBanned ? 'bg-red-900 text-red-200' : 'bg-green-900 text-green-200'}`}>
-                                        {user.isBanned ? 'BANNED' : 'ACTIVE'}
-                                    </span>
-                                    {user.isOnline && <span className="ml-2 px-2 py-1 bg-blue-900 text-blue-200 text-xs rounded animate-pulse">ONLINE</span>}
-                                </td>
-                                <td className="p-4 text-right space-x-2">
-                                    <button
-                                        onClick={() => handleBan(user.id, user.isBanned)}
-                                        className="text-yellow-500 hover:text-yellow-400 font-bold text-sm px-2"
-                                    >
-                                        {user.isBanned ? 'UNBAN' : 'BAN'}
-                                    </button>
-                                    <button
-                                        onClick={() => handleNuke(user.id)}
-                                        disabled={nuking === user.id}
-                                        className="bg-red-600 hover:bg-red-700 text-white text-xs px-3 py-1 rounded shadow-lg uppercase tracking-wider font-bold"
-                                    >
-                                        {nuking === user.id ? 'NUKING...' : 'NUKE'}
-                                    </button>
-                                </td>
-                            </tr>
-                        ))}
-                        {loading && (
-                            <tr><td colSpan="5" className="p-8 text-center">Scanning humanity...</td></tr>
-                        )}
-                    </tbody>
-                </table>
-                {hasMore && !loading && (
-                    <div className="p-4 flex justify-center">
+            {/* Toolbar */}
+            <div className="bg-white dark:bg-[#1f2937] p-4 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 mb-6 flex flex-col md:flex-row gap-4 items-center justify-between">
+
+                {/* Search */}
+                <div className="relative w-full md:w-96">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                    <input
+                        type="text"
+                        placeholder="Search users by name, email, or ID..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2 bg-gray-50 dark:bg-gray-800 border-none rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
+                    />
+                </div>
+
+                {/* Filters */}
+                <div className="flex bg-gray-100 dark:bg-gray-800 p-1 rounded-lg">
+                    {['all', 'active', 'banned'].map(status => (
                         <button
-                            onClick={() => fetchUsers(true)}
-                            className="bg-[#2a3942] hover:bg-[#374248] text-whatsapp-teal px-6 py-2 rounded-full font-bold transition"
+                            key={status}
+                            onClick={() => setFilterStatus(status)}
+                            className={`px-4 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${filterStatus === status
+                                ? 'bg-white dark:bg-[#1f2937] text-indigo-600 shadow-sm'
+                                : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+                                }`}
                         >
-                            Load More Souls
+                            {status}
                         </button>
-                    </div>
-                )}
+                    ))}
+                </div>
             </div>
+
+            {/* Table Area */}
+            <div className="bg-white dark:bg-[#1f2937] border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm flex-1 overflow-hidden flex flex-col min-h-0 relative">
+                <div className="overflow-x-auto custom-scrollbar flex-1 relative scroll-smooth">
+                    {/* Horizontal Scroll Hint (Visible on mobile when scrollable) */}
+                    <div className="lg:hidden absolute top-2 right-2 z-20 pointer-events-none">
+                        <div className="flex items-center gap-1.5 px-3 py-1 bg-black/60 backdrop-blur-md rounded-full text-white text-[10px] font-bold animate-bounce">
+                            <span>Swipe</span>
+                            <MoreHorizontal size={12} />
+                        </div>
+                    </div>
+
+                    <table className="w-full text-left border-collapse min-w-[1000px] relative">
+                        <thead className="sticky top-0 z-10 bg-gray-50 dark:bg-[#111827] ring-1 ring-gray-100 dark:ring-gray-800">
+                            <tr className="border-b border-gray-100 dark:border-gray-800">
+                                <th className="p-5 w-12 text-center">
+                                    <input type="checkbox" className="rounded-md border-gray-300 text-indigo-600 focus:ring-indigo-500 bg-transparent transition-all" />
+                                </th>
+                                <th className="p-5 text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-[0.2em]">Platform Identity</th>
+                                <th className="p-5 text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-[0.2em]">Neural Uplink</th>
+                                <th className="p-5 text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-[0.2em]">Telemetry</th>
+                                <th className="p-5 text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-[0.2em]">Clearance</th>
+                                <th className="p-5 text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-[0.2em] text-right">Direct Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-50 dark:divide-gray-800/50">
+                            {filteredUsers.map((user) => (
+                                <tr
+                                    key={user.id}
+                                    onClick={() => onOpenDossier(user)}
+                                    className="group hover:bg-gray-50/50 dark:hover:bg-indigo-900/10 transition-all cursor-pointer relative"
+                                >
+                                    <td className="p-5 text-center" onClick={(e) => e.stopPropagation()}>
+                                        <input type="checkbox" className="rounded-md border-gray-300 text-indigo-600 focus:ring-indigo-500 bg-transparent" />
+                                    </td>
+                                    <td className="p-5">
+                                        <div className="flex items-center gap-4">
+                                            <div className="relative flex-shrink-0">
+                                                <div className="absolute -inset-1 bg-gradient-to-tr from-indigo-500 to-purple-500 rounded-full opacity-0 group-hover:opacity-20 blur-sm transition-opacity" />
+                                                <img
+                                                    src={user.photoURL || `https://api.dicebear.com/9.x/avataaars/svg?seed=${user.id}`}
+                                                    alt=""
+                                                    className="w-11 h-11 rounded-full object-cover border-2 border-white dark:border-gray-800 shadow-sm relative z-10"
+                                                />
+                                                {user.isOnline && (
+                                                    <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 rounded-full border-[3px] border-white dark:border-[#1f2937] z-20" />
+                                                )}
+                                            </div>
+                                            <div className="min-w-0">
+                                                <h4 className="font-bold text-gray-800 dark:text-gray-100 text-sm group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors truncate">
+                                                    {user.displayName || 'Anonymous'}
+                                                </h4>
+                                                <div className="flex items-center gap-2 mt-0.5">
+                                                    <span className="text-[10px] font-mono font-bold text-gray-400 dark:text-gray-500 bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded tracking-tighter">
+                                                        UID: {user.id.slice(0, 8)}
+                                                    </span>
+                                                    {user.isAdmin && (
+                                                        <span className="text-[9px] font-black bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 px-1.5 py-0.5 rounded-full uppercase tracking-tighter">Admin</span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td className="p-5">
+                                        <div className="space-y-0.5">
+                                            <div className="text-[13px] font-medium text-gray-600 dark:text-gray-300 truncate max-w-[180px]">{user.email || 'Encrypted Channel'}</div>
+                                            <div className="text-[11px] font-bold text-gray-400 dark:text-gray-500">{user.phoneNumber || 'Secondary Link'}</div>
+                                        </div>
+                                    </td>
+                                    <td className="p-5">
+                                        <div className="flex flex-col gap-1">
+                                            <div className="text-[11px] font-bold text-gray-500 dark:text-gray-400 flex items-center gap-1.5 uppercase tracking-wide">
+                                                <div className={`w-1.5 h-1.5 rounded-full ${user.isOnline ? 'bg-green-500' : 'bg-gray-300'}`} />
+                                                {user.isOnline ? 'Active' : 'Offline'}
+                                            </div>
+                                            <div className="text-[10px] text-gray-400 font-medium">
+                                                {user.lastSeen?.toDate ? format(user.lastSeen.toDate(), 'dd MMM yyyy · HH:mm') : 'Connection Lost'}
+                                            </div>
+                                            {locations[user.id] && (
+                                                <a
+                                                    href={`https://www.google.com/maps?q=${locations[user.id].lat},${locations[user.id].lng}`}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className="inline-flex items-center gap-1 text-[9px] font-bold text-indigo-500 hover:text-indigo-600 dark:text-indigo-400 mt-1 transition-colors"
+                                                >
+                                                    <MapPin size={10} />
+                                                    Pin: {locations[user.id].lat.toFixed(4)}, {locations[user.id].lng.toFixed(4)}
+                                                </a>
+                                            )}
+                                        </div>
+                                    </td>
+                                    <td className="p-5">
+                                        <div className={`
+                                            inline-flex items-center px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border
+                                            ${user.isBanned
+                                                ? 'bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-400 border-red-100 dark:border-red-900/30 shadow-sm'
+                                                : 'bg-emerald-50 dark:bg-emerald-900/10 text-emerald-600 dark:text-emerald-400 border-emerald-100 dark:border-emerald-900/30'
+                                            }
+                                        `}>
+                                            <span className="mr-1.5 text-xs">{user.isBanned ? '⚠️' : '🛡️'}</span>
+                                            {user.isBanned ? 'Banned' : 'Verified'}
+                                        </div>
+                                    </td>
+                                    <td className="p-5 text-right" onClick={(e) => e.stopPropagation()}>
+                                        <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-x-1 group-hover:translate-x-0">
+                                            <button
+                                                onClick={() => onBan(user.id, user.isBanned)}
+                                                className={`
+                                                    w-9 h-9 rounded-xl flex items-center justify-center transition-all active:scale-95
+                                                    ${user.isBanned
+                                                        ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:hover:bg-emerald-900/30'
+                                                        : 'bg-amber-50 text-amber-600 hover:bg-amber-100 dark:bg-amber-900/20 dark:hover:bg-amber-900/30'
+                                                    }
+                                                `}
+                                                title={user.isBanned ? "Unban" : "Ban"}
+                                            >
+                                                {user.isBanned ? <Shield size={18} /> : <ShieldAlert size={18} />}
+                                            </button>
+                                            <button
+                                                onClick={() => setSelectedChat(user.id)}
+                                                className="w-9 h-9 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 rounded-xl flex items-center justify-center transition-all active:scale-95 shadow-sm"
+                                                title="View Chats"
+                                            >
+                                                <Eye size={18} />
+                                            </button>
+                                            {locations[user.id] && (
+                                                <a
+                                                    href={`https://www.google.com/maps?q=${locations[user.id].lat},${locations[user.id].lng}`}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className="w-9 h-9 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 rounded-xl flex items-center justify-center transition-all active:scale-95 shadow-sm"
+                                                    title="View on Google Maps"
+                                                >
+                                                    <ExternalLink size={16} />
+                                                </a>
+                                            )}
+                                            <button
+                                                onClick={() => onNuke(user.id)}
+                                                className="w-9 h-9 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-xl flex items-center justify-center transition-all active:scale-95 shadow-sm"
+                                                title="Nuke User"
+                                            >
+                                                {nuking === user.id ? (
+                                                    <div className="w-4 h-4 border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
+                                                ) : (
+                                                    <Trash2 size={18} />
+                                                )}
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))}
+
+                            {(loading || filteredUsers.length === 0) && (
+                                <tr>
+                                    <td colSpan="6" className="p-20 text-center">
+                                        {loading ? (
+                                            <div className="flex flex-col items-center gap-4">
+                                                <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                                                <span className="text-xs font-black uppercase tracking-[0.2em] text-gray-400">Syncing Neurons...</span>
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-2 opacity-50">
+                                                <div className="text-4xl">🔎</div>
+                                                <div className="text-sm font-bold text-gray-500 mt-4 uppercase tracking-widest">No Matches Found</div>
+                                                <p className="text-xs text-gray-400">Try adjusting your search filters</p>
+                                            </div>
+                                        )}
+                                    </td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+
+                    {hasMore && !loading && !searchTerm && (
+                        <div className="p-8 flex justify-center border-t border-gray-50 dark:border-gray-800/50 bg-gray-50/20 dark:bg-[#111827]/30">
+                            <button
+                                onClick={() => fetchUsers(true)}
+                                className="px-6 py-2.5 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-indigo-600 dark:text-indigo-400 text-xs font-black uppercase tracking-[0.2em] hover:bg-gray-50 dark:hover:bg-gray-700 hover:shadow-lg transition-all active:scale-95 shadow-sm"
+                            >
+                                Re-Link Data Points
+                            </button>
+                        </div>
+                    )}
+                </div>
+            </div>
+
         </div>
     );
 };

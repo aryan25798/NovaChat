@@ -13,33 +13,34 @@ export default function ChatHeader({
     onBack,
     onShowInfo,
     onToggleSearch,
-    showSearch
+    showSearch,
+    onDeleteChat
 }) {
     const [showHeaderMenu, setShowHeaderMenu] = useState(false);
 
     return (
         <div className="h-[60px] md:h-[72px] px-2 md:px-6 flex justify-between items-center glass border-b border-border/30 z-20 shrink-0 sticky top-0 shadow-sm transition-all">
-            <div className="flex items-center gap-1 md:gap-4 cursor-pointer overflow-hidden flex-1 group" onClick={onShowInfo}>
+            <div className="flex items-center gap-1.5 md:gap-4 cursor-pointer overflow-hidden flex-1 group" onClick={onShowInfo}>
                 <button
-                    className="md:hidden text-text-2 hover:bg-surface-elevated active:bg-surface-elevated rounded-full shrink-0 transition-colors min-w-[40px] min-h-[40px] flex items-center justify-center -ml-2 mr-1"
+                    className="md:hidden text-text-2 hover:bg-surface-elevated active:bg-surface-elevated rounded-full shrink-0 transition-colors min-w-[36px] min-h-[36px] w-9 h-9 flex items-center justify-center -ml-1 mr-0.5"
                     onClick={(e) => { e.stopPropagation(); onBack(); }}
                 >
-                    <FaArrowLeft className="text-lg" />
+                    <FaArrowLeft className="text-base" />
                 </button>
-                <div className="relative">
+                <div className="relative shrink-0">
                     <Avatar
                         src={otherUser.photoURL}
                         alt={otherUser.displayName}
                         size="md"
-                        className="h-10 w-10 md:h-11 md:w-11 shrink-0 transition-transform group-hover:scale-105 shadow-sm"
+                        className="h-9 w-9 md:h-11 md:w-11 shrink-0 transition-transform group-hover:scale-105 shadow-sm"
                     />
                 </div>
                 <div className="flex flex-col justify-center min-w-0">
-                    <h3 className="font-semibold text-text-1 text-[15px] md:text-[16px] leading-snug truncate group-hover:text-primary transition-colors">
+                    <h3 className="font-semibold text-text-1 text-[14px] md:text-[16px] leading-tight truncate group-hover:text-primary transition-colors">
                         {otherUser.displayName}
                     </h3>
                     <p className={cn(
-                        "text-[11px] md:text-[12px] leading-tight truncate transition-colors max-w-[150px] md:max-w-none",
+                        "text-[10px] md:text-[12px] leading-tight truncate transition-colors max-w-[120px] xs:max-w-[150px] md:max-w-none",
                         presence?.state === 'online' ? "text-primary font-semibold" : "text-text-2"
                     )}>
                         {getStatusText()}
@@ -122,7 +123,12 @@ export default function ChatHeader({
                                 <div className="h-px bg-border/50 my-1 mx-2" />
                                 <button
                                     className="w-full text-left px-4 py-3 text-[14px] text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors font-medium"
-                                    onClick={() => setShowHeaderMenu(false)}
+                                    onClick={() => {
+                                        if (window.confirm("Are you sure you want to clear this chat history?")) {
+                                            onDeleteChat();
+                                            setShowHeaderMenu(false);
+                                        }
+                                    }}
                                 >
                                     Delete chat
                                 </button>

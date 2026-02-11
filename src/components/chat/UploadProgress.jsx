@@ -7,6 +7,19 @@ const UploadProgress = ({ uploads, onPause, onResume, onCancel, onClear }) => {
     const activeUploads = Object.values(uploads);
     const [minimized, setMinimized] = useState(false);
 
+    // Auto-clear logic for WhatsApp-like behavior
+    useEffect(() => {
+        const hasActive = activeUploads.some(u => u.status === 'uploading' || u.status === 'compressing' || u.status === 'paused');
+        const hasCompleted = activeUploads.some(u => u.status === 'completed');
+
+        if (hasCompleted && !hasActive) {
+            const timer = setTimeout(() => {
+                onClear();
+            }, 1500);
+            return () => clearTimeout(timer);
+        }
+    }, [uploads, onClear]);
+
     if (activeUploads.length === 0) return null;
 
     const totalProgress = activeUploads.reduce((acc, curr) => acc + curr.progress, 0) / activeUploads.length;

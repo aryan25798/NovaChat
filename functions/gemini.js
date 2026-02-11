@@ -1,13 +1,10 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
-const { defineString } = require('firebase-functions/params');
-
-// const GEMINI_API_KEY = defineString('GEMINI_API_KEY'); // Redundant if using secrets
 
 /**
  * Callable Function to securely generate AI responses.
- * Replaces client-side Gemini API calls.
+ * API key loaded from functions/.env (server-side only).
  */
-exports.generateAIResponse = onCall({ secrets: ["GEMINI_API_KEY"] }, async (request) => {
+exports.generateAIResponse = onCall(async (request) => {
     // 1. Auth Check
     if (!request.auth) {
         throw new HttpsError('unauthenticated', 'User must be logged in.');

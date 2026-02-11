@@ -31,11 +31,29 @@ export async function getSmartReplies(messages) {
 
     try {
         const response = await getGeminiResponse(prompt);
-        // Clean response if AI adds markdown blocks
-        const cleaned = response.replace(/```json|```/g, "").trim();
-        return JSON.parse(cleaned);
+        if (!response) return [];
+
+        // Find JSON array in the text (in case AI adds conversational filler outside triple backticks)
+        const jsonMatch = response.match(/\[.*\]/s);
+        if (jsonMatch) {
+            const cleaned = jsonMatch[0].trim();
+            return JSON.parse(cleaned);
+        }
+
+        // Fallback: strip markdown
+        const stripped = response.replace(/```json|```/g, "").trim();
+        if (stripped.startsWith("[") && stripped.endsWith("]")) {
+            return JSON.parse(stripped);
+        }
+
+        console.warn("AI response did not contain a valid JSON array:", response);
+        return [];
     } catch (e) {
-        console.error("Failed to parse smart replies", e);
+        if (e.code === 'MISSING_API_KEY') {
+            // Silently fail for smart replies if key is missing
+            return [];
+        }
+        console.error("Failed to generate or parse smart replies:", e);
         return [];
     }
 }

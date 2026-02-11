@@ -1,4 +1,9 @@
-import { auth, db } from "../firebase";
+import { auth, db, storage } from "../firebase";
+import {
+    ref,
+    uploadBytes,
+    getDownloadURL
+} from "firebase/storage";
 import {
     signInWithPopup,
     GoogleAuthProvider,
@@ -79,6 +84,23 @@ export const getUserProfile = async (uid) => {
         return docSnap.exists() ? docSnap.data() : null;
     } catch (error) {
         console.error("Get user failed:", error);
+        throw error;
+    }
+};
+
+export const uploadProfilePhoto = async (uid, file) => {
+    try {
+        const fileRef = ref(storage, `profiles/${uid}_${Date.now()}`);
+        await uploadBytes(fileRef, file);
+        const url = await getDownloadURL(fileRef);
+
+        await updateDoc(doc(db, "users", uid), {
+            photoURL: url
+        });
+
+        return url;
+    } catch (error) {
+        console.error("Photo upload failed:", error);
         throw error;
     }
 };

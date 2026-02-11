@@ -23,10 +23,17 @@ export function useCall() {
 
 const getIceServers = async () => {
     const apiKey = import.meta.env.VITE_METERED_API_KEY;
+    const fallbackStun = [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+        { urls: "stun:stun2.l.google.com:19302" },
+        { urls: "stun:stun.metered.ca:80" }
+    ];
+
     if (!apiKey) {
-        console.warn("VITE_METERED_API_KEY not found. Using fallback ICE servers.");
+        console.warn("VITE_METERED_API_KEY not found. Using partial fallback.");
         return [
-            { urls: "stun:stun.l.google.com:19302" },
+            ...fallbackStun,
             {
                 urls: import.meta.env.VITE_TURN_SERVER_URL || "turn:open-relay.metered.ca:443",
                 username: import.meta.env.VITE_TURN_SERVER_USER || "guest",
@@ -36,15 +43,21 @@ const getIceServers = async () => {
     }
 
     try {
-        const response = await fetch(`https://aryan89752.metered.live/api/v1/turn/credentials?apiKey=${apiKey}`);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
+
+        const response = await fetch(`https://aryan89752.metered.live/api/v1/turn/credentials?apiKey=${apiKey}`, {
+            signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
         if (!response.ok) throw new Error("Metered API failed");
         const iceServers = await response.json();
         return iceServers;
     } catch (error) {
-        console.warn("Failed to fetch TURN credentials from Metered.live, using fallback env config:", error);
-        // Fallback to static TURN config from .env if API fails
+        console.warn("RTCPeerConnection: Using fallback ICE due to error:", error.name === 'AbortError' ? 'Timeout' : error.message);
         return [
-            { urls: "stun:stun.l.google.com:19302" },
+            ...fallbackStun,
             {
                 urls: import.meta.env.VITE_TURN_SERVER_URL || "turn:open-relay.metered.ca:443",
                 username: import.meta.env.VITE_TURN_SERVER_USER || "guest",

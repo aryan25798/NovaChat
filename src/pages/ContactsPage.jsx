@@ -24,13 +24,8 @@ const ContactsPage = () => {
         const fetchUsers = async () => {
             if (!currentUser) return;
             try {
-                const querySnapshot = await getDocs(collection(db, "users"));
-                const users = [];
-                querySnapshot.forEach((doc) => {
-                    if (doc.id !== currentUser.uid) {
-                        users.push({ id: doc.id, ...doc.data() });
-                    }
-                });
+                const { searchUsers } = await import("../services/userService");
+                const users = await searchUsers("", currentUser.uid);
                 setContacts(users);
             } catch (error) {
                 console.error("Error fetching contacts:", error);
@@ -64,9 +59,9 @@ const ContactsPage = () => {
     );
 
     return (
-        <div className="flex flex-col h-full bg-surface md:max-w-2xl md:mx-auto md:border-x md:border-border relative shadow-sm">
+        <div className="flex flex-col h-full bg-surface relative shadow-sm max-w-full">
             {/* Header */}
-            <div className="bg-primary h-[70px] flex items-center px-4 gap-4 text-white shadow-md shrink-0 z-20">
+            <div className="bg-primary h-[85px] flex items-center px-6 gap-5 text-white shadow-lg shrink-0 z-20">
                 <Link to="/" className="text-xl hover:bg-white/10 p-2 rounded-full transition-colors">
                     <IoArrowBack />
                 </Link>

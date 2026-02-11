@@ -9,16 +9,12 @@ const SYSTEM_INSTRUCTION = `You are the Gemini AI Assistant in a WhatsApp Clone 
 
 export async function getGeminiResponse(message, history = []) {
     if (!GEMINI_API_KEY || GEMINI_API_KEY === "YOUR_API_KEY_HERE") {
-        console.warn("Gemini API Key missing. Please set VITE_GEMINI_API_KEY in .env");
-        return "I am Gemini, but my API key is missing. Please add VITE_GEMINI_API_KEY to your .env file to enable me.";
+        const error = new Error("Gemini API Key missing. Please set VITE_GEMINI_API_KEY in .env");
+        error.code = "MISSING_API_KEY";
+        throw error;
     }
 
     try {
-        // Convert local message format to Gemini format if needed, 
-        // or expect 'history' to be passed in correct format: { role: 'user' | 'model', parts: [{ text: ... }] }
-        // For simplicity, we'll assume the caller formats it or we just send the new message if history is complex to sync.
-
-        // Simple construct:
         const contents = [
             {
                 role: "user",
@@ -52,6 +48,6 @@ export async function getGeminiResponse(message, history = []) {
         }
     } catch (error) {
         console.error("Gemini API Error:", error);
-        return "Sorry, I'm having trouble connecting to Gemini right now. Error: " + error.message;
+        throw error; // Let caller decide how to handle
     }
 }

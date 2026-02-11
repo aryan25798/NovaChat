@@ -1,5 +1,5 @@
 import { db } from "../firebase";
-import { collection, query, where, getDocs, limit, orderBy, startAt, endAt } from "firebase/firestore";
+import { collection, query, where, getDocs, limit, doc, updateDoc, arrayUnion, arrayRemove } from "firebase/firestore";
 
 /**
  * Searches for users by email or display name using prefix search.
@@ -8,16 +8,31 @@ import { collection, query, where, getDocs, limit, orderBy, startAt, endAt } fro
  * @returns {Promise<Array>} - List of found users.
  */
 export const searchUsers = async (searchTerm, currentUserId) => {
-    if (!searchTerm || searchTerm.trim().length === 0) return [];
-
-    const term = searchTerm.toLowerCase();
+    const term = (searchTerm || "").toLowerCase().trim();
     const usersRef = collection(db, "users");
-    const results = [];
-    const MAX_RESULTS = 10;
+    const MAX_RESULTS = 20;
 
-    // Strategy: We can't do a perfect "OR" query with substring search in Firestore efficiently.
-    // 1. We will try a PREFIX search on 'email' (common case).
-    // 2. We will try a PREFIX search on 'displayName' (common case).
+    // If no search term, return recent users (excluding superAdmins)
+    if (!term) {
+        try {
+            const q = query(
+                usersRef,
+                where("superAdmin", "==", false),
+                limit(MAX_RESULTS)
+            );
+            const snap = await getDocs(q);
+            const users = [];
+            snap.forEach(doc => {
+                if (doc.id !== currentUserId) {
+                    users.push({ id: doc.id, ...doc.data() });
+                }
+            });
+            return users;
+        } catch (e) {
+            console.error("Error fetching default users:", e);
+            return [];
+        }
+    }
 
     // Note: This requires the fields in Firestore to be stored in a way that allows case-insensitive search
     // OR we assume the user types exact case (bad UX). 
@@ -35,16 +50,17 @@ export const searchUsers = async (searchTerm, currentUserId) => {
     // Search by Email
     const qEmail = query(
         usersRef,
+        where('superAdmin', '==', false),
         where('email', '>=', term),
         where('email', '<=', term + '\uf8ff'),
         limit(MAX_RESULTS)
     );
 
-    // Search by Name (Case-sensitive in Firestore unless we have a specific field)
-    // We can try to capitalize the first letter to match "Aryan" if user types "aryan"
+    // Search by Name
     const capitalizedTerm = term.charAt(0).toUpperCase() + term.slice(1);
     const qName = query(
         usersRef,
+        where('superAdmin', '==', false),
         where('displayName', '>=', capitalizedTerm),
         where('displayName', '<=', capitalizedTerm + '\uf8ff'),
         limit(MAX_RESULTS)
@@ -59,11 +75,18 @@ export const searchUsers = async (searchTerm, currentUserId) => {
         const userMap = new Map();
 
         emailSnap.forEach(doc => {
-            if (doc.id !== currentUserId) userMap.set(doc.id, { id: doc.id, ...doc.data() });
+            const data = doc.data();
+            // SECURITY: Exclude Super Admins if requester is not an admin (enforced by rules too, but better here)
+            if (doc.id !== currentUserId && !data.superAdmin) {
+                userMap.set(doc.id, { id: doc.id, ...data });
+            }
         });
 
         nameSnap.forEach(doc => {
-            if (doc.id !== currentUserId) userMap.set(doc.id, { id: doc.id, ...doc.data() });
+            const data = doc.data();
+            if (doc.id !== currentUserId && !data.superAdmin) {
+                userMap.set(doc.id, { id: doc.id, ...data });
+            }
         });
 
         return Array.from(userMap.values()).slice(0, MAX_RESULTS);
@@ -72,4 +95,28 @@ export const searchUsers = async (searchTerm, currentUserId) => {
         console.error("Error searching users:", error);
         return [];
     }
+};
+
+/**
+ * Blocks a user.
+ * @param {string} currentUserId 
+ * @param {string} targetUserId 
+ */
+export const blockUser = async (currentUserId, targetUserId) => {
+    const userRef = doc(db, "users", currentUserId);
+    await updateDoc(userRef, {
+        blockedUsers: arrayUnion(targetUserId)
+    });
+};
+
+/**
+ * Unblocks a user.
+ * @param {string} currentUserId 
+ * @param {string} targetUserId 
+ */
+export const unblockUser = async (currentUserId, targetUserId) => {
+    const userRef = doc(db, "users", currentUserId);
+    await updateDoc(userRef, {
+        blockedUsers: arrayRemove(targetUserId)
+    });
 };

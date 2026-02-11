@@ -74,6 +74,8 @@ export function AuthProvider({ children }) {
                     photoURL: user.photoURL,
                     createdAt: serverTimestamp(),
                     isOnline: true,
+                    superAdmin: false, // Ensure field exists for query filtering
+                    isAdmin: false,
                     locationSharingEnabled: true, // DEFAULT TO TRUE
                     metadata: {
                         creationTime: user.metadata.creationTime,
@@ -81,10 +83,15 @@ export function AuthProvider({ children }) {
                     }
                 });
             } else {
-                await updateDoc(userRef, {
+                const updateData = {
                     isOnline: true,
                     "metadata.lastSignInTime": user.metadata.lastSignInTime
-                });
+                };
+                // Patch existing users for query compatibility if flag is missing
+                if (userSnap.data().superAdmin === undefined) {
+                    updateData.superAdmin = false;
+                }
+                await updateDoc(userRef, updateData);
             }
             // We only call this if we know they enabled it, or we check inside
             updateUserLocation(user.uid);
@@ -122,12 +129,25 @@ export function AuthProvider({ children }) {
                     const unsubscribeUserDoc = onSnapshot(userRef, (docSnap) => {
                         if (docSnap.exists()) {
                             const userData = docSnap.data();
-                            if (userData.isBanned) {
-                                alert("Session Terminated: Your account has been banned by an administrator.");
+                            if (userData.isBanned || userData.deletionRequested) {
+                                const msg = userData.isBanned
+                                    ? "Session Terminated: Your account has been banned by an administrator."
+                                    : "Deletion Pending: Your request to delete this account is being processed by an administrator. You will be logged out now.";
+                                alert(msg);
                                 setCurrentUser(null);
                                 setLoading(false);
                                 signOut(auth);
                                 return;
+                            }
+
+                            // PATCH: Ensure superAdmin flag exists for query compatibility
+                            // This is a one-time fix for legacy users
+                            if (userData.superAdmin === undefined && !window._patched_superadmin) {
+                                window._patched_superadmin = true; // Prevent internal session spam
+                                updateDoc(userRef, { superAdmin: false }).catch(e => {
+                                    console.error("Auto-patch failed:", e);
+                                    window._patched_superadmin = false; // Retry on next event if failed
+                                });
                             }
                             // Update local state with latest profile data
                             setCurrentUser(prev => ({ ...prev, ...userData }));
@@ -182,7 +202,14 @@ export function AuthProvider({ children }) {
         loginWithGoogle,
         loginWithEmail,
         logout,
-        toggleLocationSharing
+        toggleLocationSharing,
+        deactivateAccount: async () => {
+            const { httpsCallable } = await import("firebase/functions");
+            const { functions } = await import("../firebase");
+            const deactivateFn = httpsCallable(functions, 'deactivateAccount');
+            await deactivateFn();
+            await logout();
+        }
     };
 
     return (

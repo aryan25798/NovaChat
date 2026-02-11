@@ -74,8 +74,11 @@ const StatusCreator = ({ onClose, onSuccess }) => {
             } else {
                 await postStatus(currentUser, mediaFile.type.startsWith('video') ? 'video' : 'image', mediaFile, caption);
             }
-            onSuccess();
-            onClose();
+            // Auto-dismissal and success feedback
+            setTimeout(() => {
+                onSuccess();
+                onClose();
+            }, 500);
         } catch (error) {
             console.error("Failed to post status:", error);
             alert("Failed to post status. Please try again.");

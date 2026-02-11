@@ -47,8 +47,8 @@ const Sidebar = () => {
             {/* Header */}
             {/* Header - Hidden on Mobile because of BottomNav */}
             <div className="hidden md:flex h-[75px] px-6 py-4 items-center justify-between glass border-b border-border/50 z-20 shrink-0">
-                <h1 className="text-2xl font-bold text-text-1 tracking-tight">Chats</h1>
-                <div className="flex gap-1 text-text-2 relative shrink-0">
+                <h1 className="text-3xl font-extrabold text-foreground tracking-tight py-2">Chats</h1>
+                <div className="flex gap-1.5 text-muted-foreground relative shrink-0">
                     <Link to="/status">
                         <Button variant="ghost" size="icon" className="rounded-full" title="Status">
                             <FiLoader className="w-5 h-5" />
@@ -75,45 +75,6 @@ const Sidebar = () => {
                         >
                             <FiMoreVertical className="w-5 h-5" />
                         </Button>
-
-                        {/* Dropdown Menu */}
-                        {showMenu && (
-                            <>
-                                <div className="fixed inset-0 z-30" onClick={() => setShowMenu(false)}></div>
-                                <div className="absolute top-12 right-0 w-56 bg-surface rounded-2xl shadow-premium-hover py-2 border border-border/50 z-50 animate-in fade-in zoom-in-95 duration-200 origin-top-right overflow-hidden">
-                                    <button
-                                        className="w-full text-left px-4 py-3 text-[14px] text-text-1 hover:bg-surface-elevated transition-colors font-medium"
-                                        onClick={() => {
-                                            setShowGroupModal(true);
-                                            setShowMenu(false);
-                                        }}
-                                    >
-                                        New group
-                                    </button>
-                                    <Link
-                                        to="/profile"
-                                        className="block w-full text-left px-4 py-3 text-[14px] text-text-1 hover:bg-surface-elevated transition-colors font-medium "
-                                        onClick={() => setShowMenu(false)}
-                                    >
-                                        Profile
-                                    </Link>
-                                    <Link
-                                        to="/settings"
-                                        className="block w-full text-left px-4 py-3 text-[14px] text-text-1 hover:bg-surface-elevated transition-colors font-medium"
-                                        onClick={() => setShowMenu(false)}
-                                    >
-                                        Settings
-                                    </Link>
-                                    <div className="h-px bg-border/50 my-1 mx-2" />
-                                    <button
-                                        className="w-full text-left px-4 py-3 text-[14px] text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors font-medium"
-                                        onClick={handleLogout}
-                                    >
-                                        Log out
-                                    </button>
-                                </div>
-                            </>
-                        )}
                     </div>
                 </div>
             </div>
@@ -121,7 +82,7 @@ const Sidebar = () => {
             {/* Mobile Header (Title) */}
             <div className="md:hidden h-14 px-4 flex items-center justify-between glass border-b border-border/50 shrink-0">
                 <h1 className="text-xl font-bold text-primary">Nova</h1>
-                <div className="flex gap-2">
+                <div className="flex gap-2 relative">
                     <Button variant="ghost" size="icon" className="rounded-full" title="Ask AI" onClick={handleCreateGeminiChat}>
                         <span className="text-lg">✨</span>
                     </Button>
@@ -135,6 +96,45 @@ const Sidebar = () => {
                     </Button>
                 </div>
             </div>
+
+            {/* Sidebar Dropdown Menu (Shared for Mobile and Desktop) */}
+            {showMenu && (
+                <>
+                    <div className="fixed inset-0 z-[100]" onClick={() => setShowMenu(false)}></div>
+                    <div className="absolute top-[65px] right-4 md:right-6 w-56 bg-surface rounded-2xl shadow-premium-hover py-2 border border-border/50 z-[101] animate-in fade-in zoom-in-95 duration-200 origin-top-right overflow-hidden">
+                        <button
+                            className="w-full text-left px-4 py-3 text-[14px] text-text-1 hover:bg-surface-elevated transition-colors font-medium"
+                            onClick={() => {
+                                setShowGroupModal(true);
+                                setShowMenu(false);
+                            }}
+                        >
+                            New group
+                        </button>
+                        <Link
+                            to="/profile"
+                            className="block w-full text-left px-4 py-3 text-[14px] text-text-1 hover:bg-surface-elevated transition-colors font-medium "
+                            onClick={() => setShowMenu(false)}
+                        >
+                            Profile
+                        </Link>
+                        <Link
+                            to="/settings"
+                            className="block w-full text-left px-4 py-3 text-[14px] text-text-1 hover:bg-surface-elevated transition-colors font-medium"
+                            onClick={() => setShowMenu(false)}
+                        >
+                            Settings
+                        </Link>
+                        <div className="h-px bg-border/50 my-1 mx-2" />
+                        <button
+                            className="w-full text-left px-4 py-3 text-[14px] text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors font-medium"
+                            onClick={handleLogout}
+                        >
+                            Log out
+                        </button>
+                    </div>
+                </>
+            )}
 
             {/* Search */}
             <div className="px-4 py-3 border-b border-border/30 bg-surface-elevated z-10 transition-all duration-300">

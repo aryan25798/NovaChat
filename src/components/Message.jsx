@@ -37,7 +37,7 @@ const Message = memo(({ message, chat, isOwn, onDelete, onReply, onReact, showBl
 
     const displayUrl = cachedUrl || message.mediaUrl;
 
-    if (message.deletedFor && message.deletedFor.includes(currentUser.uid)) {
+    if (message.hiddenBy && message.hiddenBy.includes(currentUser.uid)) {
         return null;
     }
 
@@ -138,7 +138,7 @@ const Message = memo(({ message, chat, isOwn, onDelete, onReply, onReact, showBl
             <div className={cn("flex w-full group/row", isOwn ? "justify-end" : "justify-start items-end")}>
                 {!isOwn && !chat?.isPrivate && message.senderId !== GEMINI_BOT_ID && showTail && (
                     <div className="mr-2 mb-1 shrink-0">
-                        <Avatar src={message.senderPhoto || "/default-avatar.png"} size="sm" />
+                        <Avatar src={message.senderPhoto || `https://api.dicebear.com/7.x/avataaars/svg?seed=${message.senderId}`} size="sm" />
                     </div>
                 )}
 

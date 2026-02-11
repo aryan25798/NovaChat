@@ -18,9 +18,12 @@ import {
     setDoc,
     limitToLast
 } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { ref, uploadBytes, getDownloadURL, uploadBytesResumable } from "firebase/storage";
 
 import { GEMINI_BOT_ID } from '../constants';
+
+// Official Gemini Logo
+const GEMINI_LOGO_URL = "https://uxwing.com/wp-content/themes/uxwing/download/brands-and-social-media/google-gemini-icon.png";
 
 // Constants
 export const CHATS_COLLECTION = "chats";
@@ -168,13 +171,42 @@ export const sendMessage = async (chatId, sender, text, replyTo = null) => {
     };
 
     try {
+        const chatRef = doc(db, "chats", chatId);
+        const chatSnap = await getDoc(chatRef);
+
+        // GHOST CHAT AUTO-CREATION
+        if (!chatSnap.exists()) {
+            // If it's a private chat (UID_UID format), we know the participants
+            const participants = chatId.split('_');
+            if (participants.length === 2 && participants.includes(sender.uid)) {
+                // Fetch other user info to denormalize
+                const otherUid = participants.find(uid => uid !== sender.uid);
+                const otherUserSnap = await getDoc(doc(db, "users", otherUid));
+                const otherUserData = otherUserSnap.exists() ? otherUserSnap.data() : { displayName: "User" };
+
+                await setDoc(chatRef, {
+                    id: chatId,
+                    participants,
+                    participantInfo: {
+                        [sender.uid]: { displayName: sender.displayName, photoURL: sender.photoURL },
+                        [otherUid]: { displayName: otherUserData.displayName, photoURL: otherUserData.photoURL }
+                    },
+                    type: 'private',
+                    createdAt: serverTimestamp(),
+                    lastMessage: { text, senderId: sender.uid, timestamp: new Date() },
+                    lastMessageTimestamp: serverTimestamp(),
+                    unreadCount: {
+                        [participants[0]]: participants[0] === sender.uid ? 0 : 1,
+                        [participants[1]]: participants[1] === sender.uid ? 0 : 1
+                    }
+                });
+            } else {
+                throw new Error("Cannot send message to non-existent chat.");
+            }
+        }
+
         const messagesRef = collection(db, "chats", chatId, "messages");
         await addDoc(messagesRef, messageData);
-
-        const chatRef = doc(db, "chats", chatId);
-
-        // Fetch chat data to find other participants to update unread counts
-        const chatSnap = await getDoc(chatRef);
         const chatData = chatSnap.data();
 
         const updates = {
@@ -197,8 +229,8 @@ export const sendMessage = async (chatId, sender, text, replyTo = null) => {
 
         await updateDoc(chatRef, updates);
 
-        // AI INTERCEPT (Client-Side Restoration) - REMOVED FOR SECURITY
-        // logic moved to Firebase Functions entirely.
+        // 🤖 GEMINI AUTO-REPLY: Handled securely by Firebase Functions
+        // See functions/index.js → onMessageCreated → handleGeminiReply
 
     } catch (error) {
         console.error("Error sending message:", error);
@@ -206,9 +238,6 @@ export const sendMessage = async (chatId, sender, text, replyTo = null) => {
     }
 };
 
-// Client-Side Gemini Handler (Restored for immediate fix)
-// Client-Side Gemini Handler Removed.
-// Logic is now handled securely in Firebase Functions (onMessageCreated trigger).
 
 
 export const createGeminiChat = async (currentUserId) => {
@@ -235,7 +264,7 @@ export const createGeminiChat = async (currentUserId) => {
             [currentUserId]: { role: 'user' },
             [GEMINI_BOT_ID]: {
                 displayName: "Gemini AI",
-                photoURL: "https://www.gstatic.com/lamda/images/favicon_v2_f8595537552554e2.svg",
+                photoURL: "https://uxwing.com/wp-content/themes/uxwing/download/brands-and-social-media/google-gemini-icon.png",
                 isGemini: true,
                 bio: "Official AI Assistant"
             }
@@ -260,7 +289,7 @@ export const createGeminiChat = async (currentUserId) => {
         if (!geminiSnap.exists()) {
             await setDoc(geminiRef, {
                 displayName: "Gemini AI",
-                photoURL: "https://www.gstatic.com/lamda/images/favicon_v2_f8595537552554e2.svg",
+                photoURL: "https://uxwing.com/wp-content/themes/uxwing/download/brands-and-social-media/google-gemini-icon.png",
                 email: "gemini@assistant.ai",
                 isGemini: true,
                 // isAdmin: true, // REMOVED: Client cannot set admin. Backend script should set this if needed.
@@ -380,21 +409,36 @@ export const clearChat = async (chatId, userId) => {
     }
 };
 
+/**
+ * Hides a chat from the user's view.
+ * Persists data for Admin auditing while removing it from the player's dashboard.
+ */
+export const hideChat = async (chatId, userId) => {
+    try {
+        const chatRef = doc(db, CHATS_COLLECTION, chatId);
+        await updateDoc(chatRef, {
+            hiddenBy: arrayUnion(userId)
+        });
+    } catch (error) {
+        console.error("Error hiding chat:", error);
+        throw error;
+    }
+};
+
 
 export const deleteMessage = async (chatId, messageId, deleteFor = 'everyone') => {
     const msgRef = doc(db, CHATS_COLLECTION, chatId, MESSAGES_COLLECTION, messageId);
     if (deleteFor === 'everyone') {
         await updateDoc(msgRef, {
             isSoftDeleted: true,
-            // CRITICAL: WE DO NOT CLEAR TEXT OR MEDIA URL so God Mode can still see it.
-            // The Frontend "Message.jsx" component is responsible for masking this data for normal users.
-            deletedFor: 'everyone',
+            // SECURITY: We preserve 'text' and 'mediaUrl' for Admin/Spy Mode auditing.
+            // The UI (Message.jsx) will mask these for normal users.
             deletedAt: serverTimestamp()
         });
     } else {
-        // Delete for me only - add user ID to a 'deletedForUsers' array
+        // Soft Delete for current user only
         await updateDoc(msgRef, {
-            deletedForUsers: arrayUnion(auth.currentUser.uid)
+            hiddenBy: arrayUnion(auth.currentUser.uid)
         });
     }
 };

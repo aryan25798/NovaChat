@@ -16,7 +16,7 @@ const NavRail = () => {
     ];
 
     return (
-        <div className="hidden md:flex flex-col items-center w-[72px] h-full bg-surface-elevated/80 backdrop-blur-xl border-r border-border/50 pt-8 pb-4 z-40 shrink-0 shadow-xl">
+        <div className="hidden md:flex flex-col items-center w-[76px] h-full bg-surface-elevated/95 backdrop-blur-2xl border-r border-border/50 pt-8 pb-4 z-40 shrink-0 shadow-[2px_0_10px_-2px_rgba(0,0,0,0.05)]">
             <Link to="/profile" className="mb-8 relative group">
                 <div className="absolute -inset-1 bg-gradient-to-br from-primary to-secondary rounded-full opacity-0 group-hover:opacity-20 blurtransition-opacity duration-300" />
                 <Avatar

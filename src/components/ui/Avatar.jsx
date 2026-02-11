@@ -20,19 +20,16 @@ const Avatar = React.forwardRef(({ className, src, alt, fallback, size = "md", .
             )}
             {...props}
         >
-            {src ? (
-                <img
-                    src={src}
-                    alt={alt}
-                    loading="lazy"
-                    decoding="async"
-                    className="aspect-square h-full w-full object-cover"
-                />
-            ) : (
-                <div className="flex h-full w-full items-center justify-center rounded-full bg-surface-elevated text-text-2 font-semibold uppercase">
-                    {fallback || alt?.slice(0, 1) || "?"}
-                </div>
-            )}
+            <img
+                src={src || `https://api.dicebear.com/7.x/avataaars/svg?seed=${alt || 'default'}`}
+                alt={alt}
+                loading="lazy"
+                decoding="async"
+                className="aspect-square h-full w-full object-cover"
+                onError={(e) => {
+                    if (src) e.target.src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${alt || 'default'}`;
+                }}
+            />
         </div>
     );
 });

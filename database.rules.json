@@ -1,9 +1,10 @@
 {
     "rules": {
-        ".read": "auth != null",
+        ".read": false,
+        ".write": false,
         "status": {
+            ".read": "auth != null",
             "$uid": {
-                ".read": "auth != null",
                 ".write": "auth != null && auth.uid === $uid"
             }
         },
@@ -11,8 +12,15 @@
             "$chatId": {
                 ".read": "auth != null",
                 "$uid": {
-                    ".write": "auth != null && auth.uid === $uid"
+                    ".write": "auth != null && auth.uid === $uid",
+                    ".validate": "newData.isBoolean()"
                 }
+            }
+        },
+        "rate_limits": {
+            "$uid": {
+                ".read": false,
+                ".write": false
             }
         }
     }

@@ -77,6 +77,11 @@ export default function UserManagementView({ users }) {
                                                 📍 {user.lastLoginLocation.lat.toFixed(4)}, {user.lastLoginLocation.lng.toFixed(4)}
                                             </small>
                                         )}
+                                        {user.deletionRequested && (
+                                            <span className="badge danger animate-pulse" style={{ fontSize: '10px', marginTop: '4px' }}>
+                                                ⚠️ DELETION REQUESTED
+                                            </span>
+                                        )}
                                     </div>
                                 </td>
                                 <td>
@@ -87,7 +92,14 @@ export default function UserManagementView({ users }) {
                                     >
                                         <FaBan style={{ color: user.isBanned ? '#ffbc00' : '#ef4444' }} />
                                     </button>
-                                    <button className="action-btn delete" onClick={() => handleDeleteUser(user.id)} title="Nuke User"><FaTrash /></button>
+                                    <button
+                                        className={`action-btn delete ${user.deletionRequested ? 'urgent-nuke' : ''}`}
+                                        onClick={() => handleDeleteUser(user.id)}
+                                        title="Nuke User"
+                                        style={user.deletionRequested ? { backgroundColor: '#ef4444', color: 'white' } : {}}
+                                    >
+                                        <FaTrash />
+                                    </button>
                                 </td>
                             </tr>
                         ))}

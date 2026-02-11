@@ -1,10 +1,9 @@
-import { db } from '../firebase';
+import { db, functions } from '../firebase';
 import {
     collection,
     onSnapshot,
     doc,
     deleteDoc,
-    updateDoc,
     getDocs,
     query,
     where,
@@ -12,6 +11,7 @@ import {
     orderBy,
     getDoc
 } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 
 // --- Statistics & Real-time Monitoring ---
 
@@ -57,9 +57,9 @@ export const subscribeToStatuses = (callback) => {
 
 export const toggleUserBan = async (userId, currentStatus) => {
     try {
-        await updateDoc(doc(db, "users", userId), {
-            isBanned: !currentStatus
-        });
+        // Use Cloud Function to set both Firestore field AND Custom Claim
+        const banUser = httpsCallable(functions, 'banUser');
+        await banUser({ targetUid: userId, isBanned: !currentStatus });
     } catch (error) {
         console.error("Error toggling ban:", error);
         throw error;
@@ -68,26 +68,9 @@ export const toggleUserBan = async (userId, currentStatus) => {
 
 export const deleteUserAndData = async (userId) => {
     try {
-        const batch = writeBatch(db);
-
-        // 1. Delete User Doc
-        const userRef = doc(db, "users", userId);
-        batch.delete(userRef);
-
-        // 2. Delete User Statuses
-        const statusQuery = query(collection(db, "statuses"), where("userId", "==", userId));
-        const statusSnap = await getDocs(statusQuery);
-        statusSnap.forEach(s => batch.delete(s.ref));
-
-        // 3. Delete chats where user is participant
-        // Note: This is aggressive. It deletes the chat for EVERYONE.
-        const chatQuery = query(collection(db, "chats"), where("participants", "array-contains", userId));
-        const chatsSnap = await getDocs(chatQuery);
-        chatsSnap.forEach(docSnap => {
-            batch.delete(docSnap.ref);
-        });
-
-        await batch.commit();
+        // Use Cloud Function for complete user deletion (auth + data + storage)
+        const nukeUser = httpsCallable(functions, 'nukeUser');
+        await nukeUser({ targetUid: userId });
     } catch (error) {
         console.error("Error deleting user:", error);
         throw error;
@@ -131,5 +114,5 @@ export const checkIsAdmin = async (userId) => {
 export const checkIsSuperAdmin = async (userId) => {
     if (!userId) return false;
     const userDoc = await getDoc(doc(db, "users", userId));
-    return userDoc.exists() && userDoc.data().isSuperAdmin === true;
+    return userDoc.exists() && userDoc.data().superAdmin === true;
 };

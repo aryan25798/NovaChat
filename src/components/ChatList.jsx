@@ -1,13 +1,36 @@
 import React, { useEffect, useState } from "react";
 import { ChatListSkeleton } from "./ui/Skeleton";
 import ChatListItem from "./ChatListItem";
-import { db } from "../firebase"; // Keeping for search fallback if needed, or move search to service
-import { collection, getDocs } from "firebase/firestore"; // For search
+import { db } from "../firebase";
 import { useAuth } from "../contexts/AuthContext";
 import { Avatar } from "./ui/Avatar";
 import { Link } from "react-router-dom";
 import { subscribeToUserChats } from "../services/chatListService";
 import { searchUsers } from "../services/userService";
+import { useFriend } from "../contexts/FriendContext";
+import { IoPersonAdd } from "react-icons/io5";
+
+const SearchAction = ({ userId }) => {
+    const { getFriendStatus, sendRequest } = useFriend();
+    const status = getFriendStatus(userId);
+
+    if (status === 'friend') return <span className="text-[10px] font-bold text-whatsapp-teal bg-whatsapp-teal/10 px-2 py-1 rounded">FRIEND</span>;
+    if (status === 'sent') return <span className="text-[10px] font-bold text-text-2 bg-muted px-2 py-1 rounded">SENT</span>;
+    if (status === 'received') return <span className="text-[10px] font-bold text-primary bg-primary/10 px-2 py-1 rounded">PENDING</span>;
+
+    return (
+        <button
+            onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                sendRequest(userId);
+            }}
+            className="p-2 bg-primary/10 text-primary rounded-full hover:bg-primary/20 transition-colors"
+        >
+            <IoPersonAdd className="w-4 h-4" />
+        </button>
+    );
+};
 
 const ChatList = ({ searchTerm }) => {
     const { currentUser } = useAuth();
@@ -20,11 +43,11 @@ const ChatList = ({ searchTerm }) => {
         if (!currentUser) return;
 
         const unsubscribe = subscribeToUserChats(currentUser.uid, (chatData) => {
-            // Filter out chats that were cleared after the last message
             const filteredChats = chatData.filter(chat => {
                 const clearedAt = chat.clearedBy?.[currentUser.uid]?.toDate?.() || 0;
                 const lastMsgTime = chat.lastMessageTimestamp?.toDate?.() || 0;
-                return lastMsgTime > clearedAt;
+                const isHidden = chat.hiddenBy?.includes(currentUser.uid);
+                return lastMsgTime > clearedAt && !isHidden;
             });
             setChats(filteredChats);
             setLoading(false);
@@ -33,7 +56,6 @@ const ChatList = ({ searchTerm }) => {
         return () => unsubscribe();
     }, [currentUser]);
 
-    // Handle Search
     useEffect(() => {
         const handleSearch = async () => {
             if (!searchTerm || !searchTerm.trim()) {
@@ -43,7 +65,6 @@ const ChatList = ({ searchTerm }) => {
             }
             setSearching(true);
             try {
-                // Optimized Search
                 const results = await searchUsers(searchTerm, currentUser.uid);
                 setSearchResults(results);
             } catch (e) {
@@ -51,7 +72,7 @@ const ChatList = ({ searchTerm }) => {
             }
         };
 
-        const timeout = setTimeout(handleSearch, 300); // Debounce
+        const timeout = setTimeout(handleSearch, 300);
         return () => clearTimeout(timeout);
     }, [searchTerm, currentUser]);
 
@@ -76,15 +97,19 @@ const ChatList = ({ searchTerm }) => {
             <div className="flex-1 overflow-y-auto custom-scrollbar">
                 <div className="p-2 text-xs font-semibold text-whatsapp-teal uppercase">Search Results</div>
                 {searchResults.map(user => (
-                    <Link to={`/c/${user.id}`} key={user.id} className="flex items-center gap-3 p-3 hover:bg-muted transition-colors cursor-pointer border-b border-border/50">
-                        <Avatar src={user.photoURL} alt={user.displayName} size="md" />
-                        <div className="flex-1 min-w-0 text-left">
-                            <h3 className="font-medium text-foreground truncate">{user.displayName}</h3>
-                            <p className="text-sm text-muted-foreground truncate">{user.email}</p>
+                    <div key={user.id} className="relative group border-b border-border/30 last:border-0 hover:bg-surface-elevated transition-colors">
+                        <Link to={`/c/${user.id}`} className="flex items-center gap-4 p-4 cursor-pointer">
+                            <Avatar src={user.photoURL} alt={user.displayName} size="lg" />
+                            <div className="flex-1 min-w-0 text-left">
+                                <h3 className="font-bold text-text-1 truncate text-[16px]">{user.displayName}</h3>
+                                <p className="text-sm text-text-2 truncate">{user.email}</p>
+                            </div>
+                        </Link>
+                        <div className="absolute right-4 top-1/2 -translate-y-1/2">
+                            <SearchAction userId={user.id} />
                         </div>
-                    </Link>
+                    </div>
                 ))}
-
             </div>
         );
     }

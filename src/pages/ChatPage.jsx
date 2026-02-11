@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { db } from "../firebase";
-import { doc, getDoc, collection, query, where, getDocs, limit } from "firebase/firestore";
+import { doc, getDoc, collection, query, where, getDocs, limit, onSnapshot } from "firebase/firestore";
 import ChatWindow from "../components/ChatWindow";
 
 const ChatPage = () => {
@@ -15,14 +15,27 @@ const ChatPage = () => {
     useEffect(() => {
         if (!id || !currentUser) return;
 
-        const fetchChat = async () => {
+        let unsubscribe = () => { };
+
+        const resolveChat = async () => {
             setLoading(true);
             try {
-                // 1. Try fetching as a Chat ID directly
-                let chatDoc = await getDoc(doc(db, "chats", id));
+                // Determine potential IDs
+                const directChatRef = doc(db, "chats", id);
+                const ghostId = [currentUser.uid, id].sort().join("_");
+                const ghostChatRef = doc(db, "chats", ghostId);
 
-                if (!chatDoc.exists()) {
-                    // 2. Try finding a private chat with this user ID
+                // Try finding a private chat with this user ID via query first (Best discovery)
+                const q = query(
+                    collection(db, "chats"),
+                    where("participants", "array-contains", currentUser.uid),
+                    where("type", "==", "private"),
+                    limit(50)
+                );
+                let targetRef = null;
+
+                // 1. Try finding a private chat with this user ID via query (already authorized)
+                try {
                     const q = query(
                         collection(db, "chats"),
                         where("participants", "array-contains", currentUser.uid),
@@ -30,40 +43,113 @@ const ChatPage = () => {
                         limit(50)
                     );
                     const qSnap = await getDocs(q);
-                    const existingChat = qSnap.docs.find(d => d.data().participants.includes(id));
+                    const existingChatDoc = qSnap.docs.find(d => {
+                        const parts = d.data().participants || [];
+                        return parts.includes(id);
+                    });
 
-                    if (existingChat) {
-                        setChat({ id: existingChat.id, ...existingChat.data() });
-                        setLoading(false);
-                        return;
+                    if (existingChatDoc) {
+                        targetRef = existingChatDoc.ref;
                     }
-
-                    // 3. Fallback: If it's a User ID, we might need to "create" a temporary chat object 
-                    // or redirect to contacts. For now, let's treat it as a ghost chat.
-                    const userSnap = await getDoc(doc(db, "users", id));
-                    if (userSnap.exists()) {
-                        setChat({
-                            id: [currentUser.uid, id].sort().join("_"),
-                            type: "private",
-                            participants: [currentUser.uid, id],
-                            participantInfo: {
-                                [id]: userSnap.data(),
-                                [currentUser.uid]: { displayName: currentUser.displayName, photoURL: currentUser.photoURL }
-                            },
-                            isGhost: true // Frontend can handle creating it on first message
-                        });
-                    }
-                } else {
-                    setChat({ id: chatDoc.id, ...chatDoc.data() });
+                } catch (e) {
+                    console.warn("Chat query error:", e);
                 }
+
+                // 2. If not found, check if 'id' is a valid target user for a ghost chat
+                if (!targetRef) {
+                    try {
+                        const userSnap = await getDoc(doc(db, "users", id));
+                        if (userSnap.exists()) {
+                            targetRef = ghostChatRef;
+                        } else {
+                            // If it's not a user, it might be a direct chat ID (e.g. group chat)
+                            targetRef = directChatRef;
+                        }
+                    } catch (e) {
+                        // If we can't even check the user, it might be a superAdmin or direct chat ID
+                        targetRef = directChatRef;
+                    }
+                }
+
+                if (!targetRef) {
+                    setChat(null);
+                    setLoading(false);
+                    return;
+                }
+
+                // Now listen to the target chat document (Real-time)
+                unsubscribe = onSnapshot(targetRef, async (docSnap) => {
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+
+                        // IDENTITY FIX: If participantInfo is missing, fetch it manually
+                        if (data.type === 'private' && !data.participantInfo) {
+                            const otherUid = data.participants?.find(uid => uid !== currentUser.uid);
+                            if (otherUid) {
+                                try {
+                                    const userSnap = await getDoc(doc(db, "users", otherUid));
+                                    if (userSnap.exists()) {
+                                        data.participantInfo = {
+                                            [otherUid]: userSnap.data(),
+                                            [currentUser.uid]: { displayName: currentUser.displayName, photoURL: currentUser.photoURL }
+                                        };
+                                        // Optional: Patch the document for efficiency next time
+                                        const { updateDoc } = await import("firebase/firestore");
+                                        updateDoc(docSnap.ref, { participantInfo: data.participantInfo }).catch(() => { });
+                                    }
+                                } catch (e) {
+                                    console.warn("Could not fetch missing participant info:", e);
+                                }
+                            }
+                        }
+
+                        // AUTO-UNHIDE: If user visits a hidden chat, unhide it for them
+                        if (data.hiddenBy?.includes(currentUser.uid)) {
+                            const { updateDoc, arrayRemove } = await import("firebase/firestore");
+                            await updateDoc(docSnap.ref, {
+                                hiddenBy: arrayRemove(currentUser.uid)
+                            });
+                        }
+                        setChat({ id: docSnap.id, ...data });
+                    } else if (targetRef.id === ghostChatRef.id) {
+                        // Only handle ghost state if we were specifically looking for this ghost chat
+                        try {
+                            const userSnap = await getDoc(doc(db, "users", id));
+                            if (userSnap.exists()) {
+                                setChat({
+                                    id: ghostId,
+                                    type: "private",
+                                    participants: [currentUser.uid, id],
+                                    participantInfo: {
+                                        [id]: userSnap.data(),
+                                        [currentUser.uid]: { displayName: currentUser.displayName, photoURL: currentUser.photoURL }
+                                    },
+                                    isGhost: true
+                                });
+                            } else {
+                                setChat(null);
+                            }
+                        } catch (e) {
+                            setChat(null);
+                        }
+                    } else {
+                        setChat(null);
+                    }
+                    setLoading(false);
+                }, (err) => {
+                    console.error("Chat listener error:", err);
+                    setChat(null); // Or set a permission denied state
+                    setLoading(false);
+                });
+
             } catch (error) {
-                console.error("Error fetching chat:", error);
-            } finally {
+                console.error("Critical error resolving chat:", error);
                 setLoading(false);
             }
         };
 
-        fetchChat();
+        resolveChat();
+        return () => unsubscribe();
     }, [id, currentUser]);
 
     if (loading) return (

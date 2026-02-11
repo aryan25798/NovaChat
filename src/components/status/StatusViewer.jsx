@@ -39,13 +39,19 @@ const StatusViewer = ({ statusGroup, onClose, allStatuses = [] }) => {
         }
     }, [currentIndex, currentGroup, currentUser]);
 
+    const videoRef = useRef(null);
+    const [duration, setDuration] = useState(5000);
+
     // Timer Logic
     useEffect(() => {
         if (!currentStatus || isPaused) return;
 
         setProgress(0);
-        let duration = 5000;
-        if (currentStatus.type === 'video') duration = 30000;
+        let currentDuration = 5000;
+        if (currentStatus.type === 'video') {
+            currentDuration = videoRef.current?.duration ? videoRef.current.duration * 1000 : 30000;
+        }
+        setDuration(currentDuration);
 
         const interval = 50;
         const timer = setInterval(() => {
@@ -54,12 +60,12 @@ const StatusViewer = ({ statusGroup, onClose, allStatuses = [] }) => {
                     handleNext();
                     return 0;
                 }
-                return prev + (100 / (duration / interval));
+                return prev + (100 / (currentDuration / interval));
             });
         }, interval);
 
         return () => clearInterval(timer);
-    }, [currentIndex, currentGroup, isPaused]);
+    }, [currentIndex, currentGroup, isPaused, currentStatus.type]);
 
     const handleNext = () => {
         if (currentIndex < currentGroup.statuses.length - 1) {
@@ -232,7 +238,14 @@ const StatusViewer = ({ statusGroup, onClose, allStatuses = [] }) => {
                                 {currentStatus.content}
                             </div>
                         ) : currentStatus.type === 'video' ? (
-                            <video src={currentStatus.content} className="max-h-full max-w-full object-contain" autoPlay={!isPaused} muted={muted} />
+                            <video
+                                ref={videoRef}
+                                src={currentStatus.content}
+                                className="max-h-full max-w-full object-contain"
+                                autoPlay={!isPaused}
+                                muted={muted}
+                                onLoadedMetadata={(e) => setDuration(e.target.duration * 1000)}
+                            />
                         ) : (
                             <img
                                 src={currentStatus.content}

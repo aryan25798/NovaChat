@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { db } from '../firebase';
 import { collection, query, onSnapshot, orderBy, doc, deleteDoc, writeBatch, getDocs, getDoc } from 'firebase/firestore';
 import { clearChat, toggleMuteChat } from '../services/chatService';
+import { blockUser, unblockUser } from '../services/userService';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from './ui/Button';
 import { Avatar } from './ui/Avatar';
@@ -111,6 +112,25 @@ export default function ContactInfoPanel({ user, chat, onClose, isOpen }) {
                 onClose();
             } catch (err) {
                 console.error("Error clearing chat:", err);
+            }
+        }
+    };
+
+    const isBlocked = currentUser?.blockedUsers?.includes(user?.uid);
+
+    const handleBlockToggle = async () => {
+        if (!user?.uid || !currentUser?.uid) return;
+        const action = isBlocked ? "unblock" : "block";
+        if (window.confirm(`Are you sure you want to ${action} this user?`)) {
+            try {
+                if (isBlocked) {
+                    await unblockUser(currentUser.uid, user.uid);
+                } else {
+                    await blockUser(currentUser.uid, user.uid);
+                }
+            } catch (err) {
+                console.error(`Failed to ${action} user:`, err);
+                alert(`Failed to ${action} user. Please try again.`);
             }
         }
     };
@@ -285,9 +305,16 @@ export default function ContactInfoPanel({ user, chat, onClose, isOpen }) {
                                         <span className="text-[15px] font-medium">Clear Chat</span>
                                     </button>
 
-                                    <button className="w-full flex items-center gap-4 p-4 hover:bg-red-500/10 transition-colors text-red-500 group" onClick={handleDeleteChat}>
+                                    <button className="w-full flex items-center gap-4 p-4 hover:bg-red-500/10 transition-colors text-red-500 group" onClick={handleBlockToggle}>
                                         <div className="w-8 h-8 rounded-full bg-red-500/10 flex items-center justify-center group-hover:bg-red-500 group-hover:text-white transition-colors">
                                             <FaBan />
+                                        </div>
+                                        <span className="text-[15px] font-medium">{isBlocked ? 'Unblock User' : 'Block User'}</span>
+                                    </button>
+
+                                    <button className="w-full flex items-center gap-4 p-4 hover:bg-red-500/10 transition-colors text-red-500 group" onClick={handleDeleteChat}>
+                                        <div className="w-8 h-8 rounded-full bg-red-500/10 flex items-center justify-center group-hover:bg-red-500 group-hover:text-white transition-colors">
+                                            <FaTrash />
                                         </div>
                                         <span className="text-[15px] font-medium">Delete Chat</span>
                                     </button>
