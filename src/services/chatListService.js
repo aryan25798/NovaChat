@@ -13,14 +13,14 @@ import {
 } from "firebase/firestore";
 import { listenerManager } from "../utils/ListenerManager";
 
-export const subscribeToUserChats = (userId, callback) => {
+export const subscribeToUserChats = (userId, callback, limitCount = 30) => {
     if (!userId) return () => { };
 
     const q = query(
         collection(db, "chats"),
         where("participants", "array-contains", userId),
         orderBy("lastMessageTimestamp", "desc"),
-        limit(20)
+        limit(limitCount)
     );
 
     const listenerKey = `chats-${userId}`;

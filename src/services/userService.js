@@ -12,20 +12,20 @@ export const searchUsers = async (searchTerm, currentUserId) => {
     const usersRef = collection(db, "users");
     const MAX_RESULTS = 20;
 
-    // If no search term, return recent users (excluding superAdmins)
+    // If no search term, return recent users
     if (!term) {
         try {
             const q = query(
                 usersRef,
                 where("superAdmin", "==", false),
-                where("isAdmin", "==", false),
                 limit(MAX_RESULTS)
             );
             const snap = await getDocs(q);
             const users = [];
             snap.forEach(doc => {
-                if (doc.id !== currentUserId) {
-                    users.push({ id: doc.id, ...doc.data() });
+                const data = doc.data();
+                if (doc.id !== currentUserId && !data.isAdmin) {
+                    users.push({ id: doc.id, ...data });
                 }
             });
             return users;
@@ -35,37 +35,25 @@ export const searchUsers = async (searchTerm, currentUserId) => {
         }
     }
 
-    // Note: This requires the fields in Firestore to be stored in a way that allows case-insensitive search
-    // OR we assume the user types exact case (bad UX). 
-    // Best practice: Store 'searchableName' and 'searchableEmail' in lowercase.
-    // For now, we will assume standard storage and try a "best effort" with >= and <= 
-    // However, since we can't change the DB schema easily without a migration script,
-    // we will stick to the "client-side filtering of limited results" if the dataset was small,
-    // BUT the audit said this is critical.
+    // STRATEGY: Use `searchableName` (lowercase) for a single name query.
+    // This replaces 3 case-variant displayName queries with 1.
+    // Admin filtering is done client-side (trivial for ≤20 results).
 
-    // OPTION A (Correct Scalable Way):
-    // Use `where('email', '>=', term).where('email', '<=', term + '\uf8ff')`
-    // This only works if `term` matches the case in DB. 
-    // We will assume emails are stored lowercased (standard practice).
-
-    // Search by Email
+    // Query 1: Search by Email (emails are always stored lowercase)
     const qEmail = query(
         usersRef,
         where('superAdmin', '==', false),
-        where('isAdmin', '==', false),
         where('email', '>=', term),
         where('email', '<=', term + '\uf8ff'),
         limit(MAX_RESULTS)
     );
 
-    // Search by Name
-    const capitalizedTerm = term.charAt(0).toUpperCase() + term.slice(1);
+    // Query 2: Search by searchableName (single lowercase query)
     const qName = query(
         usersRef,
         where('superAdmin', '==', false),
-        where('isAdmin', '==', false),
-        where('displayName', '>=', capitalizedTerm),
-        where('displayName', '<=', capitalizedTerm + '\uf8ff'),
+        where('searchableName', '>=', term),
+        where('searchableName', '<=', term + '\uf8ff'),
         limit(MAX_RESULTS)
     );
 
@@ -77,21 +65,18 @@ export const searchUsers = async (searchTerm, currentUserId) => {
 
         const userMap = new Map();
 
-        emailSnap.forEach(doc => {
-            const data = doc.data();
-            // SECURITY: Exclude Super Admins if requester is not an admin (enforced by rules too, but better here)
-            // SECURITY: Exclude Admins/Super Admins from search
-            if (doc.id !== currentUserId && !data.superAdmin && !data.isAdmin) {
-                userMap.set(doc.id, { id: doc.id, ...data });
-            }
-        });
+        // Client-side filtering: exclude self, admins, superAdmins
+        const addToMap = (snap) => {
+            snap.forEach(doc => {
+                const data = doc.data();
+                if (doc.id !== currentUserId && !data.superAdmin && !data.isAdmin) {
+                    userMap.set(doc.id, { id: doc.id, ...data });
+                }
+            });
+        };
 
-        nameSnap.forEach(doc => {
-            const data = doc.data();
-            if (doc.id !== currentUserId && !data.superAdmin) {
-                userMap.set(doc.id, { id: doc.id, ...data });
-            }
-        });
+        addToMap(emailSnap);
+        addToMap(nameSnap);
 
         return Array.from(userMap.values()).slice(0, MAX_RESULTS);
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { IoArrowBack, IoCheckmark, IoClose, IoPersonAdd } from "react-icons/io5";
 import { BsTelephone, BsCameraVideo, BsSearch } from "react-icons/bs";
@@ -20,8 +20,9 @@ const ContactsPage = () => {
     const [loading, setLoading] = useState(false);
     const [view, setView] = useState('all'); // 'all' or 'requests'
 
-    // Fetch full user details for friend IDs
+    // Fetch full user details for friend IDs — with cache to avoid N+1 refetch
     const [friendUsers, setFriendUsers] = useState([]);
+    const friendCacheRef = useRef(new Map());
 
     useEffect(() => {
         const fetchFriendDetails = async () => {
@@ -29,18 +30,30 @@ const ContactsPage = () => {
                 setFriendUsers([]);
                 return;
             }
-            // In a real app, you might have a better way to bulk fetch or cache these
-            // For now, we fetch them to ensure we have latest names/photos
-            // Optimization: Filter out friends whose details we already have if cached
-            try {
-                const { doc, getDoc } = await import("firebase/firestore");
-                const promises = friends.map(fid => getDoc(doc(db, "users", fid)));
-                const snaps = await Promise.all(promises);
-                const users = snaps.map(s => s.exists() ? { id: s.id, ...s.data() } : null).filter(Boolean);
-                setFriendUsers(users);
-            } catch (e) {
-                console.error("Error fetching friend details:", e);
+
+            // Only fetch friends not already in cache
+            const uncachedIds = friends.filter(fid => !friendCacheRef.current.has(fid));
+
+            if (uncachedIds.length > 0) {
+                try {
+                    const { doc, getDoc } = await import("firebase/firestore");
+                    const promises = uncachedIds.map(fid => getDoc(doc(db, "users", fid)));
+                    const results = await Promise.allSettled(promises);
+                    results.forEach(result => {
+                        if (result.status === 'fulfilled' && result.value.exists()) {
+                            friendCacheRef.current.set(result.value.id, { id: result.value.id, ...result.value.data() });
+                        }
+                    });
+                } catch (e) {
+                    console.error("Error fetching friend details:", e);
+                }
             }
+
+            // Build the final list from cache, keeping order consistent with friends array
+            const users = friends
+                .map(fid => friendCacheRef.current.get(fid))
+                .filter(Boolean);
+            setFriendUsers(users);
         };
         fetchFriendDetails();
     }, [friends]);

@@ -126,4 +126,4 @@ const MessageBubble = ({ message, isOwn, onMediaClick }) => {
     );
 };
 
-export default MessageBubble;
+export default React.memo(MessageBubble);

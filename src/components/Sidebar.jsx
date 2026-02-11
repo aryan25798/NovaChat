@@ -13,7 +13,7 @@ import { logoutUser } from "../services/authService";
 import { createGeminiChat } from "../services/chatService";
 import { cn } from "../lib/utils";
 
-const Sidebar = () => {
+const Sidebar = React.memo(() => {
     const { currentUser } = useAuth();
     const { theme, toggleTheme } = useTheme();
     const [showMenu, setShowMenu] = useState(false);
@@ -166,6 +166,6 @@ const Sidebar = () => {
             )}
         </div>
     );
-};
+});
 
 export default Sidebar;

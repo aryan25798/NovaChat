@@ -32,6 +32,7 @@ export const loginWithGoogle = async () => {
             await setDoc(userRef, {
                 uid: user.uid,
                 displayName: user.displayName,
+                searchableName: (user.displayName || '').toLowerCase(),
                 email: user.email,
                 photoURL: user.photoURL,
                 createdAt: serverTimestamp(),
@@ -71,6 +72,10 @@ export const logoutUser = async (uid) => {
 
 export const updateUserProfile = async (uid, data) => {
     try {
+        // Auto-sync searchableName when displayName changes
+        if (data.displayName) {
+            data.searchableName = data.displayName.toLowerCase();
+        }
         await updateDoc(doc(db, "users", uid), data);
     } catch (error) {
         console.error("Profile update failed:", error);

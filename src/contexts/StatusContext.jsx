@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react";
 import { useAuth } from "./AuthContext";
 import { useFriend } from "./FriendContext";
 import { subscribeToMyStatus, subscribeToRecentUpdates, postStatus } from "../services/statusService";
@@ -56,16 +56,16 @@ export function StatusProvider({ children }) {
         return unsubscribe;
     }, [currentUser, friends]);
 
-    const addStatus = async (type, content, background = null) => {
+    const addStatus = useCallback(async (type, content, background = null) => {
         if (!currentUser) return;
         await postStatus(currentUser, type, content, "", background);
-    };
+    }, [currentUser]);
 
-    const value = {
+    const value = useMemo(() => ({
         statuses,
         myStatus,
         addStatus
-    };
+    }), [statuses, myStatus, addStatus]);
 
     return (
         <StatusContext.Provider value={value}>

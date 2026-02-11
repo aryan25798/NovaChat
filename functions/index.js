@@ -333,7 +333,7 @@ exports.onMessageCreated = onDocumentCreated("chats/{chatId}/messages/{messageId
 
 // Helper for Gemini
 async function handleGeminiReply(chatId, userText, senderName) {
-    const GEMINI_API_KEY = "AIzaSyDCSe4ebltWTpK3tt2tW5EP9BOpwnH0PuQ"; // Hardcoded for reliability as requested
+    const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // Set via: firebase functions:secrets:set GEMINI_API_KEY
 
     if (!GEMINI_API_KEY) {
         logger.warn("Skipping Gemini Reply: No API Key configured.");

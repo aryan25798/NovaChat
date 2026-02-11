@@ -20,14 +20,53 @@ export function MessageList({
     // Auto-scroll to bottom when new messages arrive
     useEffect(() => {
         if (messages.length > 0 && virtuosoRef.current) {
-            const lastMessage = messages[messages.length - 1];
-            // If the last message is from the current user, or we are already near bottom, scroll to bottom
             // Virtuoso handles 'followOutput' automatically but we trigger it here for initial load consistency
             setTimeout(() => {
                 virtuosoRef.current?.scrollToIndex({ index: messages.length - 1, align: "end", behavior: "smooth" });
             }, 100);
         }
     }, [messages.length]);
+
+    // Stable context for Virtuoso to avoid regenerating itemContent
+    const contextValue = React.useMemo(() => ({
+        messages,
+        chat,
+        currentUser,
+        handleDelete,
+        handleReact,
+        setReplyTo,
+        inputRef,
+        onMediaClick
+    }), [messages, chat, currentUser, handleDelete, handleReact, setReplyTo, inputRef, onMediaClick]);
+
+    const itemContent = React.useCallback((index, msg, ctx) => {
+        // Safe access in case messages array is manipulated during render
+        if (!msg) return null;
+
+        const { messages, chat, currentUser, handleDelete, handleReact, setReplyTo, inputRef, onMediaClick } = ctx;
+        const nextMsg = index < messages.length - 1 ? messages[index + 1] : null;
+        const showTail = !nextMsg || nextMsg.senderId !== msg.senderId;
+
+        return (
+            <div className="px-4 md:px-[8%] lg:px-[12%] py-0.5">
+                <Message
+                    key={msg.id}
+                    message={msg}
+                    chat={chat}
+                    isOwn={msg.senderId === currentUser.uid}
+                    showTail={showTail}
+                    onDelete={handleDelete}
+                    onReact={handleReact}
+                    onReply={(m) => {
+                        setReplyTo(m);
+                        inputRef.current?.focus();
+                    }}
+                    onMediaClick={onMediaClick}
+                    showBlueTicks={true}
+                />
+            </div>
+        );
+    }, []);
 
     if (loading) {
         return (
@@ -49,36 +88,11 @@ export function MessageList({
                 ref={virtuosoRef}
                 style={{ height: "100%", width: "100%" }}
                 data={messages}
+                context={contextValue}
+                itemContent={itemContent}
                 initialTopMostItemIndex={messages.length - 1} // Start at bottom
                 followOutput={"smooth"} // Auto-scroll behavior
                 alignToBottom={true} // Stick to bottom on load
-                itemContent={(index, msg) => {
-                    // Safe access in case messages array is manipulated during render
-                    if (!msg) return null;
-
-                    const nextMsg = index < messages.length - 1 ? messages[index + 1] : null;
-                    const showTail = !nextMsg || nextMsg.senderId !== msg.senderId;
-
-                    return (
-                        <div className="px-4 md:px-[8%] lg:px-[12%] py-0.5">
-                            <Message
-                                key={msg.id}
-                                message={msg}
-                                chat={chat}
-                                isOwn={msg.senderId === currentUser.uid}
-                                showTail={showTail}
-                                onDelete={handleDelete}
-                                onReact={handleReact}
-                                onReply={(m) => {
-                                    setReplyTo(m);
-                                    inputRef.current?.focus();
-                                }}
-                                onMediaClick={onMediaClick}
-                                showBlueTicks={true}
-                            />
-                        </div>
-                    );
-                }}
             />
         </div>
     );

@@ -122,7 +122,7 @@ export function FriendProvider({ children }) {
         return "none";
     }, [friends, outgoingRequests, incomingRequests]);
 
-    const value = {
+    const value = React.useMemo(() => ({
         friends,
         incomingRequests,
         outgoingRequests,
@@ -134,7 +134,8 @@ export function FriendProvider({ children }) {
         getFriendStatus,
         loading,
         actionLoading
-    };
+    }), [friends, incomingRequests, outgoingRequests, sendRequest, cancelRequest,
+        acceptRequest, rejectRequest, unfriend, getFriendStatus, loading, actionLoading]);
 
     return (
         <FriendContext.Provider value={value}>

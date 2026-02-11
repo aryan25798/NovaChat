@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef, useMemo } from 'react';
 import { storage } from '../firebase';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { v4 as uuidv4 } from 'uuid';
@@ -172,7 +172,7 @@ export const FileUploadProvider = ({ children }) => {
         }
     }, []);
 
-    const value = {
+    const value = useMemo(() => ({
         uploads,
         startUpload,
         pauseUpload,
@@ -180,7 +180,7 @@ export const FileUploadProvider = ({ children }) => {
         cancelUpload,
         clearCompleted,
         removeUpload
-    };
+    }), [uploads, startUpload, pauseUpload, resumeUpload, cancelUpload, clearCompleted, removeUpload]);
 
     return (
         <FileUploadContext.Provider value={value}>

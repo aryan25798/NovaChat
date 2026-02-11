@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { FaTimes, FaSearch, FaVideo, FaPhone, FaEllipsisV } from "react-icons/fa";
 import { GEMINI_BOT_ID } from "../constants";
 
@@ -32,6 +32,10 @@ export default function ChatWindow({ chat, setChat }) {
     const [showSearch, setShowSearch] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
     const [loading, setLoading] = useState(false);
+    const [isSending, setIsSending] = useState(false);
+    const [messageLimit, setMessageLimit] = useState(50);
+    const [hasMoreMessages, setHasMoreMessages] = useState(true);
+    const [serverResults, setServerResults] = useState([]);
 
     // Media Gallery State
     const [activeMediaMessage, setActiveMediaMessage] = useState(null);
@@ -60,16 +64,16 @@ export default function ChatWindow({ chat, setChat }) {
     }
 
     // Handlers
-    const scrollToBottom = () => {
+    const scrollToBottom = useCallback(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    };
+    }, []);
 
-    const handleBack = () => {
+    const handleBack = useCallback(() => {
         if (setChat) setChat(null);
         navigate('/');
-    };
+    }, [setChat, navigate]);
 
-    const handleInputChange = (e) => {
+    const handleInputChange = useCallback((e) => {
         setNewMessage(e.target.value);
         if (!chat?.id || !currentUser?.uid) return;
         setTypingStatus(chat.id, currentUser.uid, true);
@@ -77,11 +81,10 @@ export default function ChatWindow({ chat, setChat }) {
         typingTimeoutRef.current = setTimeout(() => {
             setTypingStatus(chat.id, currentUser.uid, false);
         }, 3000);
-    };
+    }, [chat?.id, currentUser?.uid]);
 
-    const [isSending, setIsSending] = useState(false);
 
-    const handleSendMessage = async (e) => {
+    const handleSendMessage = useCallback(async (e) => {
         if (e) e.preventDefault();
         if ((newMessage.trim() === "" && !replyTo) || isSending) return;
 
@@ -116,13 +119,13 @@ export default function ChatWindow({ chat, setChat }) {
         } finally {
             setIsSending(false);
         }
-    };
+    }, [newMessage, replyTo, isSending, chat?.id, chat?.type, currentUser]);
 
     const { startUpload } = useFileUpload();
 
     // ... (existing code)
 
-    const handleFileUpload = async (e) => {
+    const handleFileUpload = useCallback(async (e) => {
         const file = e.target.files[0];
         if (!file) return;
 
@@ -147,17 +150,9 @@ export default function ChatWindow({ chat, setChat }) {
         } catch (error) {
             console.error("Failed to start upload:", error);
         }
-    };
+    }, [chat?.id, currentUser, startUpload]);
 
-    const handleDelete = React.useCallback(async (msgId, deleteFor) => {
-        await deleteMessage(chat.id, msgId, deleteFor);
-    }, [chat?.id]);
-
-    const handleReact = React.useCallback(async (msgId, emoji) => {
-        await addReaction(chat.id, msgId, emoji, currentUser.uid);
-    }, [chat?.id, currentUser.uid]);
-
-    const handleDeleteChat = async () => {
+    const handleDeleteChat = useCallback(async () => {
         try {
             // First, hide the chat itself (removes from list)
             await hideChat(chat.id, currentUser.uid);
@@ -168,10 +163,16 @@ export default function ChatWindow({ chat, setChat }) {
         } catch (err) {
             console.error("Failed to clear/hide chat", err);
         }
-    };
+    }, [chat?.id, currentUser?.uid, setChat, navigate]);
 
-    const [messageLimit, setMessageLimit] = useState(50);
-    const [hasMoreMessages, setHasMoreMessages] = useState(true);
+    const handleDelete = useCallback(async (msgId, deleteFor) => {
+        await deleteMessage(chat.id, msgId, deleteFor);
+    }, [chat?.id]);
+
+    const handleReact = useCallback(async (msgId, emoji) => {
+        await addReaction(chat.id, msgId, emoji, currentUser.uid);
+    }, [chat?.id, currentUser?.uid]);
+
 
     // ... (handlers)
 
@@ -288,15 +289,13 @@ export default function ChatWindow({ chat, setChat }) {
         );
     }
 
-    const [serverResults, setServerResults] = useState([]);
-
-    const handleServerSearch = async () => {
+    const handleServerSearch = useCallback(async () => {
         if (!searchQuery) return;
         setLoading(true);
         const results = await searchMessages(chat.id, searchQuery);
         setServerResults(results);
         setLoading(false);
-    };
+    }, [searchQuery, chat?.id]);
 
     // Reset server results when search query is cleared
     useEffect(() => {
@@ -378,6 +377,9 @@ export default function ChatWindow({ chat, setChat }) {
     const friendStatus = otherUser.uid ? getFriendStatus(otherUser.uid) : 'none';
     const canMessage = otherUser.isGroup || friendStatus === 'friend' || otherUser.isGemini;
 
+    const handleShowInfo = useCallback(() => setShowContactInfo(true), []);
+    const handleToggleSearch = useCallback(() => setShowSearch(prev => !prev), []);
+
     return (
         <div className="flex flex-col h-full bg-background relative overflow-hidden">
             {/* Background Pattern Layer */}
@@ -390,8 +392,8 @@ export default function ChatWindow({ chat, setChat }) {
                 startCall={startCall}
                 chat={chat}
                 onBack={handleBack}
-                onShowInfo={() => setShowContactInfo(true)}
-                onToggleSearch={() => setShowSearch(!showSearch)}
+                onShowInfo={handleShowInfo}
+                onToggleSearch={handleToggleSearch}
                 showSearch={showSearch}
                 onDeleteChat={handleDeleteChat}
                 canMessage={canMessage}

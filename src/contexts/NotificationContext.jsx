@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
+import React, { createContext, useContext, useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { getMessagingInstance, db } from '../firebase';
 import { getToken, onMessage } from 'firebase/messaging';
 import { doc, updateDoc, arrayUnion, getDoc } from 'firebase/firestore';
@@ -130,18 +130,20 @@ export function NotificationProvider({ children }) {
         return () => unsubscribe();
     }, [currentUser]);
 
-    const markAsRead = async (id) => {
+    const markAsRead = useCallback(async (id) => {
         await markNotificationAsRead(id);
-    };
+    }, []);
+
+    const value = useMemo(() => ({
+        token,
+        notifications,
+        unreadCount,
+        markAsRead,
+        requestPermission
+    }), [token, notifications, unreadCount, markAsRead, requestPermission]);
 
     return (
-        <NotificationContext.Provider value={{
-            token,
-            notifications,
-            unreadCount,
-            markAsRead,
-            requestPermission
-        }}>
+        <NotificationContext.Provider value={value}>
             {children}
         </NotificationContext.Provider>
     );

@@ -9,11 +9,11 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { cacheMedia, getCachedMedia } from '../utils/mediaCache';
 import MessageBubble from './chat/MessageBubble';
 
+const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "👏"];
+
 const Message = memo(({ message, chat, isOwn, onDelete, onReply, onReact, onMediaClick, showBlueTicks, showTail }) => {
     const [showMenu, setShowMenu] = useState(false);
     const { currentUser } = useAuth();
-
-    const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "👏"];
 
     if (message.hiddenBy && message.hiddenBy.includes(currentUser.uid)) {
         return null;
@@ -64,10 +64,7 @@ const Message = memo(({ message, chat, isOwn, onDelete, onReply, onReact, onMedi
     const reactionCount = Object.keys(message.reactions || {}).length;
 
     return (
-        <motion.div
-            initial={{ opacity: 0, y: 10, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={{ duration: 0.2, ease: "easeOut" }}
+        <div
             id={`msg-${message.id}`}
             className={cn(
                 "flex flex-col w-full relative mb-1",
@@ -238,7 +235,7 @@ const Message = memo(({ message, chat, isOwn, onDelete, onReply, onReact, onMedi
                     </AnimatePresence>
                 </div>
             </div>
-        </motion.div>
+        </div>
     );
 });
 

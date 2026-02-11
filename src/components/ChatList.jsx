@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { ChatListSkeleton } from "./ui/Skeleton";
 import ChatListItem from "./ChatListItem";
 import { db } from "../firebase";
@@ -10,7 +10,7 @@ import { searchUsers } from "../services/userService";
 import { useFriend } from "../contexts/FriendContext";
 import { IoPersonAdd } from "react-icons/io5";
 
-const SearchAction = ({ userId }) => {
+const SearchAction = React.memo(({ userId }) => {
     const { getFriendStatus, sendRequest } = useFriend();
     const status = getFriendStatus(userId);
 
@@ -30,9 +30,9 @@ const SearchAction = ({ userId }) => {
             <IoPersonAdd className="w-4 h-4" />
         </button>
     );
-};
+});
 
-const ChatList = ({ searchTerm }) => {
+const ChatList = React.memo(({ searchTerm }) => {
     const { currentUser } = useAuth();
     const [chats, setChats] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -55,6 +55,18 @@ const ChatList = ({ searchTerm }) => {
 
         return () => unsubscribe();
     }, [currentUser]);
+
+    // Filter existing chats locally by search term
+    const filteredChats = useMemo(() => {
+        if (!searchTerm || !searchTerm.trim()) return chats;
+        const lowerTerm = searchTerm.toLowerCase().trim();
+        return chats.filter(chat => {
+            // Match against chat name or participant names
+            const chatName = (chat.name || chat.chatName || '').toLowerCase();
+            const participantNames = (chat.participantNames || []).map(n => (n || '').toLowerCase());
+            return chatName.includes(lowerTerm) || participantNames.some(n => n.includes(lowerTerm));
+        });
+    }, [chats, searchTerm]);
 
     useEffect(() => {
         const handleSearch = async () => {
@@ -89,27 +101,44 @@ const ChatList = ({ searchTerm }) => {
         );
     }
 
-    if (searching) {
-        if (searchResults.length === 0) {
-            return <div className="p-4 text-center text-muted-foreground">No users found.</div>;
-        }
+    // When searching: show filtered existing chats + global search results
+    if (searching || (searchTerm && searchTerm.trim())) {
         return (
             <div className="flex-1 overflow-y-auto custom-scrollbar">
-                <div className="p-2 text-xs font-semibold text-whatsapp-teal uppercase">Search Results</div>
-                {searchResults.map(user => (
-                    <div key={user.id} className="relative group border-b border-border/30 last:border-0 hover:bg-surface-elevated transition-colors">
-                        <Link to={`/c/${user.id}`} className="flex items-center gap-4 p-4 cursor-pointer">
-                            <Avatar src={user.photoURL} alt={user.displayName} size="lg" />
-                            <div className="flex-1 min-w-0 text-left">
-                                <h3 className="font-bold text-text-1 truncate text-[16px]">{user.displayName}</h3>
-                                <p className="text-sm text-text-2 truncate">{user.email}</p>
+                {/* Show filtered existing chats first */}
+                {filteredChats.length > 0 && (
+                    <>
+                        <div className="p-2 text-xs font-semibold text-muted-foreground uppercase">Chats</div>
+                        {filteredChats.map((chat) => (
+                            <ChatListItem key={chat.id} chat={chat} currentUserId={currentUser.uid} />
+                        ))}
+                    </>
+                )}
+
+                {/* Then show global search results */}
+                {searchResults.length > 0 && (
+                    <>
+                        <div className="p-2 text-xs font-semibold text-whatsapp-teal uppercase">People</div>
+                        {searchResults.map(user => (
+                            <div key={user.id} className="relative group border-b border-border/30 last:border-0 hover:bg-surface-elevated transition-colors">
+                                <Link to={`/c/${user.id}`} className="flex items-center gap-4 p-4 cursor-pointer">
+                                    <Avatar src={user.photoURL} alt={user.displayName} size="lg" />
+                                    <div className="flex-1 min-w-0 text-left">
+                                        <h3 className="font-bold text-text-1 truncate text-[16px]">{user.displayName}</h3>
+                                        <p className="text-sm text-text-2 truncate">{user.email}</p>
+                                    </div>
+                                </Link>
+                                <div className="absolute right-4 top-1/2 -translate-y-1/2">
+                                    <SearchAction userId={user.id} />
+                                </div>
                             </div>
-                        </Link>
-                        <div className="absolute right-4 top-1/2 -translate-y-1/2">
-                            <SearchAction userId={user.id} />
-                        </div>
-                    </div>
-                ))}
+                        ))}
+                    </>
+                )}
+
+                {filteredChats.length === 0 && searchResults.length === 0 && (
+                    <div className="p-4 text-center text-muted-foreground">No results found.</div>
+                )}
             </div>
         );
     }
@@ -121,6 +150,6 @@ const ChatList = ({ searchTerm }) => {
             ))}
         </div>
     );
-};
+});
 
 export default ChatList;

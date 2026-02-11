@@ -1,4 +1,4 @@
-import React, { useContext, useState, useEffect, useRef } from "react";
+import React, { useContext, useState, useEffect, useRef, useCallback } from "react";
 import { auth, googleProvider, db } from "../firebase";
 import { signInWithPopup, getRedirectResult, signOut, onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
 import { doc, setDoc, getDoc, serverTimestamp, updateDoc, onSnapshot, enableNetwork } from "firebase/firestore";
@@ -110,7 +110,7 @@ export function AuthProvider({ children }) {
         }
     };
 
-    async function loginWithGoogle() {
+    const loginWithGoogle = useCallback(async function () {
         try {
             // Re-enable Firestore network before sign-in
             try {
@@ -138,9 +138,9 @@ export function AuthProvider({ children }) {
             // If message is null (e.g. cancelled-popup-request), silently ignore
             return null;
         }
-    }
+    }, []);
 
-    async function loginWithEmail(email, password) {
+    const loginWithEmail = useCallback(async function (email, password) {
         try {
             try {
                 await enableNetwork(db);
@@ -158,7 +158,7 @@ export function AuthProvider({ children }) {
             friendlyError.code = error.code;
             throw friendlyError;
         }
-    }
+    }, []);
 
     async function logout() {
         return logoutWithTimeout(async () => {
@@ -226,6 +226,7 @@ export function AuthProvider({ children }) {
                         await setDoc(userRef, {
                             uid: user.uid,
                             displayName: user.displayName,
+                            searchableName: (user.displayName || '').toLowerCase(),
                             email: user.email,
                             photoURL: user.photoURL,
                             createdAt: serverTimestamp(),

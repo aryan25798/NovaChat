@@ -390,11 +390,13 @@ export function CallProvider({ children }) {
         }
     };
 
+    const value = React.useMemo(() => ({
+        callState, startCall, answerCall, endCall,
+        localVideoRef, remoteVideoRef
+    }), [callState, startCall, answerCall, endCall, localVideoRef, remoteVideoRef]);
+
     return (
-        <CallContext.Provider value={{
-            callState, startCall, answerCall, endCall,
-            localVideoRef, remoteVideoRef
-        }}>
+        <CallContext.Provider value={value}>
             {children}
             {callState && (
                 <CallOverlay

@@ -5,6 +5,7 @@ import {
     serverTimestamp, increment, arrayUnion, writeBatch, deleteField, limit, limitToLast // added limit/limitToLast
 } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
+import { listenerManager } from "../utils/ListenerManager";
 
 import { GEMINI_BOT_ID } from '../constants';
 
@@ -25,13 +26,15 @@ export const MESSAGES_COLLECTION = "messages";
 export const subscribeToMessages = (chatId, currentUserId, callback, updateReadStatus = true, limitCount = 50) => {
     if (!chatId) return () => { };
 
+    const listenerKey = `messages-${chatId}`;
+
     const q = query(
         collection(db, CHATS_COLLECTION, chatId, MESSAGES_COLLECTION),
         orderBy("timestamp", "asc"),
         limitToLast(limitCount)
     );
 
-    return onSnapshot(q, (snapshot) => {
+    const unsubscribe = onSnapshot(q, (snapshot) => {
         const messages = snapshot.docs.map(doc => ({
             id: doc.id,
             ...doc.data()
@@ -46,8 +49,14 @@ export const subscribeToMessages = (chatId, currentUserId, callback, updateReadS
             markMessagesAsDelivered(chatId, currentUserId, snapshot.docs);
         }
     }, (error) => {
-        console.error("Error subscribing to messages:", error);
+        listenerManager.handleListenerError(error, `Messages-${chatId}`);
     });
+
+    listenerManager.subscribe(listenerKey, unsubscribe);
+
+    return () => {
+        listenerManager.unsubscribe(listenerKey);
+    };
 };
 
 /**
@@ -61,6 +70,9 @@ const markMessagesAsRead = async (chatId, currentUserId, messageDocs) => {
         const data = d.data();
         return !data.read && data.senderId !== currentUserId;
     });
+
+    // OPTIMIZATION: Return early if nothing to update
+    if (unreadMsgs.length === 0) return;
 
     // Resetting count and marking messages as read should be ATOMIC to prevent sync issues.
     const batch = writeBatch(db);

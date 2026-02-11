@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useRef } from "react";
+import React, { createContext, useContext, useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { rtdb, auth, db } from "../firebase";
 import { ref, onValue, onDisconnect, set, serverTimestamp as rtdbServerTimestamp } from "firebase/database";
 import { doc, updateDoc, serverTimestamp as firestoreServerTimestamp } from "firebase/firestore"; // Sync to Firestore for querying
@@ -17,7 +17,7 @@ export function PresenceProvider({ children }) {
     const [activeChatId, setActiveChatId] = useState(null);
 
     // Update active chat in RTDB for notification suppression
-    const updateActiveChat = (chatId) => {
+    const updateActiveChat = useCallback((chatId) => {
         setActiveChatId(chatId);
         if (currentUser) {
             const userStatusDatabaseRef = ref(rtdb, '/status/' + currentUser.uid);
@@ -27,7 +27,7 @@ export function PresenceProvider({ children }) {
                 activeChatId: chatId || null
             }).catch(e => console.debug("Active chat sync fail:", e));
         }
-    };
+    }, [currentUser]);
 
     // Activity tracking to prevent "Online" when user is idle for too long?
     // For now, let's keep it simple: If the tab is open and connected, they are Online.
@@ -52,15 +52,16 @@ export function PresenceProvider({ children }) {
         const connectedRef = ref(rtdb, '.info/connected');
         const listenerKey = `presence-${currentUser.uid}`;
 
-        // HEARTBEAT LOGIC: Update Firestore location timestamp every 3 minutes
+        // HEARTBEAT LOGIC: Update Firestore location timestamp every 5 minutes
         // This ensures the "Freshness Filter" on the map doesn't hide active users.
+        // OPTIMIZATION: Skip when tab is hidden to reduce Firestore writes
         const heartbeatInterval = setInterval(() => {
-            if (auth.currentUser) {
+            if (auth.currentUser && document.visibilityState === 'visible') {
                 updateDoc(doc(db, "user_locations", currentUser.uid), {
                     timestamp: firestoreServerTimestamp()
                 }).catch(e => console.debug("Heartbeat fail:", e));
             }
-        }, 180000); // 3 minutes
+        }, 300000); // 5 minutes (reduced from 3 min for cost savings)
 
         const unsubscribe = onValue(connectedRef, async (snapshot) => {
             if (snapshot.val() === false) {
@@ -106,7 +107,7 @@ export function PresenceProvider({ children }) {
 
 
     // Real-time hook for a specific user's presence
-    const getUserPresence = (userId, callback) => {
+    const getUserPresence = useCallback((userId, callback) => {
         if (!userId) return () => { };
 
         const userStatusRef = ref(rtdb, '/status/' + userId);
@@ -116,10 +117,14 @@ export function PresenceProvider({ children }) {
         });
 
         return unsubscribe;
-    };
+    }, []);
+
+    const value = useMemo(() => ({
+        getUserPresence, updateActiveChat, activeChatId
+    }), [getUserPresence, updateActiveChat, activeChatId]);
 
     return (
-        <PresenceContext.Provider value={{ getUserPresence, updateActiveChat, activeChatId }}>
+        <PresenceContext.Provider value={value}>
             {children}
         </PresenceContext.Provider>
     );
