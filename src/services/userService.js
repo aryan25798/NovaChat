@@ -151,13 +151,14 @@ export const getUsersByIds = async (userIds) => {
  * @param {string} currentUserId - The ID of the current user to exclude.
  * @returns {Promise<Object>} - { users: Array, lastDoc: Object }
  */
-export const getPagedUsers = async (lastDoc = null, pageSize = 20, currentUserId = null) => {
+export const getPagedUsers = async (lastDoc = null, pageSize = 15, currentUserId = null) => {
     try {
         let q = query(
             collection(db, "users"),
             where("superAdmin", "==", false),
+            where("isAdmin", "==", false), // Move more filtering to server
             orderBy("displayName"),
-            limit(pageSize)
+            limit(pageSize + 5) // Fetch slightly more to account for self-filtering
         );
 
         if (lastDoc) {
@@ -165,16 +166,10 @@ export const getPagedUsers = async (lastDoc = null, pageSize = 20, currentUserId
         }
 
         const snapshot = await getDocs(q);
-        // Filter superAdmins, Admins, AND Current User in memory
         const users = snapshot.docs
             .map(doc => ({ id: doc.id, ...doc.data() }))
-            .filter(u => {
-                // exclude self
-                if (currentUserId && u.id === currentUserId) return false;
-                // exclude super admin and admins
-                if (u.superAdmin === true || u.isAdmin === true) return false;
-                return true;
-            });
+            .filter(u => u.id !== currentUserId) // Only filter self in memory
+            .slice(0, pageSize); // Ensure we return exact page size
 
         return {
             users,
