@@ -43,13 +43,20 @@ export default function ChatWindow({ chat, setChat }) {
 
     const { currentUser } = useAuth();
     const { startCall } = useCall();
-    const { getUserPresence } = usePresence();
+    const { getUserPresence, updateActiveChat } = usePresence(); // Added updateActiveChat
     const navigate = useNavigate();
-
 
     const messagesEndRef = useRef(null);
     const inputRef = useRef(null);
     const typingTimeoutRef = useRef(null);
+
+    // Active Chat Reporting (Fix for Notification Suppression)
+    useEffect(() => {
+        if (chat?.id) {
+            updateActiveChat(chat.id);
+        }
+        return () => updateActiveChat(null);
+    }, [chat?.id, updateActiveChat]);
 
 
 

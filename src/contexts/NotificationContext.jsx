@@ -3,6 +3,7 @@ import { getMessagingInstance, db } from '../firebase';
 import { getToken, onMessage } from 'firebase/messaging';
 import { doc, updateDoc, arrayUnion, getDoc } from 'firebase/firestore';
 import { useAuth } from './AuthContext';
+import { PresenceContext } from './PresenceContext'; // Import Context directly to avoid circular dep if needed, or use usePresence but check for circular
 import { subscribeToNotifications, markNotificationAsRead } from '../services/notificationService';
 import { toast } from 'react-hot-toast';
 
@@ -83,6 +84,8 @@ export function NotificationProvider({ children }) {
     }, [currentUser?.uid, currentUser?.createdAt]);
 
     // 2. Foreground FCM Messages (Existing)
+    const { activeChatId } = React.useContext(PresenceContext) || {}; // Access safely if context exists
+
     useEffect(() => {
         const msg = getMessagingInstance();
         if (!msg) return; // Messaging not available yet
@@ -91,6 +94,13 @@ export function NotificationProvider({ children }) {
             console.log('Foreground Message:', payload);
 
             const chatId = payload.data?.chatId;
+
+            // WHATSAPP LOGIC: Suppress if user is looking at this chat
+            if (chatId && activeChatId === chatId) {
+                console.log("Suppressed foreground notification (Active Chat):", chatId);
+                return;
+            }
+
             if (chatId && currentUser) {
                 const chatRef = doc(db, "chats", chatId);
                 const chatSnap = await getDoc(chatRef);
@@ -103,19 +113,19 @@ export function NotificationProvider({ children }) {
                 }
             }
 
-            // Show toast or UI alert
+            // Show toast ONLY (No system notification in foreground)
             toast(payload.notification.body, {
                 icon: '🔔',
-                duration: 4000
-            });
-
-            new Notification(payload.notification.title, {
-                body: payload.notification.body,
-                icon: '/whatsapp-icon.png'
+                duration: 4000,
+                position: 'top-center',
+                style: {
+                    background: '#333',
+                    color: '#fff',
+                }
             });
         });
         return unsubscribe;
-    }, []);
+    }, [activeChatId, currentUser]);
 
     // 3. Firestore Notifications (New)
     useEffect(() => {
