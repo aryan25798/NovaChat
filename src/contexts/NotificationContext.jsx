@@ -35,7 +35,20 @@ export function NotificationProvider({ children }) {
             const rawPermission = await Notification.requestPermission();
 
             if (rawPermission === 'granted') {
-                const registration = await navigator.serviceWorker.ready;
+                // Fail-safe: Don't let SW registration hang the whole app
+                const registrationPromise = navigator.serviceWorker.ready;
+                const timeoutPromise = new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('SW_TIMEOUT')), 3000)
+                );
+
+                let registration;
+                try {
+                    registration = await Promise.race([registrationPromise, timeoutPromise]);
+                } catch (e) {
+                    console.warn("Service Worker registration check timed out - skipping FCM setup.");
+                    return;
+                }
+
                 if (!registration) {
                     console.warn("No Service Worker registration found.");
                     return;

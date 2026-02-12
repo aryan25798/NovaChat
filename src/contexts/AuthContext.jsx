@@ -13,6 +13,22 @@ export function useAuth() {
     return useContext(AuthContext);
 }
 
+// Helper for timed-out getDoc
+async function getGetDocWithTimeout(docRef, timeoutMs = 5000) {
+    const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('FIRESTORE_TIMEOUT')), timeoutMs)
+    );
+    try {
+        return await Promise.race([getDoc(docRef), timeoutPromise]);
+    } catch (e) {
+        if (e.message === 'FIRESTORE_TIMEOUT') {
+            console.warn("Firestore getDoc timed out, using fallback.");
+            return { exists: () => false, data: () => ({}) };
+        }
+        throw e;
+    }
+}
+
 // Map Firebase error codes to user-friendly messages
 function getAuthErrorMessage(error) {
     switch (error.code) {
@@ -208,14 +224,22 @@ export function AuthProvider({ children }) {
             }
         });
 
+        // Fail-safe: Force loading to false after 8 seconds if Firebase/Listeners hang
+        const bootTimeout = setTimeout(() => {
+            if (loading) {
+                console.warn("Boot Sequence Timeout: Forcing load completion.");
+                setLoading(false);
+            }
+        }, 8000);
+
         // Main auth state listener
         const unsubscribe = onAuthStateChanged(auth, async (user) => {
             if (isLoggingOutRef.current) return;
 
-            if (user) {
-                try {
+            try {
+                if (user) {
                     const userRef = doc(db, "users", user.uid);
-                    let userSnap = await getDoc(userRef);
+                    let userSnap = await getGetDocWithTimeout(userRef, 5000);
 
                     if (!userSnap.exists()) {
                         console.debug("Provisioning new user profile...");
@@ -229,25 +253,18 @@ export function AuthProvider({ children }) {
                             createdAt: serverTimestamp(),
                             isOnline: true,
                             locationSharingEnabled: true,
-                            lastSeen: serverTimestamp(), // New field
-                            phoneNumber: user.phoneNumber, // New field
+                            lastSeen: serverTimestamp(),
+                            phoneNumber: user.phoneNumber,
                             metadata: {
                                 creationTime: user.metadata.creationTime,
                                 lastSignInTime: user.metadata.lastSignInTime
                             }
                         });
-                        userSnap = await getDoc(userRef); // Re-fetch to get the newly created data
+                        userSnap = await getDoc(userRef);
                     } else {
                         const userData = userSnap.data();
-                        // self-heal: ensure searchableName exists
                         if (!userData.searchableName && userData.displayName) {
-                            try {
-                                await updateDoc(userRef, {
-                                    searchableName: userData.displayName.toLowerCase()
-                                });
-                            } catch (e) {
-                                console.error("Auto-fix searchableName failed", e);
-                            }
+                            updateDoc(userRef, { searchableName: userData.displayName.toLowerCase() }).catch(() => { });
                         }
                         await updateDoc(userRef, {
                             isOnline: true,
@@ -258,46 +275,37 @@ export function AuthProvider({ children }) {
                     const baseData = userSnap.exists() ? userSnap.data() : {};
                     setCurrentUser({ ...user, ...baseData });
 
-                    // Real-time profile sync
                     if (userDocUnsubscribeRef.current) userDocUnsubscribeRef.current();
 
                     userDocUnsubscribeRef.current = onSnapshot(userRef, (docSnap) => {
                         if (isLoggingOutRef.current) return;
-
                         if (docSnap.exists()) {
                             const userData = docSnap.data();
-
                             if (userData.isBanned || userData.deletionRequested) {
                                 alert(userData.isBanned ? "Account Banned" : "Deletion Pending");
                                 logout();
                                 return;
                             }
-
                             setCurrentUser(prev => prev ? { ...prev, ...userData } : userData);
                             if (userData.locationSharingEnabled) updateUserLocation(user.uid, userData);
-                        } else {
-                            console.warn("User document not found in snapshot sync");
                         }
                     }, (err) => {
-                        if (isLoggingOutRef.current) return;
-                        if (err.code === 'permission-denied') {
-                            console.error("Auth sync permission denied");
-                            logout();
-                        }
+                        if (err.code === 'permission-denied') logout();
                     });
 
-                } catch (error) {
-                    console.error("Auth Setup Error:", error);
-                    setCurrentUser(user);
+                } else {
+                    if (userDocUnsubscribeRef.current) {
+                        userDocUnsubscribeRef.current();
+                        userDocUnsubscribeRef.current = null;
+                    }
+                    setCurrentUser(null);
                 }
-            } else {
-                if (userDocUnsubscribeRef.current) {
-                    userDocUnsubscribeRef.current();
-                    userDocUnsubscribeRef.current = null;
-                }
-                setCurrentUser(null);
+            } catch (error) {
+                console.error("Auth Initialization Error:", error);
+            } finally {
+                setLoading(false);
+                clearTimeout(bootTimeout);
             }
-            setLoading(false);
         });
 
         return () => {
