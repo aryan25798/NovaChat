@@ -16,6 +16,7 @@ if (process.env.NODE_ENV === 'production' || process.env.GITHUB_ACTIONS) {
 }
 
 // https://vite.dev/config/
+// Final Deployment Trigger
 export default defineConfig({
   base: '/',
   plugins: [
