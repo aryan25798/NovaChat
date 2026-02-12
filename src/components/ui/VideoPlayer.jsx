@@ -5,6 +5,7 @@ import { downloadMedia } from '../../utils/downloadHelper';
 
 export const VideoPlayer = ({ src, className, fileName = "video.mp4" }) => {
     const [isPlaying, setIsPlaying] = useState(false);
+    const [hover, setHover] = useState(false);
     const videoRef = useRef(null);
 
     const togglePlay = (e) => {

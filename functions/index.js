@@ -737,11 +737,18 @@ exports.nukeUser = onCall(async (request) => {
 
         // 8. Delete user statuses (CHUNKED)
         await db.collection('statuses').doc(targetUid).delete();
+
+        // 9. Cleanup Notifications (Both received and sent)
+        const receivedNotificationsQuery = db.collection('notifications').where('toUserId', '==', targetUid);
+        const sentNotificationsQuery = db.collection('notifications').where('fromUserId', '==', targetUid);
+        await bulkDeleteByQuery(receivedNotificationsQuery);
+        await bulkDeleteByQuery(sentNotificationsQuery);
+
         await rtdb.ref(`status/${targetUid}`).remove();
         await rtdb.ref(`typing/${targetUid}`).remove();
         await rtdb.ref(`rate_limits/${targetUid}`).remove();
 
-        // 9. Storage Cleanup (Prefix-based)
+        // 10. Storage Cleanup (Prefix-based)
         await recursiveDeleteStorage(bucket, `status/${targetUid}/`);
         await recursiveDeleteStorage(bucket, `profiles/${targetUid}`);
 

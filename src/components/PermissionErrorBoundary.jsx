@@ -28,9 +28,17 @@ class PermissionErrorBoundary extends React.Component {
 
     render() {
         if (this.state.hasError) {
-            // Gracefully degrade - render children anyway
-            // This prevents the entire app from crashing
-            return this.props.children;
+            return (
+                <div className="flex flex-col items-center justify-center p-4 bg-red-50 dark:bg-red-950/10 border border-red-200 dark:border-red-900/50 rounded-lg m-2">
+                    <p className="text-sm text-red-600 dark:text-red-400 font-medium">Permission denied or session expired.</p>
+                    <button
+                        onClick={() => window.location.reload()}
+                        className="mt-2 text-xs text-red-700 dark:text-red-300 underline hover:no-underline"
+                    >
+                        Try Refreshing
+                    </button>
+                </div>
+            );
         }
 
         return this.props.children;

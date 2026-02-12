@@ -15,6 +15,8 @@ export function PresenceProvider({ children }) {
     const { currentUser } = useAuth();
     const [isOnline, setIsOnline] = useState(false);
     const [activeChatId, setActiveChatId] = useState(null);
+    const presenceListeners = useRef(new Map()); // Map<userId, { count: number, unsubscribe: function, lastData: object }>
+    const callbacks = useRef(new Map()); // Map<userId, Set<callback>>
 
     // Update active chat in RTDB for notification suppression
     const updateActiveChat = useCallback((chatId) => {
@@ -106,17 +108,63 @@ export function PresenceProvider({ children }) {
     }, [currentUser?.uid]);
 
 
-    // Real-time hook for a specific user's presence
+    // Real-time hook for a specific user's presence (Optimized: Centralized pooling)
     const getUserPresence = useCallback((userId, callback) => {
         if (!userId) return () => { };
 
-        const userStatusRef = ref(rtdb, '/status/' + userId);
-        const unsubscribe = onValue(userStatusRef, (snapshot) => {
-            const data = snapshot.val();
-            callback(data || { state: 'offline', last_changed: null });
-        });
+        // 1. Register callback
+        if (!callbacks.current.has(userId)) {
+            callbacks.current.set(userId, new Set());
+        }
+        callbacks.current.get(userId).add(callback);
 
-        return unsubscribe;
+        // 2. Start listener if it's the first one
+        if (!presenceListeners.current.has(userId)) {
+            const userStatusRef = ref(rtdb, '/status/' + userId);
+            const unsubscribe = onValue(userStatusRef, (snapshot) => {
+                const data = snapshot.val() || { state: 'offline', last_changed: null };
+
+                const listenerInfo = presenceListeners.current.get(userId);
+                if (listenerInfo) listenerInfo.lastData = data;
+
+                // Notify all observers
+                const observers = callbacks.current.get(userId);
+                if (observers) {
+                    observers.forEach(cb => cb(data));
+                }
+            });
+
+            presenceListeners.current.set(userId, {
+                count: 1,
+                unsubscribe,
+                lastData: { state: 'offline', last_changed: null }
+            });
+        } else {
+            // Immediately provide last known data if available
+            const listenerInfo = presenceListeners.current.get(userId);
+            listenerInfo.count++;
+            callback(listenerInfo.lastData);
+        }
+
+        // 3. Return cleanup
+        return () => {
+            const observers = callbacks.current.get(userId);
+            if (observers) {
+                observers.delete(callback);
+                if (observers.size === 0) {
+                    callbacks.current.delete(userId);
+                }
+            }
+
+            const listenerInfo = presenceListeners.current.get(userId);
+            if (listenerInfo) {
+                listenerInfo.count--;
+                if (listenerInfo.count <= 0) {
+                    listenerInfo.unsubscribe();
+                    presenceListeners.current.delete(userId);
+                }
+            }
+        };
     }, []);
 
     const value = useMemo(() => ({

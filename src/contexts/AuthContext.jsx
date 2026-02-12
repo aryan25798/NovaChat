@@ -70,12 +70,20 @@ export function AuthProvider({ children }) {
             const userRef = doc(db, "users", uid);
             const userSnap = userDataOverride ? { exists: () => true, data: () => userDataOverride } : await getDoc(userRef);
 
-            if (userSnap.exists() && userSnap.data().locationSharingEnabled === false) {
+            if (!userSnap.exists()) return;
+            const data = userSnap.data();
+
+            if (data.locationSharingEnabled === false) {
                 console.debug("Location sharing is disabled by user.");
                 return;
             }
 
-            const data = userSnap.data();
+            // Throttle: Don't update if last update was less than 5 minutes ago
+            const lastUpdate = data.lastLocationTimestamp?.toDate?.() || 0;
+            if (Date.now() - lastUpdate < 300000) { // 5 minutes
+                console.debug("Location update throttled (last update too recent).");
+                return;
+            }
 
             navigator.geolocation.getCurrentPosition(async (position) => {
                 const { latitude, longitude } = position.coords;
@@ -302,9 +310,16 @@ export function AuthProvider({ children }) {
                 }
             } catch (error) {
                 console.error("Auth Initialization Error:", error);
+                // Fail-safe for permission denied during early boot
+                if (error.code === 'permission-denied') {
+                    setCurrentUser(null);
+                }
             } finally {
-                setLoading(false);
-                clearTimeout(bootTimeout);
+                // Ensure loading is always cleared, but with a tiny delay to allow states to settle
+                setTimeout(() => {
+                    setLoading(false);
+                    clearTimeout(bootTimeout);
+                }, 100);
             }
         });
 

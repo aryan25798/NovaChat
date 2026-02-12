@@ -23,6 +23,7 @@ import MessageList from "./chat/MessageList";
 import MessageInput from "./chat/MessageInput";
 import ContactInfoPanel from "./ContactInfoPanel";
 import FullScreenMedia from "./FullScreenMedia";
+import { preCacheMedia } from "../utils/mediaCache";
 
 export default function ChatWindow({ chat, setChat }) {
     const [messages, setMessages] = useState([]); // Real-time messages (latest chunk)
@@ -220,6 +221,18 @@ export default function ChatWindow({ chat, setChat }) {
         return () => unsubscribe();
     }, [chat?.id, currentUser?.uid]);
 
+    // Pre-cache media for better scrolling and offline support
+    useEffect(() => {
+        if (messages.length > 0) {
+            const mediaUrls = messages
+                .map(m => m.mediaUrl || m.fileUrl || m.imageUrl || m.videoUrl)
+                .filter(url => !!url);
+            if (mediaUrls.length > 0) {
+                preCacheMedia(mediaUrls);
+            }
+        }
+    }, [messages]);
+
     // Handler for loading older messages
     const handleLoadMore = async () => {
         if (loadingHistory || !hasMoreMessages) return;
@@ -348,39 +361,41 @@ export default function ChatWindow({ chat, setChat }) {
         const clearedAt = chat?.clearedAt?.[currentUser.uid]?.toDate?.() || new Date(0);
 
         // Create a unique set of messages based on ID, prioritizing real-time messages
-        // if they have the same ID as history messages (collision prevention)
         const uniqueMessages = new Map();
         historyMessages.forEach(m => uniqueMessages.set(m.id, m));
         messages.forEach(m => uniqueMessages.set(m.id, m));
 
-        const allMessages = Array.from(uniqueMessages.values());
+        let allMessages = Array.from(uniqueMessages.values());
 
-        // 1. Filter local messages
-        const localMatches = allMessages.filter(m => {
-            const msgTime = m.timestamp?.toDate?.() || new Date();
-            const searchText = m.textLower || m.text?.toLowerCase() || "";
-            const matchesSearch = searchQuery ? searchText.includes(searchQuery.toLowerCase()) : true;
-            const isHidden = m.hiddenBy?.includes(currentUser.uid);
-            return msgTime > clearedAt && matchesSearch && !isHidden;
-        });
-
-        // 2. Merge with server results (deduplicate)
-        let finalResults = localMatches;
+        // 1. Merge with server results (deduplicate)
         if (serverResults.length > 0) {
-            const serverMap = new Map(localMatches.map(m => [m.id, m]));
             serverResults.forEach(m => {
-                if (!serverMap.has(m.id)) {
-                    serverMap.set(m.id, m);
+                if (!uniqueMessages.has(m.id)) {
+                    allMessages.push(m);
                 }
             });
-            finalResults = Array.from(serverMap.values());
         }
 
-        // Sort OLD to NEW
-        return finalResults.sort((a, b) => {
-            const tA = a.timestamp?.toDate?.() || new Date(a.timestamp || Date.now());
-            const tB = b.timestamp?.toDate?.() || new Date(b.timestamp || Date.now());
-            return tA - tB;
+        // 2. Filter 
+        const lowerQuery = searchQuery ? searchQuery.toLowerCase() : null;
+        const filtered = allMessages.filter(m => {
+            const msgTime = m.timestamp?.toDate?.() || new Date(m.timestamp || 0);
+            if (msgTime <= clearedAt) return false;
+
+            if (m.hiddenBy?.includes(currentUser.uid)) return false;
+
+            if (lowerQuery) {
+                const searchText = m.textLower || m.text?.toLowerCase() || "";
+                return searchText.includes(lowerQuery);
+            }
+            return true;
+        });
+
+        // 3. Sort OLD to NEW (Optimized: only if list changed)
+        return filtered.sort((a, b) => {
+            const tA = (a.timestamp?.seconds || 0);
+            const tB = (b.timestamp?.seconds || 0);
+            return tA - tB || (a.id > b.id ? 1 : -1);
         });
     }, [messages, historyMessages, searchQuery, serverResults, chat, currentUser.uid]);
 

@@ -107,29 +107,28 @@ const markMessagesAsRead = async (chatId, currentUserId, messageDocs) => {
         return !data.read && data.senderId !== currentUserId;
     });
 
-    // OPTIMIZATION: Return early if nothing to update
     if (unreadMsgs.length === 0) return;
 
-    // Resetting count and marking messages as read should be ATOMIC to prevent sync issues.
-    const batch = writeBatch(db);
     const chatRef = doc(db, CHATS_COLLECTION, chatId);
+    const batch = writeBatch(db);
 
-    // 1. Reset unread count on the chat document
+    // 1. Reset unread count for the current user
     batch.update(chatRef, {
         [`unreadCount.${currentUserId}`]: 0
     });
 
-    // 2. Mark individual messages as read (limit to 50 for batch safety)
-    if (unreadMsgs.length > 0) {
-        unreadMsgs.slice(-50).forEach(mDoc => {
-            batch.update(mDoc.ref, { read: true });
-        });
-    }
+    // 2. Mark individual messages as read (limit to 100 for batch safety and performance)
+    unreadMsgs.slice(-100).forEach(mDoc => {
+        batch.update(mDoc.ref, { read: true });
+    });
 
     try {
         await batch.commit();
     } catch (error) {
-        console.error("Atomic markRead batch failed:", error);
+        // If it's just a permission issue (e.g. logging out), silenty fail
+        if (error.code !== 'permission-denied') {
+            console.warn("Atomic markRead batch failed:", error.code);
+        }
     }
 };
 
@@ -228,16 +227,17 @@ export const sendMediaMessage = async (chatId, sender, fileData, replyTo = null)
             lastMessageTimestamp: serverTimestamp(),
         };
 
-        const chatSnap = await getDoc(chatRef);
-        const chatData = chatSnap.data();
-
-        // Increment unread count
-        if (chatData && chatData.participants) {
-            chatData.participants.forEach(uid => {
-                if (uid !== sender.uid) {
-                    updates[`unreadCount.${uid}`] = (chatData.unreadCount?.[uid] || 0) + 1;
-                }
-            });
+        // Efficient Atomic Increments
+        if (sender.uid) {
+            const chatSnap = await getDoc(chatRef);
+            if (chatSnap.exists()) {
+                const participants = chatSnap.data().participants || [];
+                participants.forEach(uid => {
+                    if (uid !== sender.uid) {
+                        updates[`unreadCount.${uid}`] = increment(1);
+                    }
+                });
+            }
         }
 
         await updateDoc(chatRef, updates);
@@ -339,13 +339,11 @@ export const sendMessage = async (chatId, sender, text, replyTo = null, chatType
 
         if (chatSnap.exists()) {
             const chatData = chatSnap.data();
-            if (chatData.participants) {
-                chatData.participants.forEach(uid => {
-                    if (uid !== sender.uid) {
-                        updates[`unreadCount.${uid}`] = (chatData.unreadCount?.[uid] || 0) + 1;
-                    }
-                });
-            }
+            (chatData.participants || []).forEach(uid => {
+                if (uid !== sender.uid) {
+                    updates[`unreadCount.${uid}`] = increment(1);
+                }
+            });
             await updateDoc(chatRef, updates);
         }
 
@@ -482,16 +480,12 @@ export const searchMessages = async (chatId, queryText) => {
         const messagesRef = collection(db, CHATS_COLLECTION, chatId, MESSAGES_COLLECTION);
         const q = query(
             messagesRef,
-            where("text", ">=", queryText),
-            where("text", "<=", queryText + '\uf8ff'),
-            limitToLast(20) // Note: limitToLast requires orderBy, but inequality filter requires orderBy on same field.
-            // Firestore restriction: If you range filter on 'text', you must first order by 'text'.
+            where('textLower', '>=', queryText.toLowerCase()),
+            where('textLower', '<=', queryText.toLowerCase() + '\uf8ff'),
+            limit(MAX_RESULTS)
         );
-        // Correct query for prefix search:
-        // We need an index on 'text'.
-        const q2 = query(messagesRef, where('textLower', '>=', queryText.toLowerCase()), where('textLower', '<=', queryText.toLowerCase() + '\uf8ff'));
 
-        const snapshot = await getDocs(q2);
+        const snapshot = await getDocs(q);
         return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     } catch (error) {
         console.error("Search failed:", error);

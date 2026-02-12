@@ -89,46 +89,47 @@ export function NotificationProvider({ children }) {
         }
     }, [currentUser?.uid]);
 
-    // 2. Foreground FCM Messages (Existing)
+    // 2. Foreground FCM Messages (Optimized)
     const { activeChatId } = React.useContext(PresenceContext) || {};
+    const activeChatIdRef = useRef(activeChatId);
+
+    // Keep ref in sync
+    useEffect(() => {
+        activeChatIdRef.current = activeChatId;
+    }, [activeChatId]);
 
     useEffect(() => {
         const initMessagingListener = async () => {
             const msg = await getMessagingInstance();
-            if (!msg) return; // Messaging not available yet
+            if (!msg) return;
 
+            // Notice we omit activeChatId from dependencies to avoid re-running this effect.
+            // We use activeChatIdRef inside the callback.
             const unsubscribe = onMessage(msg, async (payload) => {
                 console.log('Foreground Message:', payload);
 
-                const chatId = payload.data?.chatId;
+                const incomingChatId = payload.data?.chatId;
 
-                // WHATSAPP LOGIC: Suppress if user is looking at this chat
-                if (chatId && activeChatId === chatId) {
-                    console.log("Suppressed foreground notification (Active Chat):", chatId);
+                // Use the REF to check if suppressed
+                if (incomingChatId && activeChatIdRef.current === incomingChatId) {
+                    console.log("Suppressed foreground notification (Active Chat):", incomingChatId);
                     return;
                 }
 
-                if (chatId && currentUser) {
-                    const chatRef = doc(db, "chats", chatId);
+                if (incomingChatId && currentUser) {
+                    const chatRef = doc(db, "chats", incomingChatId);
                     const chatSnap = await getDoc(chatRef);
                     if (chatSnap.exists()) {
                         const isMuted = chatSnap.data().mutedBy?.[currentUser.uid];
-                        if (isMuted) {
-                            console.log("Suppressed notification for muted chat:", chatId);
-                            return; // Don't show toast or notify
-                        }
+                        if (isMuted) return;
                     }
                 }
 
-                // Show toast ONLY (No system notification in foreground)
                 toast(payload.notification.body, {
                     icon: '🔔',
                     duration: 4000,
                     position: 'top-center',
-                    style: {
-                        background: '#333',
-                        color: '#fff',
-                    }
+                    style: { background: '#333', color: '#fff' }
                 });
             });
             return unsubscribe;
@@ -140,7 +141,7 @@ export function NotificationProvider({ children }) {
                 if (unsubscribe && typeof unsubscribe === 'function') unsubscribe();
             });
         };
-    }, [activeChatId, currentUser]);
+    }, [currentUser?.uid]); // Only depend on User UID, not activeChatId
 
     // 3. Firestore Notifications (New)
     useEffect(() => {

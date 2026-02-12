@@ -26,118 +26,114 @@ const ChatPage = () => {
             try {
                 const { GEMINI_BOT_ID } = await import("../constants");
                 const isBot = id === GEMINI_BOT_ID || id.startsWith('gemini_');
-
-                let targetRef = null;
                 const ghostId = isBot ? id : [currentUser.uid, id].sort().join("_");
                 const ghostChatRef = doc(db, "chats", ghostId);
 
-                if (isBot) {
+                // Run potential resolutions in parallel where possible
+                const directRef = doc(db, "chats", id);
+                const results = await Promise.allSettled([
+                    getDoc(directRef),
+                    !isBot ? getDoc(doc(db, "users", id)) : Promise.resolve(null),
+                    getDoc(ghostChatRef)
+                ]);
+
+                if (isCancelled) return;
+
+                const [directSnap, userSnap, ghostSnap] = results.map(r => r.status === 'fulfilled' ? r.value : null);
+
+                let targetRef = null;
+                let initialData = null;
+
+                if (directSnap?.exists()) {
+                    targetRef = directRef;
+                } else if (ghostSnap?.exists()) {
                     targetRef = ghostChatRef;
-                } else {
-                    // Try direct ID first
-                    const directRef = doc(db, "chats", id);
-                    try {
-                        const snap = await getDoc(directRef);
-                        if (snap.exists() && !isCancelled) {
-                            targetRef = directRef;
+                } else if (isBot) {
+                    // Bot ghost setup
+                    initialData = {
+                        id: id,
+                        type: "gemini",
+                        participants: [currentUser.uid, id],
+                        isGhost: true,
+                        groupName: "Gemini AI",
+                        participantInfo: {
+                            [id]: { displayName: "Gemini AI", photoURL: "https://uxwing.com/wp-content/themes/uxwing/download/brands-and-social-media/google-gemini-icon.png" },
+                            [currentUser.uid]: { displayName: currentUser.displayName, photoURL: currentUser.photoURL }
                         }
-                    } catch (e) { }
+                    };
+                } else if (userSnap?.exists()) {
+                    // User ghost setup
+                    initialData = {
+                        id: ghostId,
+                        type: "private",
+                        participants: [currentUser.uid, id],
+                        participantInfo: {
+                            [id]: userSnap.data(),
+                            [currentUser.uid]: { displayName: currentUser.displayName, photoURL: currentUser.photoURL }
+                        },
+                        isGhost: true
+                    };
                 }
 
-                if (!targetRef && !isCancelled) {
-                    // Check if 'id' is a user UID
-                    try {
-                        const userSnap = await getDoc(doc(db, "users", id));
-                        if (userSnap.exists()) {
-                            targetRef = ghostChatRef;
-                        }
-                    } catch (e) { }
-                }
-
-                if (!targetRef && !isCancelled) {
-                    // Fallback: search for private chat match
-                    const q = query(
-                        collection(db, "chats"),
-                        where("participants", "array-contains", currentUser.uid),
-                        where("type", "==", "private"),
-                        limit(50)
-                    );
-                    const qSnap = await getDocs(q);
-                    const match = qSnap.docs.find(d => (d.data().participants || []).includes(id));
-                    if (match) targetRef = match.ref;
-                }
-
-                if (!targetRef || isCancelled) {
-                    if (!isCancelled) {
-                        setChat(null);
+                if (!targetRef) {
+                    if (initialData) {
+                        setChat(initialData);
                         setLoading(false);
-                    }
-                    return;
-                }
-
-                const listenerKey = `chat-${targetRef.id}`;
-                unsubscribe = onSnapshot(targetRef, async (docSnap) => {
-                    if (isCancelled) return;
-
-                    if (docSnap.exists()) {
-                        const data = docSnap.data();
-                        // Self-healing metadata
-                        if (data.type === 'private' && !data.participantInfo) {
-                            const otherUid = data.participants?.find(uid => uid !== currentUser.uid);
-                            if (otherUid) {
-                                const uSnap = await getDoc(doc(db, "users", otherUid));
-                                if (uSnap.exists()) {
-                                    data.participantInfo = {
-                                        [otherUid]: uSnap.data(),
-                                        [currentUser.uid]: { displayName: currentUser.displayName, photoURL: currentUser.photoURL }
-                                    };
-                                    updateDoc(docSnap.ref, { participantInfo: data.participantInfo }).catch(() => { });
-                                }
-                            }
-                        }
-                        setChat({ id: docSnap.id, ...data });
-                    } else if (targetRef.id === ghostChatRef.id) {
-                        // Handle ghost creation state (including bot)
-                        if (isBot) {
-                            setChat({
-                                id: id,
-                                type: "gemini",
-                                participants: [currentUser.uid, id],
-                                isGhost: true,
-                                groupName: "Gemini AI",
-                                participantInfo: {
-                                    [id]: { displayName: "Gemini AI", photoURL: "https://uxwing.com/wp-content/themes/uxwing/download/brands-and-social-media/google-gemini-icon.png" },
-                                    [currentUser.uid]: { displayName: currentUser.displayName, photoURL: currentUser.photoURL }
-                                }
-                            });
-                        } else {
-                            const userSnap = await getDoc(doc(db, "users", id));
-                            if (userSnap.exists() && !isCancelled) {
-                                setChat({
-                                    id: ghostId,
-                                    type: "private",
-                                    participants: [currentUser.uid, id],
-                                    participantInfo: {
-                                        [id]: userSnap.data(),
-                                        [currentUser.uid]: { displayName: currentUser.displayName, photoURL: currentUser.photoURL }
-                                    },
-                                    isGhost: true
-                                });
-                            }
-                        }
                     } else {
-                        setChat(null);
+                        // Final fallback: check for existing private chat if ID was a participant
+                        const q = query(
+                            collection(db, "chats"),
+                            where("participants", "array-contains", currentUser.uid),
+                            where("type", "==", "private"),
+                            limit(20)
+                        );
+                        const qSnap = await getDocs(q);
+                        const match = qSnap.docs.find(d => (d.data().participants || []).includes(id));
+                        if (match && !isCancelled) {
+                            targetRef = match.ref;
+                        } else {
+                            if (!isCancelled) {
+                                setChat(null);
+                                setLoading(false);
+                            }
+                            return;
+                        }
                     }
-                    setLoading(false);
-                }, (err) => {
-                    if (!isCancelled) {
-                        listenerManager.handleListenerError(err, 'ChatPage');
+                }
+
+                if (targetRef && !isCancelled) {
+                    const listenerKey = `chat-${targetRef.id}`;
+                    unsubscribe = onSnapshot(targetRef, async (docSnap) => {
+                        if (isCancelled) return;
+                        if (docSnap.exists()) {
+                            const data = docSnap.data();
+                            // Self-healing metadata
+                            if (data.type === 'private' && !data.participantInfo) {
+                                const otherUid = data.participants?.find(uid => uid !== currentUser.uid);
+                                if (otherUid) {
+                                    const uSnap = await getDoc(doc(db, "users", otherUid));
+                                    if (uSnap.exists()) {
+                                        data.participantInfo = {
+                                            [otherUid]: uSnap.data(),
+                                            [currentUser.uid]: { displayName: currentUser.displayName, photoURL: currentUser.photoURL }
+                                        };
+                                        updateDoc(docSnap.ref, { participantInfo: data.participantInfo }).catch(() => { });
+                                    }
+                                }
+                            }
+                            setChat({ id: docSnap.id, ...data });
+                        } else {
+                            setChat(null);
+                        }
                         setLoading(false);
-                    }
-                });
-
-                listenerManager.subscribe(listenerKey, unsubscribe);
-
+                    }, (err) => {
+                        if (!isCancelled) {
+                            listenerManager.handleListenerError(err, 'ChatPage');
+                            setLoading(false);
+                        }
+                    });
+                    listenerManager.subscribe(listenerKey, unsubscribe);
+                }
             } catch (error) {
                 if (!isCancelled) {
                     console.error("Critical error resolving chat:", error);

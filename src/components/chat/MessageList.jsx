@@ -17,15 +17,13 @@ export function MessageList({
 }) {
     const virtuosoRef = useRef(null);
 
-    // Auto-scroll to bottom when new messages arrive
+    // Virtuoso handles 'followOutput' automatically when data length changes.
+    // We only need a manual scroll for initial jump if alignToBottom isn't perfect.
     useEffect(() => {
         if (messages.length > 0 && virtuosoRef.current) {
-            // Virtuoso handles 'followOutput' automatically but we trigger it here for initial load consistency
-            setTimeout(() => {
-                virtuosoRef.current?.scrollToIndex({ index: messages.length - 1, align: "end", behavior: "smooth" });
-            }, 100);
+            virtuosoRef.current.scrollToIndex({ index: messages.length - 1, align: "end" });
         }
-    }, [messages.length]);
+    }, []); // Only on mount
 
     // Stable context for Virtuoso to avoid regenerating itemContent
     const contextValue = React.useMemo(() => ({

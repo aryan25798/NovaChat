@@ -7,15 +7,38 @@ import { VideoPlayer } from "../ui/VideoPlayer";
 import { downloadMedia } from "../../utils/downloadHelper";
 import { Button } from "../ui/Button";
 import FullScreenMedia from "../FullScreenMedia";
+import { getCachedMedia, cacheMedia } from "../../utils/mediaCache";
 
 const MessageBubble = ({ message, isOwn, onMediaClick }) => {
     const [imgError, setImgError] = React.useState(false);
+    const [resolvedUrl, setResolvedUrl] = React.useState(null);
 
     // Consolidated URL getter
-    const getMediaUrl = () => {
-        return message.imageUrl || message.fileUrl || message.videoUrl || message.audioUrl || message.url || message.mediaUrl;
-    };
-    const mediaUrl = getMediaUrl();
+    const mediaUrl = message.imageUrl || message.fileUrl || message.videoUrl || message.audioUrl || message.url || message.mediaUrl;
+
+    // Resolve cached URL
+    React.useEffect(() => {
+        if (!mediaUrl) return;
+
+        let isMounted = true;
+        const resolve = async () => {
+            // 1. Check if already cached in IndexedDB
+            const cached = await getCachedMedia(mediaUrl);
+            if (cached && isMounted) {
+                setResolvedUrl(cached);
+                return;
+            }
+
+            // 2. If not, use the remote URL for now, but trigger a background cache
+            if (isMounted) setResolvedUrl(mediaUrl);
+
+            // Background caching (optional, the browser also caches)
+            // cacheMedia(mediaUrl); 
+        };
+
+        resolve();
+        return () => { isMounted = false; };
+    }, [mediaUrl]);
 
     // 🧠 SMART TYPE DETECTION
     const getDisplayType = () => {
@@ -53,9 +76,9 @@ const MessageBubble = ({ message, isOwn, onMediaClick }) => {
             {displayType === 'image' && (
                 <div className="relative rounded-lg overflow-hidden mb-1 min-h-[150px] bg-black/5 dark:bg-black/20 cursor-pointer"
                     onClick={handleMediaClick}>
-                    {!imgError && mediaUrl ? (
+                    {!imgError && resolvedUrl ? (
                         <img
-                            src={mediaUrl}
+                            src={resolvedUrl}
                             alt="Shared"
                             className="w-full max-h-[350px] object-cover rounded-lg transition-opacity hover:opacity-95"
                             onError={() => setImgError(true)}
@@ -71,11 +94,11 @@ const MessageBubble = ({ message, isOwn, onMediaClick }) => {
             )}
 
             {/* VIDEO */}
-            {displayType === 'video' && mediaUrl && (
+            {displayType === 'video' && resolvedUrl && (
                 <div className="relative rounded-lg overflow-hidden mb-1 min-w-[200px] bg-black/5 dark:bg-black/20 cursor-pointer"
                     onClick={handleMediaClick}>
                     <VideoPlayer
-                        src={mediaUrl}
+                        src={resolvedUrl}
                         className="max-h-[350px] pointer-events-none" // Overlay handles the click
                         fileName={message.fileName}
                     />

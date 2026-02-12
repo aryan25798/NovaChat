@@ -26,19 +26,25 @@ export default function MessageInput({
             if (!messages || messages.length === 0) return;
             // Only fetch if the last message is from the other user
             const lastMessage = messages[messages.length - 1];
-            if (lastMessage.senderId === otherUser.uid) {
+            if (lastMessage.senderId === otherUser.uid && lastMessage.type === 'text') {
                 setIsLoadingSuggestions(true);
-                const replies = await getSmartReplies(messages);
-                setSuggestions(replies);
-                setIsLoadingSuggestions(false);
+                try {
+                    // Send last 5 messages for context to optimize speed
+                    const replies = await getSmartReplies(messages.slice(-5));
+                    setSuggestions(replies);
+                } catch (e) {
+                    console.warn("Smart replies failed:", e);
+                } finally {
+                    setIsLoadingSuggestions(false);
+                }
             } else {
                 setSuggestions([]);
             }
         };
 
-        const timer = setTimeout(fetchSuggestions, 1000);
+        const timer = setTimeout(fetchSuggestions, 800);
         return () => clearTimeout(timer);
-    }, [messages, otherUser.uid]);
+    }, [messages.length, otherUser.uid]);
 
     const handleSuggestionClick = (suggestion) => {
         setNewMessage(suggestion);

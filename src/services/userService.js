@@ -17,6 +17,7 @@ export const searchUsers = async (searchTerm, currentUserId) => {
         try {
             const q = query(
                 usersRef,
+                orderBy("displayName"),
                 limit(MAX_RESULTS)
             );
             const snap = await getDocs(q);
