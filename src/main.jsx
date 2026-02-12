@@ -11,6 +11,21 @@ import { ThemeProvider } from './contexts/ThemeContext'
 
 
 
+// --- Service Worker Migration & Purge Logic ---
+if ('serviceWorker' in navigator) {
+  const MIGRATION_KEY = 'nova_sw_migrated_v4';
+  if (!localStorage.getItem(MIGRATION_KEY)) {
+    navigator.serviceWorker.getRegistrations().then((registrations) => {
+      for (const registration of registrations) {
+        registration.unregister();
+        console.log('Stale Service Worker unregistered.');
+      }
+      localStorage.setItem(MIGRATION_KEY, 'true');
+    });
+  }
+}
+// ----------------------------------------------
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <AuthProvider>
@@ -24,6 +39,4 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     </AuthProvider>
   </React.StrictMode>,
 )
-
-// Service Worker registration is handled automatically by vite-plugin-pwa based on vite.config.js
 

@@ -44,10 +44,23 @@ self.addEventListener('fetch', (event) => {
 workbox.precaching.precacheAndRoute(self.__WB_MANIFEST);
 
 // 2. Navigation Fallback (Fix for 404 on refresh)
+// Use a more robust check to ensure index.html exists in precache
+const navigationHandler = async (params) => {
+    try {
+        const cacheKey = workbox.precaching.getCacheKeyForURL('index.html');
+        if (cacheKey) {
+            const cachedResponse = await caches.match(cacheKey);
+            if (cachedResponse) return cachedResponse;
+        }
+    } catch (e) {
+        console.error('Error in SW navigation handler:', e);
+    }
+    // Fallback to network
+    return fetch(params.request);
+};
+
 workbox.routing.registerRoute(
-    new workbox.routing.NavigationRoute(
-        workbox.precaching.getCacheKeyForURL('index.html')
-    )
+    new workbox.routing.NavigationRoute(navigationHandler)
 );
 
 // 3. Firebase Messaging Service Worker
