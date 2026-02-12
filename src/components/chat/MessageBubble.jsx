@@ -2,7 +2,7 @@ import React from "react";
 import { cn } from "../../lib/utils";
 import { format } from "date-fns";
 import { BsCheckAll, BsCheck } from "react-icons/bs";
-import { FaDownload, FaFileAlt } from "react-icons/fa";
+import { FaDownload, FaFileAlt, FaPlay } from "react-icons/fa";
 import { VideoPlayer } from "../ui/VideoPlayer";
 import { downloadMedia } from "../../utils/downloadHelper";
 import { Button } from "../ui/Button";

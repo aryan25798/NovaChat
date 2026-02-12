@@ -63,7 +63,7 @@ export default function ChatWindow({ chat, setChat }) {
 
     // Context & Presence
     const [presence, setPresence] = useState(null);
-    const otherUid = chat?.participants?.find(uid => uid !== currentUser.uid);
+    const otherUid = chat?.participants?.find?.(uid => uid !== currentUser.uid);
     const otherUser = useMemo(() => {
         if (chat?.type === 'group') {
             return { displayName: chat.groupName, photoURL: chat.groupImage, isGroup: true, uid: chat.id };
@@ -109,8 +109,10 @@ export default function ChatWindow({ chat, setChat }) {
             id: temporaryId,
             text: textToSend,
             senderId: currentUser.uid,
+            senderName: currentUser.displayName || currentUser.email,
             timestamp: { toDate: () => new Date() }, // Mock timestamp
-            status: 'sending',
+            status: 'pending',
+            type: 'text',
             replyTo: replyContext
         };
 
@@ -120,7 +122,7 @@ export default function ChatWindow({ chat, setChat }) {
         setIsSending(true);
 
         try {
-            await sendMessage(chat.id, currentUser, textToSend, replyContext, chat.type);
+            await sendMessage(chat.id, currentUser, textToSend, replyContext);
             // The subscription will eventually replace the temp message with the real one
         } catch (err) {
             console.error("Failed to send message", err);
@@ -135,7 +137,7 @@ export default function ChatWindow({ chat, setChat }) {
         } finally {
             setIsSending(false);
         }
-    }, [newMessage, replyTo, isSending, chat?.id, chat?.type, currentUser]);
+    }, [newMessage, replyTo, isSending, chat?.id, currentUser]);
 
     const { startUpload } = useFileUpload();
 

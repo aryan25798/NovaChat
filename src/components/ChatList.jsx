@@ -58,9 +58,10 @@ const ChatList = React.memo(({ searchTerm }) => {
         const unsubscribe = subscribeToUserChats(currentUser.uid, (chatData) => {
             const filteredChats = chatData.filter(chat => {
                 const clearedAt = chat.clearedAt?.[currentUser.uid]?.toDate?.() || 0;
-                const lastMsgTime = chat.lastMessageTimestamp?.toDate?.() || 0;
+                const lastMsgTime = chat.lastMessageTimestamp?.toDate?.() || null;
                 const isHidden = chat.hiddenBy?.includes(currentUser.uid);
-                return lastMsgTime > clearedAt && !isHidden;
+                // Allow chats with pending (null) timestamps to show up
+                return (!lastMsgTime || lastMsgTime > clearedAt) && !isHidden;
             });
             cachedChats = filteredChats;
             setChats(filteredChats);

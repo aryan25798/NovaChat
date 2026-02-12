@@ -36,7 +36,7 @@ export const subscribeToMessages = (chatId, currentUserId, callback, updateReadS
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
         const messages = snapshot.docs.map(doc => {
-            const data = doc.data();
+            const data = doc.data({ serverTimestamps: 'estimate' });
             const source = doc.metadata.hasPendingWrites ? 'Local' : 'Server';
             return {
                 id: doc.id,
@@ -150,7 +150,7 @@ export const markMessagesAsDelivered = async (chatId, currentUserId, messageDocs
 
     if (undeliveredMsgs.length > 0) {
         const batch = writeBatch(db);
-        undeliveredMsgs.forEach(mDoc => {
+        undeliveredMsgs.slice(-50).forEach(mDoc => {
             batch.update(mDoc.ref, { delivered: true });
         });
         try {
