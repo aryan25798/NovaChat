@@ -58,6 +58,7 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,mp3}'],
+        cleanupOutdatedCaches: true,
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
@@ -94,6 +95,14 @@ export default defineConfig({
             }
           }
         ]
+      },
+      injectManifest: {
+        rollupOptions: {
+          output: {
+            manualChunks: undefined
+          }
+        },
+        injectionPoint: 'self.__WB_MANIFEST',
       }
     })
   ],
@@ -105,6 +114,13 @@ export default defineConfig({
     'process.env.VITE_FIREBASE_MESSAGING_SENDER_ID': JSON.stringify(process.env.VITE_FIREBASE_MESSAGING_SENDER_ID),
     'process.env.VITE_FIREBASE_APP_ID': JSON.stringify(process.env.VITE_FIREBASE_APP_ID),
     'process.env.VITE_FIREBASE_DATABASE_URL': JSON.stringify(process.env.VITE_FIREBASE_DATABASE_URL),
+    '__VITE_FIREBASE_API_KEY__': JSON.stringify(process.env.VITE_FIREBASE_API_KEY || 'AIzaSyAtqHwOk2zwqdmr_3puMCVH_aAmzx0GtTI'),
+    '__VITE_FIREBASE_AUTH_DOMAIN__': JSON.stringify(process.env.VITE_FIREBASE_AUTH_DOMAIN || 'whatsappclone-50b5b.firebaseapp.com'),
+    '__VITE_FIREBASE_PROJECT_ID__': JSON.stringify(process.env.VITE_FIREBASE_PROJECT_ID || 'whatsappclone-50b5b'),
+    '__VITE_FIREBASE_STORAGE_BUCKET__': JSON.stringify(process.env.VITE_FIREBASE_STORAGE_BUCKET || 'whatsappclone-50b5b.firebasestorage.app'),
+    '__VITE_FIREBASE_MESSAGING_SENDER_ID__': JSON.stringify(process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '662334343258'),
+    '__VITE_FIREBASE_APP_ID__': JSON.stringify(process.env.VITE_FIREBASE_APP_ID || '1:662334343258:web:a1b7a9fe49563c9aeaf063'),
+    '__VITE_FIREBASE_DATABASE_URL__': JSON.stringify(process.env.VITE_FIREBASE_DATABASE_URL || 'https://whatsappclone-50b5b-default-rtdb.firebaseio.com'),
   },
   build: {
     target: 'esnext',

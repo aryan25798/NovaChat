@@ -40,8 +40,8 @@ const MessageBubble = ({ message, isOwn, onMediaClick }) => {
         return () => { isMounted = false; };
     }, [mediaUrl]);
 
-    // 🧠 SMART TYPE DETECTION
-    const getDisplayType = () => {
+    // 🧠 SMART TYPE DETECTION (Memoized)
+    const displayType = React.useMemo(() => {
         if (message.type === 'text') return 'text';
         if (message.imageUrl || message.mediaType === 'image') return 'image';
         if (message.videoUrl || message.mediaType === 'video') return 'video';
@@ -55,9 +55,7 @@ const MessageBubble = ({ message, isOwn, onMediaClick }) => {
         if (fileType.startsWith('audio/') || /\.(mp3|wav|m4a|aac|flac)$/.test(fileName)) return 'audio';
         if (message.type === 'file' || mediaUrl) return 'file';
         return 'text';
-    };
-
-    const displayType = getDisplayType();
+    }, [message, mediaUrl]);
     const hasMedia = displayType === 'image' || displayType === 'video';
 
     const handleMediaClick = (e) => {

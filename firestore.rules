@@ -30,9 +30,13 @@ service cloud.firestore {
     }
 
     // Check if user is a participant of a specific chat
-    function isParticipant(chatId) {
-      return isSignedIn() && 
-        request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+    // OPTIMIZED: Prioritize ID string check for performance
+    function isParticipant(cid) {
+      return isSignedIn() && (
+        (cid.matches('.*' + request.auth.uid + '.*')) ||
+        (exists(/databases/$(database)/documents/chats/$(cid)) && 
+         request.auth.uid in get(/databases/$(database)/documents/chats/$(cid)).data.participants)
+      );
     }
 
     // Check if user is friends with the target user (for Status privacy)
@@ -95,11 +99,10 @@ service cloud.firestore {
         ))
         || (isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isBanned']))
         // Allow user to request deletion or cancel it
-        || (isOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deletionRequested', 'deletionRequestedAt']))
-        // Allow ANY authenticated user to modify ONLY the 'friends' field (for accept/unfriend flows)
-        // Security: restricted to friends-only change, requires auth + not banned
-        || (isSignedIn() && isNotBanned() && 
-            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['friends']));
+        || (isOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deletionRequested', 'deletionRequestedAt']));
+        // DISABLED: Client-side friend list modification is unsafe. Use Cloud Functions.
+        // || (isSignedIn() && isNotBanned() && 
+        //     request.resource.data.diff(resource.data).affectedKeys().hasOnly(['friends']));
     }
 
     // 2. Recursive Messages Access (For Admin CollectionGroup Queries)
@@ -119,8 +122,9 @@ service cloud.firestore {
       // Regular participants cannot read if they've hidden the chat
       allow read: if (isSignedIn() && (
         (isAdmin() || isGod()) || 
-        (resource == null) || // Support discovery logic (ChatPage.jsx)
-        (request.auth.uid in resource.data.participants)
+        (resource == null) || 
+        (request.auth.uid in resource.data.participants) ||
+        isParticipant(chatId)
       )) && isNotBanned();
       
       allow create: if isSignedIn() && isNotBanned();

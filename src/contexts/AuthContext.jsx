@@ -220,110 +220,118 @@ export function AuthProvider({ children }) {
     }
 
     useEffect(() => {
-        // Handle any pending redirect results (fallback for mobile/redirect-based flows)
+        let mounted = true;
+
+        // Handle Redirect Result
         getRedirectResult(auth).then((result) => {
-            if (result?.user) {
-                console.debug('Redirect sign-in result processed for:', result.user.email);
+            if (mounted && result?.user) {
+                console.debug('Redirect sign-in result processed:', result.user.email);
             }
         }).catch((error) => {
-            // Only log non-trivial redirect errors
-            if (error.code && error.code !== 'auth/credential-already-in-use') {
+            if (mounted && error.code && error.code !== 'auth/credential-already-in-use') {
                 console.debug('Redirect result error:', error.code);
             }
         });
 
-        // Fail-safe: Force loading to false after 8 seconds if Firebase/Listeners hang
-        const bootTimeout = setTimeout(() => {
-            if (loading) {
-                console.warn("Boot Sequence Timeout: Forcing load completion.");
-                setLoading(false);
-            }
-        }, 8000);
-
-        // Main auth state listener
         const unsubscribe = onAuthStateChanged(auth, async (user) => {
+            if (!mounted) return;
             if (isLoggingOutRef.current) return;
 
             try {
                 if (user) {
+                    // 1. Immediate UI Optimistic Update
+                    setCurrentUser(prev => ({
+                        uid: user.uid,
+                        email: user.email,
+                        displayName: user.displayName || "User",
+                        photoURL: user.photoURL,
+                        emailVerified: user.emailVerified,
+                        ...prev
+                    }));
+
+                    // 2. Clear loading state immediately to show App UI
+                    setLoading(false);
+
+                    // 3. Background Profile Sync (Non-Blocking)
                     const userRef = doc(db, "users", user.uid);
-                    let userSnap = await getGetDocWithTimeout(userRef, 5000);
 
-                    if (!userSnap.exists()) {
-                        console.debug("Provisioning new user profile...");
-                        const searchableName = (user.displayName || user.email?.split('@')[0] || "user").toLowerCase();
-                        await setDoc(userRef, {
-                            uid: user.uid,
-                            displayName: user.displayName || user.email?.split('@')[0] || "User",
-                            searchableName: searchableName,
-                            email: user.email,
-                            photoURL: user.photoURL,
-                            createdAt: serverTimestamp(),
-                            isOnline: true,
-                            locationSharingEnabled: true,
-                            lastSeen: serverTimestamp(),
-                            phoneNumber: user.phoneNumber,
-                            metadata: {
-                                creationTime: user.metadata.creationTime,
-                                lastSignInTime: user.metadata.lastSignInTime
-                            }
-                        });
-                        userSnap = await getDoc(userRef);
-                    } else {
-                        const userData = userSnap.data();
-                        if (!userData.searchableName && userData.displayName) {
-                            updateDoc(userRef, { searchableName: userData.displayName.toLowerCase() }).catch(() => { });
-                        }
-                        await updateDoc(userRef, {
-                            isOnline: true,
-                            "metadata.lastSignInTime": user.metadata.lastSignInTime
-                        });
-                    }
-
-                    const baseData = userSnap.exists() ? userSnap.data() : {};
-                    setCurrentUser({ ...user, ...baseData });
-
+                    // Listen for real-time updates
                     if (userDocUnsubscribeRef.current) userDocUnsubscribeRef.current();
 
-                    userDocUnsubscribeRef.current = onSnapshot(userRef, (docSnap) => {
-                        if (isLoggingOutRef.current) return;
+                    userDocUnsubscribeRef.current = onSnapshot(userRef, async (docSnap) => {
+                        if (!mounted || isLoggingOutRef.current) return;
+
                         if (docSnap.exists()) {
                             const userData = docSnap.data();
+
+                            // Security Check: Ban/Deletion
                             if (userData.isBanned || userData.deletionRequested) {
-                                alert(userData.isBanned ? "Account Banned" : "Deletion Pending");
-                                logout();
+                                console.warn("User is banned or pending deletion. Logging out.");
+                                await logout();
                                 return;
                             }
-                            setCurrentUser(prev => prev ? { ...prev, ...userData } : userData);
-                            if (userData.locationSharingEnabled) updateUserLocation(user.uid, userData);
+
+                            // Update Context State
+                            setCurrentUser(prev => ({ ...prev, ...userData }));
+
+                            // Auto-Populate Searchable Name if missing
+                            if (!userData.searchableName && userData.displayName) {
+                                const searchableName = userData.displayName.toLowerCase();
+                                updateDoc(userRef, { searchableName }).catch(e => console.debug("Auto-fix searchableName failed", e));
+                            }
+                        } else {
+                            // First-time user provisioning (if not created by trigger yet)
+                            console.debug("Provisioning new user profile...");
+                            const searchableName = (user.displayName || user.email?.split('@')[0] || "user").toLowerCase();
+                            try {
+                                await setDoc(userRef, {
+                                    uid: user.uid,
+                                    displayName: user.displayName || user.email?.split('@')[0] || "User",
+                                    searchableName: searchableName,
+                                    email: user.email,
+                                    photoURL: user.photoURL,
+                                    createdAt: serverTimestamp(),
+                                    isOnline: true,
+                                    locationSharingEnabled: true,
+                                    lastSeen: serverTimestamp(),
+                                    phoneNumber: user.phoneNumber,
+                                    metadata: {
+                                        creationTime: user.metadata.creationTime,
+                                        lastSignInTime: user.metadata.lastSignInTime
+                                    }
+                                });
+                            } catch (e) {
+                                console.error("Profile provisioning failed:", e);
+                            }
                         }
                     }, (err) => {
-                        if (err.code === 'permission-denied') logout();
+                        console.warn("Profile snapshot error:", err);
+                        // Don't log out purely on snapshot error (might be offline)
                     });
 
+                    // 4. Update Location (Throttled & Safe)
+                    // We don't await this.
+                    setTimeout(() => {
+                        updateUserLocation(user.uid).catch(e => console.debug("Initial location update failed", e));
+                    }, 1000);
+
                 } else {
+                    // Signed Out
                     if (userDocUnsubscribeRef.current) {
                         userDocUnsubscribeRef.current();
                         userDocUnsubscribeRef.current = null;
                     }
                     setCurrentUser(null);
+                    setLoading(false);
                 }
             } catch (error) {
-                console.error("Auth Initialization Error:", error);
-                // Fail-safe for permission denied during early boot
-                if (error.code === 'permission-denied') {
-                    setCurrentUser(null);
-                }
-            } finally {
-                // Ensure loading is always cleared, but with a tiny delay to allow states to settle
-                setTimeout(() => {
-                    setLoading(false);
-                    clearTimeout(bootTimeout);
-                }, 100);
+                console.error("Auth State Check Error:", error);
+                setLoading(false);
             }
         });
 
         return () => {
+            mounted = false;
             unsubscribe();
             if (userDocUnsubscribeRef.current) userDocUnsubscribeRef.current();
         };

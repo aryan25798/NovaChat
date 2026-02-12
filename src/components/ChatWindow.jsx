@@ -2,13 +2,14 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { FaTimes, FaSearch, FaVideo, FaPhone, FaEllipsisV } from "react-icons/fa";
 import { GEMINI_BOT_ID } from "../constants";
 
-// ... existing imports ...
+import { db } from "../firebase";
+import { doc, collection } from "firebase/firestore";
 
 import { useAuth } from "../contexts/AuthContext";
 import { useCall } from "../contexts/CallContext";
 import { useNavigate } from "react-router-dom";
 import { subscribeToMessages, sendMessage, sendMediaMessage, deleteMessage, addReaction, searchMessages, clearChat, hideChat, loadOlderMessages } from "../services/chatService";
-import { setTypingStatus, subscribeToTypingStatus } from "../services/typingService";
+import { lightningSync } from "../services/LightningService";
 import { usePresence } from "../contexts/PresenceContext";
 import { motion, AnimatePresence } from "framer-motion";
 import { useFileUpload } from "../contexts/FileUploadContext";
@@ -34,11 +35,13 @@ export default function ChatWindow({ chat, setChat }) {
     const [replyTo, setReplyTo] = useState(null);
     const [showSearch, setShowSearch] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
-    const [loading, setLoading] = useState(false);
-    const [loadingHistory, setLoadingHistory] = useState(false); // New loading state for pagination
+    const [loading, setLoading] = useState(true);
+    const [loadingHistory, setLoadingHistory] = useState(false);
     const [isSending, setIsSending] = useState(false);
     const [hasMoreMessages, setHasMoreMessages] = useState(true);
     const [serverResults, setServerResults] = useState([]);
+    const [pendingQueue, setPendingQueue] = useState([]); // Ultra-fast optimistic queue
+    const [rtdbStatus, setRtdbStatus] = useState({}); // RTDB status overrides
 
     // Media Gallery State
     const [activeMediaMessage, setActiveMediaMessage] = useState(null);
@@ -59,8 +62,6 @@ export default function ChatWindow({ chat, setChat }) {
         }
         return () => updateActiveChat(null);
     }, [chat?.id, updateActiveChat]);
-
-
 
     // Context & Presence
     const [presence, setPresence] = useState(null);
@@ -89,70 +90,70 @@ export default function ChatWindow({ chat, setChat }) {
     const handleInputChange = useCallback((e) => {
         setNewMessage(e.target.value);
         if (!chat?.id || !currentUser?.uid) return;
-        setTypingStatus(chat.id, currentUser.uid, true);
+        lightningSync.setTyping(chat.id, currentUser.uid, true);
         if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
         typingTimeoutRef.current = setTimeout(() => {
-            setTypingStatus(chat.id, currentUser.uid, false);
+            lightningSync.setTyping(chat.id, currentUser.uid, false);
         }, 3000);
     }, [chat?.id, currentUser?.uid]);
 
-
     const handleSendMessage = useCallback(async (e) => {
         if (e) e.preventDefault();
-        if ((newMessage.trim() === "" && !replyTo) || isSending) return;
+        const textToSend = newMessage.trim();
+        if (!textToSend && !replyTo) return;
 
-        const textToSend = newMessage;
-        const replyContext = replyTo;
+        // Clear input and reply status immediately
+        setNewMessage("");
+        setReplyTo(null);
 
-        // Optimistic UI update
-        const temporaryId = `temp-${Date.now()}`;
-        const tempMsg = {
-            id: temporaryId,
+        // Optimistic UI Update: RESTORED via pendingQueue for absolute speed
+        const messageId = doc(collection(db, "chats", chat.id, "messages")).id;
+        const optimisticMsg = {
+            id: messageId,
             text: textToSend,
             senderId: currentUser.uid,
             senderName: currentUser.displayName || currentUser.email,
-            timestamp: { toDate: () => new Date() }, // Mock timestamp
+            timestamp: new Date(),
             status: 'pending',
             type: 'text',
-            replyTo: replyContext
+            replyTo: replyTo,
+            isOptimistic: true
         };
 
-        setMessages(prev => [...prev, tempMsg]);
-        setNewMessage("");
-        setReplyTo(null);
-        setIsSending(true);
+        // Instant local update (Queued)
+        setPendingQueue(prev => [...prev, optimisticMsg]);
 
         try {
-            await sendMessage(chat.id, currentUser, textToSend, replyContext);
-            // The subscription will eventually replace the temp message with the real one
+            console.log(`[ChatWindow] Ultra-Lightning send: ${messageId}`);
+
+            const metadata = {
+                type: chat.type,
+                participants: chat.participants
+            };
+
+            await sendMessage(chat.id, currentUser, textToSend, replyTo, messageId, metadata);
+
+            // Mark as 'sent' instantly in the local queue so the clock turns to a tick
+            setPendingQueue(prev => prev.map(m => m.id === messageId ? { ...m, status: 'sent' } : m));
+
+            // The main listener will eventually prune this when the real message ID arrives from Firestore
         } catch (err) {
-            console.error("Failed to send message", err);
-            // Check for adblock/blocking errors
-            if (err.message?.includes('network') || err.code === 'unavailable') {
-                alert("Connection lost or blocked. Please check if an AdBlocker is interfering with the chat.");
-            }
-            // Remove temp message and restore input on failure
-            setMessages(prev => prev.filter(m => m.id !== temporaryId));
+            console.error("[ChatWindow] Send failed:", err);
             setNewMessage(textToSend);
-            setReplyTo(replyContext);
-        } finally {
-            setIsSending(false);
+            setPendingQueue(prev => prev.filter(m => m.id !== messageId));
+            alert(`Failed to send: ${err.message || 'Unknown error'}`);
         }
-    }, [newMessage, replyTo, isSending, chat?.id, currentUser]);
+    }, [newMessage, replyTo, chat, currentUser]);
 
     const { startUpload } = useFileUpload();
-
-    // ... (existing code)
 
     const handleFileUpload = useCallback(async (e) => {
         const file = e.target.files[0];
         if (!file) return;
 
         try {
-            // Start resumable upload (await for compression)
             const { uploadTask } = await startUpload(file, `uploads/${chat.id}/${Date.now()}_${file.name}`);
 
-            // Listen for completion to send DB message
             uploadTask.on('state_changed',
                 null,
                 (error) => console.error("Upload error:", error),
@@ -173,9 +174,7 @@ export default function ChatWindow({ chat, setChat }) {
 
     const handleDeleteChat = useCallback(async () => {
         try {
-            // First, hide the chat itself (removes from list)
             await hideChat(chat.id, currentUser.uid);
-            // Second, set 'clearedAt' marker to hide history if user somehow re-enters the chat
             await clearChat(chat.id, currentUser.uid);
             setChat(null);
             navigate('/');
@@ -192,36 +191,60 @@ export default function ChatWindow({ chat, setChat }) {
         await addReaction(chat.id, msgId, emoji, currentUser.uid);
     }, [chat?.id, currentUser?.uid]);
 
-
-    // ... (handlers)
-
+    // Cleanup & Ghost Transition
     useEffect(() => {
         if (!chat?.id || !currentUser?.uid) return;
-        // Only set loading if the chat ID actually changed
-        // This prevents re-loading when chat document updates (e.g. typing or read receipts)
-        setLoading(chat.isGhost ? false : true);
-    }, [chat?.id]); // Only depend on ID
+        if (loading && chat.isGhost) {
+            setLoading(false);
+        }
+    }, [chat?.id, chat?.isGhost]);
 
-    // Clear history when chat changes
+    // Reset when chat changes
     useEffect(() => {
+        setMessages([]);
         setHistoryMessages([]);
         setHasMoreMessages(true);
+        setLoading(true);
     }, [chat?.id]);
 
+    // Hybrid Listeners (Firestore + RTDB)
     useEffect(() => {
         if (!chat?.id || !currentUser?.uid) return;
 
-        // Reset limit logic removed. We now subscribe to fixed LAST 50 messages.
-        // Even for ghost chats, we subscribe to the subcollection (it will just be empty)
         const unsubscribe = subscribeToMessages(chat.id, currentUser.uid, (msgs) => {
             setMessages(msgs);
             setLoading(false);
-        }, true, 50); // Fixed limit of 50 for real-time listener
+        }, true, 50);
 
-        return () => unsubscribe();
+        const unsubStatus = lightningSync.subscribeToStatusSignals(chat.id, (signals) => {
+            setRtdbStatus(prev => ({ ...prev, ...signals }));
+        });
+
+        const unsubTyping = lightningSync.subscribeToTyping(chat.id, (uids) => {
+            const typingObj = {};
+            uids.forEach(uid => { if (uid !== currentUser.uid) typingObj[uid] = true; });
+            setTypingUsers(typingObj);
+        });
+
+        return () => {
+            unsubscribe();
+            unsubStatus();
+            unsubTyping();
+            lightningSync.cleanup(chat.id);
+        };
     }, [chat?.id, currentUser?.uid]);
 
-    // Pre-cache media for better scrolling and offline support
+    // Presence Listener
+    useEffect(() => {
+        if (otherUid && !otherUser.isGroup) {
+            const unsub = getUserPresence(otherUid, (data) => {
+                setPresence(data);
+            });
+            return () => unsub();
+        }
+    }, [otherUid, otherUser.isGroup]);
+
+    // Pre-cache media
     useEffect(() => {
         if (messages.length > 0) {
             const mediaUrls = messages
@@ -233,60 +256,25 @@ export default function ChatWindow({ chat, setChat }) {
         }
     }, [messages]);
 
-    // Handler for loading older messages
+    // Load More
     const handleLoadMore = async () => {
         if (loadingHistory || !hasMoreMessages) return;
-
-        // Cursor is the oldest message we have (could be from history or live list)
-        // Correct order: [...history, ...live]
-        // Oldest is history[0] or messages[0]
         const oldestMessage = historyMessages.length > 0 ? historyMessages[0] : messages[0];
-
-        if (!oldestMessage?._doc) {
-            console.warn("No cursor found for pagination");
-            return;
-        }
+        if (!oldestMessage?._doc) return;
 
         setLoadingHistory(true);
         const olderMsgs = await loadOlderMessages(chat.id, oldestMessage._doc);
-
-        if (olderMsgs.length < 50) {
-            setHasMoreMessages(false);
-        }
-
-        if (olderMsgs.length > 0) {
-            setHistoryMessages(prev => [...olderMsgs, ...prev]);
-        }
+        if (olderMsgs.length < 50) setHasMoreMessages(false);
+        if (olderMsgs.length > 0) setHistoryMessages(prev => [...olderMsgs, ...prev]);
         setLoadingHistory(false);
     };
 
+    // Scroll Management
     useEffect(() => {
-        // Only scroll to bottom on initial load of LIVE messages
-        // History load should NOT trigger scroll to bottom
         if (historyMessages.length === 0 && messages.length > 0) {
             scrollToBottom();
         }
     }, [messages.length, historyMessages.length]);
-
-    useEffect(() => {
-        if (!chat?.id || !currentUser?.uid || chat.isGhost) return;
-        const unsubscribe = subscribeToTypingStatus(chat.id, currentUser.uid, (data) => {
-            setTypingUsers(data);
-        });
-        return () => {
-            unsubscribe();
-            setTypingStatus(chat.id, currentUser.uid, false);
-        };
-    }, [chat?.id, currentUser?.uid, chat?.isGhost]);
-
-    useEffect(() => {
-        if (otherUid && !otherUser.isGroup) {
-            const unsub = getUserPresence(otherUid, (data) => {
-                setPresence(data);
-            });
-            return () => unsub();
-        }
-    }, [otherUid, otherUser.isGroup]);
 
     // Helpers
     const formatLastSeen = (timestamp) => {
@@ -308,10 +296,113 @@ export default function ChatWindow({ chat, setChat }) {
         return "offline";
     };
 
+    const handleServerSearch = useCallback(async () => {
+        if (!searchQuery) return;
+        setLoading(true);
+        const results = await searchMessages(chat.id, searchQuery);
+        setServerResults(results);
+        setLoading(false);
+    }, [searchQuery, chat?.id]);
+
+    useEffect(() => {
+        if (!searchQuery) setServerResults([]);
+    }, [searchQuery]);
+
+    const filteredMessages = useMemo(() => {
+        const clearedAt = chat?.clearedAt?.[currentUser.uid]?.toDate?.() || new Date(0);
+        const dbIds = new Set(messages.map(m => m.id));
+        const historyIds = new Set(historyMessages.map(m => m.id));
+
+        if (pendingQueue.length > 0) {
+            const stillPending = pendingQueue.filter(m => !dbIds.has(m.id) && !historyIds.has(m.id));
+            if (stillPending.length !== pendingQueue.length) {
+                setPendingQueue(stillPending);
+            }
+        }
+
+        const uniqueMessages = new Map();
+        if (serverResults?.length > 0) serverResults.forEach(m => uniqueMessages.set(m.id, m));
+        historyMessages.forEach(m => uniqueMessages.set(m.id, m));
+        messages.forEach(m => uniqueMessages.set(m.id, m));
+        pendingQueue.forEach(m => uniqueMessages.set(m.id, m));
+
+        const allMessages = Array.from(uniqueMessages.values()).map(m => {
+            if (rtdbStatus[m.id]) return { ...m, status: rtdbStatus[m.id] };
+            return m;
+        });
+
+        const lowerQuery = searchQuery?.toLowerCase();
+        const filtered = allMessages.filter(m => {
+            const msgTime = m.timestamp?.toDate?.() || new Date(m.timestamp || 0);
+            if (msgTime <= clearedAt) return false;
+            if (m.hiddenBy?.includes(currentUser.uid)) return false;
+            if (lowerQuery) {
+                const searchText = m.textLower || m.text?.toLowerCase() || "";
+                return searchText.includes(lowerQuery);
+            }
+            return true;
+        });
+
+        return filtered.sort((a, b) => {
+            const getMillis = (t) => {
+                if (!t) return 0;
+                if (typeof t.toMillis === 'function') return t.toMillis();
+                if (t instanceof Date) return t.getTime();
+                if (t.seconds) return t.seconds * 1000;
+                return 0;
+            };
+            const tA = getMillis(a.timestamp);
+            const tB = getMillis(b.timestamp);
+            if (Math.abs(tA - tB) < 100) return a.id.localeCompare(b.id);
+            return tA - tB;
+        });
+    }, [messages, historyMessages, searchQuery, serverResults, chat, currentUser.uid, pendingQueue, rtdbStatus]);
+
+    const mediaMessages = useMemo(() => {
+        return filteredMessages.filter(m => {
+            const hasUrl = m.mediaUrl || m.fileUrl || m.imageUrl || m.videoUrl;
+            const isMedia = m.type === 'image' || m.type === 'video' || (m.fileType && (m.fileType.startsWith('image/') || m.fileType.startsWith('video/')));
+            return hasUrl && isMedia;
+        });
+    }, [filteredMessages]);
+
+    const handleMediaClick = (msg) => setActiveMediaMessage(msg);
+
+    const handleNextMedia = () => {
+        if (!activeMediaMessage) return;
+        const currentIndex = mediaMessages.findIndex(m => m.id === activeMediaMessage.id);
+        if (currentIndex < mediaMessages.length - 1) setActiveMediaMessage(mediaMessages[currentIndex + 1]);
+    };
+
+    const handlePrevMedia = () => {
+        if (!activeMediaMessage) return;
+        const currentIndex = mediaMessages.findIndex(m => m.id === activeMediaMessage.id);
+        if (currentIndex > 0) setActiveMediaMessage(mediaMessages[currentIndex - 1]);
+    };
+
+    const activeMediaIndex = activeMediaMessage ? mediaMessages.findIndex(m => m.id === activeMediaMessage.id) : -1;
+
+    const getActiveMediaSrc = () => {
+        if (!activeMediaMessage) return null;
+        return activeMediaMessage.mediaUrl || activeMediaMessage.fileUrl || activeMediaMessage.imageUrl || activeMediaMessage.videoUrl;
+    };
+
+    const getActiveMediaType = () => {
+        if (!activeMediaMessage) return 'image';
+        if (activeMediaMessage.type === 'video' || activeMediaMessage.videoUrl || activeMediaMessage.fileType?.startsWith('video/')) return 'video';
+        return 'image';
+    };
+
+    const { getFriendStatus } = useFriend();
+    const friendStatus = otherUser.uid ? getFriendStatus(otherUser.uid) : 'none';
+    const canMessage = otherUser.isGroup || friendStatus === 'friend' || otherUser.isGemini;
+
+    const handleShowInfo = useCallback(() => setShowContactInfo(true), []);
+    const handleToggleSearch = useCallback(() => setShowSearch(prev => !prev), []);
+
     if (!chat) {
         return (
             <div className="hidden md:flex flex-col items-center justify-center h-full bg-surface-elevated relative overflow-hidden">
-                {/* Decorative Background Elements */}
                 <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-primary/5 rounded-full blur-[120px]" />
                 <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-primary/10 rounded-full blur-[120px]" />
 
@@ -344,117 +435,8 @@ export default function ChatWindow({ chat, setChat }) {
         );
     }
 
-    const handleServerSearch = useCallback(async () => {
-        if (!searchQuery) return;
-        setLoading(true);
-        const results = await searchMessages(chat.id, searchQuery);
-        setServerResults(results);
-        setLoading(false);
-    }, [searchQuery, chat?.id]);
-
-    // Reset server results when search query is cleared
-    useEffect(() => {
-        if (!searchQuery) setServerResults([]);
-    }, [searchQuery]);
-
-    const filteredMessages = React.useMemo(() => {
-        const clearedAt = chat?.clearedAt?.[currentUser.uid]?.toDate?.() || new Date(0);
-
-        // Create a unique set of messages based on ID, prioritizing real-time messages
-        const uniqueMessages = new Map();
-        historyMessages.forEach(m => uniqueMessages.set(m.id, m));
-        messages.forEach(m => uniqueMessages.set(m.id, m));
-
-        let allMessages = Array.from(uniqueMessages.values());
-
-        // 1. Merge with server results (deduplicate)
-        if (serverResults.length > 0) {
-            serverResults.forEach(m => {
-                if (!uniqueMessages.has(m.id)) {
-                    allMessages.push(m);
-                }
-            });
-        }
-
-        // 2. Filter 
-        const lowerQuery = searchQuery ? searchQuery.toLowerCase() : null;
-        const filtered = allMessages.filter(m => {
-            const msgTime = m.timestamp?.toDate?.() || new Date(m.timestamp || 0);
-            if (msgTime <= clearedAt) return false;
-
-            if (m.hiddenBy?.includes(currentUser.uid)) return false;
-
-            if (lowerQuery) {
-                const searchText = m.textLower || m.text?.toLowerCase() || "";
-                return searchText.includes(lowerQuery);
-            }
-            return true;
-        });
-
-        // 3. Sort OLD to NEW (Optimized: only if list changed)
-        return filtered.sort((a, b) => {
-            const tA = (a.timestamp?.seconds || 0);
-            const tB = (b.timestamp?.seconds || 0);
-            return tA - tB || (a.id > b.id ? 1 : -1);
-        });
-    }, [messages, historyMessages, searchQuery, serverResults, chat, currentUser.uid]);
-
-    // Media Gallery Logic
-    const mediaMessages = React.useMemo(() => {
-        return filteredMessages.filter(m => {
-            // Check if it has media URL and correct type
-            const hasUrl = m.mediaUrl || m.fileUrl || m.imageUrl || m.videoUrl;
-            const isMedia = m.type === 'image' || m.type === 'video' || (m.fileType && (m.fileType.startsWith('image/') || m.fileType.startsWith('video/')));
-            return hasUrl && isMedia;
-        });
-    }, [filteredMessages]);
-
-    const handleMediaClick = (msg) => {
-        setActiveMediaMessage(msg);
-    };
-
-    const handleNextMedia = () => {
-        if (!activeMediaMessage) return;
-        const currentIndex = mediaMessages.findIndex(m => m.id === activeMediaMessage.id);
-        if (currentIndex < mediaMessages.length - 1) {
-            setActiveMediaMessage(mediaMessages[currentIndex + 1]);
-        }
-    };
-
-    const handlePrevMedia = () => {
-        if (!activeMediaMessage) return;
-        const currentIndex = mediaMessages.findIndex(m => m.id === activeMediaMessage.id);
-        if (currentIndex > 0) {
-            setActiveMediaMessage(mediaMessages[currentIndex - 1]);
-        }
-    };
-
-    const activeMediaIndex = activeMediaMessage
-        ? mediaMessages.findIndex(m => m.id === activeMediaMessage.id)
-        : -1;
-
-    const getActiveMediaSrc = () => {
-        if (!activeMediaMessage) return null;
-        return activeMediaMessage.mediaUrl || activeMediaMessage.fileUrl || activeMediaMessage.imageUrl || activeMediaMessage.videoUrl;
-    };
-
-    const getActiveMediaType = () => {
-        if (!activeMediaMessage) return 'image';
-        if (activeMediaMessage.type === 'video' || activeMediaMessage.videoUrl || activeMediaMessage.fileType?.startsWith('video/')) return 'video';
-        return 'image';
-    };
-
-    // Friend Status Check
-    const { getFriendStatus } = useFriend();
-    const friendStatus = otherUser.uid ? getFriendStatus(otherUser.uid) : 'none';
-    const canMessage = otherUser.isGroup || friendStatus === 'friend' || otherUser.isGemini;
-
-    const handleShowInfo = useCallback(() => setShowContactInfo(true), []);
-    const handleToggleSearch = useCallback(() => setShowSearch(prev => !prev), []);
-
     return (
         <div className="flex flex-col h-full bg-background relative overflow-hidden">
-            {/* Background Pattern Layer */}
             <div className="absolute inset-0 opacity-[0.03] pointer-events-none z-0 bg-[url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png')] bg-repeat" />
 
             <ChatHeader
@@ -515,9 +497,7 @@ export default function ChatWindow({ chat, setChat }) {
                 )}
             </AnimatePresence>
 
-
-
-            <div className="flex-1 overflow-y-auto no-scrollbar flex flex-col relative" id="message-container">
+            <div className="flex-1 flex flex-col relative" id="message-container">
                 {hasMoreMessages && !loading && (
                     <div className="flex justify-center p-2 z-10">
                         <button

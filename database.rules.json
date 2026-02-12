@@ -1,26 +1,31 @@
 {
     "rules": {
-        ".read": false,
-        ".write": false,
         "status": {
-            ".read": "auth != null",
-            "$uid": {
-                ".write": "auth != null && auth.uid === $uid"
+            "$userId": {
+                ".read": "auth != null",
+                ".write": "auth != null && auth.uid == $userId"
             }
         },
-        "typing": {
+        "chats": {
             "$chatId": {
                 ".read": "auth != null",
-                "$uid": {
-                    ".write": "auth != null && auth.uid === $uid",
-                    ".validate": "newData.isBoolean()"
+                "typing": {
+                    "$userId": {
+                        ".write": "auth != null && auth.uid == $userId",
+                        ".validate": "newData.isNumber() || newData.val() == null"
+                    }
+                },
+                "signals": {
+                    "$messageId": {
+                        ".write": "auth != null",
+                        ".validate": "newData.hasChildren(['senderId', 'timestamp'])"
+                    }
+                },
+                "status": {
+                    "$messageId": {
+                        ".write": "auth != null"
+                    }
                 }
-            }
-        },
-        "rate_limits": {
-            "$uid": {
-                ".read": false,
-                ".write": false
             }
         }
     }

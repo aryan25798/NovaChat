@@ -17,6 +17,7 @@ export const searchUsers = async (searchTerm, currentUserId) => {
         try {
             const q = query(
                 usersRef,
+                where("superAdmin", "==", false),
                 orderBy("displayName"),
                 limit(MAX_RESULTS)
             );
@@ -24,7 +25,7 @@ export const searchUsers = async (searchTerm, currentUserId) => {
             const users = [];
             snap.forEach(doc => {
                 const data = doc.data();
-                if (doc.id !== currentUserId && !data.isAdmin) {
+                if (doc.id !== currentUserId && !data.isAdmin && data.superAdmin !== true) {
                     users.push({ id: doc.id, ...data });
                 }
             });
@@ -35,47 +36,47 @@ export const searchUsers = async (searchTerm, currentUserId) => {
         }
     }
 
-    // STRATEGY: Use `searchableName` (lowercase) for a single name query.
-    // This replaces 3 case-variant displayName queries with 1.
-    // Admin filtering is done client-side (trivial for ≤20 results).
+    // HEURISTIC OPTIMIZATION:
+    // 1. If term contains '@', it's likely an email -> Only search email.
+    // 2. Otherwise, search 'searchableName' (prefix).
+    // 3. Drop legacy 'displayName' search to save resources.
 
-    // Query 1: Search by Email (emails are always stored lowercase)
-    const qEmail = query(
-        usersRef,
-        where('email', '>=', term),
-        where('email', '<=', term + '\uf8ff'),
-        limit(MAX_RESULTS)
-    );
+    const queries = [];
 
-    // Query 2: Search by searchableName (Case-insensitive prefix)
-    const qName = query(
-        usersRef,
-        where('searchableName', '>=', term),
-        where('searchableName', '<=', term + '\uf8ff'),
-        limit(MAX_RESULTS)
-    );
+    if (term.includes('@')) {
+        queries.push(query(
+            usersRef,
+            where("superAdmin", "==", false),
+            where('email', '>=', term),
+            where('email', '<=', term + '\uf8ff'),
+            limit(MAX_RESULTS)
+        ));
+    } else {
+        queries.push(query(
+            usersRef,
+            where("superAdmin", "==", false),
+            where('searchableName', '>=', term),
+            where('searchableName', '<=', term + '\uf8ff'),
+            limit(MAX_RESULTS)
+        ));
+    }
 
     try {
-        const [emailSnap, nameSnap] = await Promise.all([
-            getDocs(qEmail),
-            getDocs(qName)
-        ]);
-
+        const snapshots = await Promise.all(queries.map(q => getDocs(q)));
         const userMap = new Map();
 
-        const addToMap = (snap) => {
+        snapshots.forEach(snap => {
             snap.forEach(doc => {
                 const data = doc.data();
-                if (doc.id !== currentUserId && !data.superAdmin && !data.isAdmin) {
+                if (doc.id !== currentUserId && data.superAdmin !== true && !data.isAdmin) {
                     userMap.set(doc.id, { id: doc.id, ...data });
                 }
             });
-        };
+        });
 
-        addToMap(emailSnap);
-        addToMap(nameSnap);
-
-        return Array.from(userMap.values()).slice(0, MAX_RESULTS);
+        const combined = Array.from(userMap.values());
+        // STRICTURE LIMIT for 10k+ users: only return TOP 20
+        return combined.slice(0, MAX_RESULTS);
 
     } catch (error) {
         console.error("Error searching users:", error);
@@ -147,12 +148,14 @@ export const getUsersByIds = async (userIds) => {
  * Fetches users in pages using cursor-based pagination.
  * @param {Object} lastDoc - The last document snapshot from previous page.
  * @param {number} pageSize - Number of users per page.
+ * @param {string} currentUserId - The ID of the current user to exclude.
  * @returns {Promise<Object>} - { users: Array, lastDoc: Object }
  */
-export const getPagedUsers = async (lastDoc = null, pageSize = 20) => {
+export const getPagedUsers = async (lastDoc = null, pageSize = 20, currentUserId = null) => {
     try {
         let q = query(
             collection(db, "users"),
+            where("superAdmin", "==", false),
             orderBy("displayName"),
             limit(pageSize)
         );
@@ -162,7 +165,16 @@ export const getPagedUsers = async (lastDoc = null, pageSize = 20) => {
         }
 
         const snapshot = await getDocs(q);
-        const users = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        // Filter superAdmins, Admins, AND Current User in memory
+        const users = snapshot.docs
+            .map(doc => ({ id: doc.id, ...doc.data() }))
+            .filter(u => {
+                // exclude self
+                if (currentUserId && u.id === currentUserId) return false;
+                // exclude super admin and admins
+                if (u.superAdmin === true || u.isAdmin === true) return false;
+                return true;
+            });
 
         return {
             users,

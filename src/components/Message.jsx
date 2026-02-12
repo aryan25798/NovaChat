@@ -15,9 +15,6 @@ const Message = memo(({ message, chat, isOwn, onDelete, onReply, onReact, onMedi
     const [showMenu, setShowMenu] = useState(false);
     const { currentUser } = useAuth();
 
-    if (message.hiddenBy && message.hiddenBy.includes(currentUser.uid)) {
-        return null;
-    }
 
     const formatTime = (timestamp) => {
         if (!timestamp) return "";
@@ -72,7 +69,7 @@ const Message = memo(({ message, chat, isOwn, onDelete, onReply, onReact, onMedi
         <div
             id={`msg-${message.id}`}
             className={cn(
-                "flex flex-col w-full relative mb-1",
+                "flex flex-col w-full relative mb-1 min-h-[40px] md:min-h-[44px]",
                 isOwn ? "items-end" : "items-start",
                 showTail ? "mt-2" : ""
             )}

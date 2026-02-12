@@ -46,7 +46,7 @@ export function MessageList({
         const showTail = !nextMsg || nextMsg.senderId !== msg.senderId;
 
         return (
-            <div className="px-4 md:px-[8%] lg:px-[12%] py-0.5">
+            <div key={msg.id} className="px-4 md:px-[8%] lg:px-[12%] py-0.5">
                 <Message
                     key={msg.id}
                     message={msg}
@@ -77,20 +77,32 @@ export function MessageList({
     }
 
     return (
-        <div className="flex-1 min-h-0 relative w-full overflow-hidden bg-transparent">
-            {/* 
-                Virtuoso handles virtualization. 
-                We use 'followOutput' to keep scroll at bottom when new items are added 
-            */}
-            <Virtuoso
-                ref={virtuosoRef}
-                style={{ height: "100%", width: "100%" }}
-                data={messages}
-                context={contextValue}
-                itemContent={itemContent}
-                followOutput={"smooth"} // Auto-scroll behavior
-                alignToBottom={true} // Stick to bottom on load
-            />
+        <div style={{ flex: "1 1 auto", minHeight: 0, height: '100%', width: '100%' }} className="relative bg-transparent overflow-hidden">
+            {messages.length === 0 ? (
+                <div className="flex items-center justify-center h-full text-zinc-500">
+                    No messages yet. Say hi!
+                </div>
+            ) : (
+                <Virtuoso
+                    ref={virtuosoRef}
+                    style={{ height: "100%", width: "100%" }}
+                    data={messages}
+                    computeItemKey={msg => msg.id}
+                    context={contextValue}
+                    itemContent={itemContent}
+                    initialTopMostItemIndex={messages.length > 0 ? messages.length - 1 : 0}
+                    followOutput={(isAtBottom) => isAtBottom ? "auto" : false}
+                    alignToBottom={true}
+                    defaultItemHeight={72} // Slightly larger for safety
+                    increaseViewportBy={800} // More aggressive pre-rendering
+                    atBottomThreshold={100}
+                    overscan={200} // Pre-render 200px of content above/below
+                    components={{
+                        Footer: () => <div className="h-4 w-full invisible" aria-hidden="true" />,
+                        Header: () => <div className="h-4 w-full invisible" aria-hidden="true" />
+                    }}
+                />
+            )}
         </div>
     );
 }

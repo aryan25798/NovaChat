@@ -42,13 +42,16 @@ const DeliveryStatusListener = () => {
             for (const chat of chatsToProcess) {
                 try {
                     const messagesRef = collection(db, 'chats', chat.id, 'messages');
-                    const q = query(
+                    const qUndelivered = query(
                         messagesRef,
                         where('delivered', '==', false),
                         where('senderId', '!=', currentUser.uid)
                     );
 
-                    const snapshot = await getDocs(q);
+                    const snapshot = await getDocs(qUndelivered).catch(e => {
+                        console.warn(`[DeliveryListener] Skipping chat ${chat.id}:`, e.message);
+                        return { empty: true };
+                    });
 
                     if (snapshot.empty) continue;
 
@@ -65,11 +68,14 @@ const DeliveryStatusListener = () => {
                         console.log(`[DeliveryListener] Marked ${updateCount} messages as delivered in chat ${chat.id}`);
                     }
 
+                    // Tiny delay to avoid hitting Firebase write-heavy rate limits
+                    await new Promise(r => setTimeout(r, 50));
+
                 } catch (error) {
-                    console.error("Error marking messages as delivered:", error);
+                    console.error(`[DeliveryListener] Error in chat ${chat.id}:`, error);
                 }
             }
-        });
+        }, 30, 'DeliveryStatusListener');
 
         return () => unsubscribe();
     }, [currentUser]);

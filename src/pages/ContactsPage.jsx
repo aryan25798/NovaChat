@@ -10,6 +10,7 @@ import { useFriend } from "../contexts/FriendContext";
 import { useAuth } from "../contexts/AuthContext";
 import { getPagedUsers, searchUsers, getUsersByIds } from "../services/userService";
 import { Virtuoso } from "react-virtuoso";
+import { getChatId } from "../utils/chatUtils";
 
 const ContactsPage = () => {
     const { startCall } = useCall();
@@ -37,17 +38,38 @@ const ContactsPage = () => {
                 setFriendUsers([]);
                 return;
             }
+
+            // 1. Immediately show cached friends (Zero-Wait)
+            const initiallyResolved = friends.map(fid => friendCacheRef.current.get(fid)).filter(Boolean);
+            setFriendUsers(initiallyResolved);
+
             const uncachedIds = friends.filter(fid => !friendCacheRef.current.has(fid));
-            if (uncachedIds.length > 0) {
-                try {
-                    const users = await getUsersByIds(uncachedIds);
-                    users.forEach(user => friendCacheRef.current.set(user.id, user));
-                } catch (e) {
-                    console.error("Error fetching friend details:", e);
-                }
+            if (uncachedIds.length === 0) return;
+
+            // 2. Parallelized Fetching (Ultra-Lightning)
+            // Instead of waiting for one chunk to finish, we trigger all fetches simultaneously.
+            const CHUNK_SIZE = 10;
+            const chunks = [];
+            for (let i = 0; i < uncachedIds.length; i += CHUNK_SIZE) {
+                chunks.push(uncachedIds.slice(i, i + CHUNK_SIZE));
             }
-            const users = friends.map(fid => friendCacheRef.current.get(fid)).filter(Boolean);
-            setFriendUsers(users);
+
+            try {
+                // Fetch ALL chunks in parallel
+                const chunkResults = await Promise.all(
+                    chunks.map(chunk => getUsersByIds(chunk))
+                );
+
+                // Update Cache
+                chunkResults.flat().forEach(user => {
+                    if (user && user.id) friendCacheRef.current.set(user.id, user);
+                });
+
+                // Final sync to UI
+                setFriendUsers(friends.map(fid => friendCacheRef.current.get(fid)).filter(Boolean));
+            } catch (e) {
+                console.error("[Contacts] Parallel fetch failed:", e);
+            }
         };
         fetchFriendDetails();
     }, [friends]);
@@ -61,7 +83,7 @@ const ContactsPage = () => {
 
     const loadInitialGlobalUsers = async () => {
         setLoading(true);
-        const { users, lastDoc: newLastDoc } = await getPagedUsers(null, 20);
+        const { users, lastDoc: newLastDoc } = await getPagedUsers(null, 20, currentUser?.uid);
         setGlobalUsers(users);
         setLastDoc(newLastDoc);
         setHasMore(users.length === 20);
@@ -71,7 +93,7 @@ const ContactsPage = () => {
     const loadMoreGlobalUsers = async () => {
         if (loadingMore || !hasMore || !!searchTerm) return;
         setLoadingMore(true);
-        const { users, lastDoc: newLastDoc } = await getPagedUsers(lastDoc, 20);
+        const { users, lastDoc: newLastDoc } = await getPagedUsers(lastDoc, 20, currentUser?.uid);
         if (users.length > 0) {
             setGlobalUsers(prev => [...prev, ...users]);
             setLastDoc(newLastDoc);
@@ -98,7 +120,7 @@ const ContactsPage = () => {
             } else {
                 setSearchResults([]);
             }
-        }, 500);
+        }, 200); // 200ms for "instant" feel
         return () => clearTimeout(delayDebounce);
     }, [searchTerm, currentUser.uid]);
 
@@ -112,6 +134,8 @@ const ContactsPage = () => {
         }, type);
     };
 
+
+
     const renderContactItem = (index, contact) => {
         if (!contact) return null;
         const status = getFriendStatus(contact.id);
@@ -119,41 +143,65 @@ const ContactsPage = () => {
         const isSent = status === 'sent';
         const isReceived = status === 'received';
 
+        // Generate Canonical Chat ID
+        const chatId = getChatId(currentUser?.uid, contact.id);
+
         return (
-            <div className="relative group border-b border-border/30 last:border-0 bg-surface">
-                {isFriend ? (
-                    <Link to={`/c/${contact.id}`} className="flex items-center gap-4 p-4 hover:bg-surface-elevated transition-colors cursor-pointer">
-                        <Avatar src={contact.photoURL} alt={contact.displayName} size="lg" />
+            <div className="relative group border-b border-border/10 last:border-0 bg-surface hover:bg-surface-elevated transition-all duration-200">
+                <div className="flex items-center gap-4 p-4">
+                    <Link
+                        to={`/c/${chatId}`}
+                        state={{
+                            chatData: {
+                                id: chatId,
+                                participants: [currentUser?.uid, contact.id],
+                                type: 'private',
+                                participantInfo: {
+                                    [contact.id]: { displayName: contact.displayName, photoURL: contact.photoURL },
+                                    [currentUser?.uid]: { displayName: currentUser?.displayName, photoURL: currentUser?.photoURL }
+                                }
+                            }
+                        }}
+                        onClick={e => !isFriend && e.preventDefault()}
+                        className={`flex items-center gap-4 flex-1 min-w-0 ${isFriend ? 'cursor-pointer' : 'cursor-default'}`}
+                    >
+                        <div className="relative">
+                            <Avatar src={contact.photoURL} alt={contact.displayName} size="lg" className="border border-border/20 shadow-sm" />
+                            {/* Online Status Indicator (Optional - if data available) */}
+                            {contact.isOnline && <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-surface rounded-full"></span>}
+                        </div>
+
                         <div className="flex-1 min-w-0">
-                            <h3 className="font-bold text-text-1 truncate text-[16px]">{contact.displayName || contact.name || "Unknown"}</h3>
-                            <p className="text-sm text-text-2 truncate">{contact.about || "Hey there! I am using NovaChat."}</p>
+                            <h3 className="font-bold text-text-1 truncate text-[16px] leading-snug">{contact.displayName || contact.name || "Unknown"}</h3>
+                            <p className="text-sm text-text-2/80 truncate">{contact.about || "Hey there! I am using NovaChat."}</p>
                         </div>
                     </Link>
-                ) : (
-                    <div className="flex items-center gap-4 p-4 hover:bg-surface-elevated transition-colors">
-                        <Avatar src={contact.photoURL} alt={contact.displayName} size="lg" />
-                        <div className="flex-1 min-w-0">
-                            <h3 className="font-bold text-text-1 truncate text-[16px]">{contact.displayName || contact.name || "Unknown"}</h3>
-                            <p className="text-sm text-text-2 truncate">{contact.about || "Hey there! I am using NovaChat."}</p>
-                        </div>
-                    </div>
-                )}
 
-                <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
-                    {isFriend ? (
-                        <>
-                            <button className="p-2 text-primary hover:bg-primary/10 rounded-full transition-colors" onClick={(e) => handleCall(e, contact, 'audio')}><BsTelephone className="w-5 h-5" /></button>
-                            <button className="p-2 text-primary hover:bg-primary/10 rounded-full transition-colors" onClick={(e) => handleCall(e, contact, 'video')}><BsCameraVideo className="w-5 h-5" /></button>
-                        </>
-                    ) : isSent ? (
-                        <span className="text-xs font-bold text-text-2 bg-surface-elevated px-3 py-1.5 rounded-full border border-border/50">SENT</span>
-                    ) : isReceived ? (
-                        <button onClick={() => setView('requests')} className="text-xs font-bold text-primary bg-primary/10 px-3 py-1.5 rounded-full hover:bg-primary/20 transition-all">CHECK REQUESTS</button>
-                    ) : (
-                        <Button size="sm" className="bg-primary hover:bg-primary/90 text-white h-8 px-4 rounded-full text-xs font-bold gap-1 shadow-sm" onClick={(e) => { e.stopPropagation(); sendRequest(contact.id); }}>
-                            <IoPersonAdd className="w-4 h-4" /> ADD
-                        </Button>
-                    )}
+                    <div className="flex items-center gap-2 shrink-0">
+                        {isFriend ? (
+                            <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button className="p-2.5 text-primary bg-primary/5 hover:bg-primary/10 rounded-full transition-colors" onClick={(e) => handleCall(e, contact, 'audio')} title="Audio Call"><BsTelephone className="w-5 h-5" /></button>
+                                <button className="p-2.5 text-primary bg-primary/5 hover:bg-primary/10 rounded-full transition-colors" onClick={(e) => handleCall(e, contact, 'video')} title="Video Call"><BsCameraVideo className="w-5 h-5" /></button>
+                                <Link to={`/c/${chatId}`} className="p-2.5 text-primary bg-primary/5 hover:bg-primary/10 rounded-full transition-colors" title="Message"><IoPeopleOutline className="w-5 h-5" /></Link>
+                            </div>
+                        ) : isSent ? (
+                            <span className="flex items-center gap-1 text-xs font-bold text-text-2 bg-surface-elevated px-4 py-2 rounded-full border border-border/50 select-none">
+                                <span className="w-1.5 h-1.5 bg-yellow-500 rounded-full animate-pulse"></span> REQUEST SENT
+                            </span>
+                        ) : isReceived ? (
+                            <button onClick={() => setView('requests')} className="flex items-center gap-1 text-xs font-bold text-primary bg-primary/10 px-4 py-2 rounded-full hover:bg-primary/20 transition-all">
+                                RESPOND
+                            </button>
+                        ) : (
+                            <Button
+                                size="sm"
+                                className="bg-gradient-to-r from-primary to-whatsapp-teal text-white h-9 px-5 rounded-full text-xs font-bold shadow-md hover:shadow-lg hover:brightness-110 active:scale-95 transition-all flex items-center gap-2"
+                                onClick={(e) => { e.stopPropagation(); sendRequest(contact.id); }}
+                            >
+                                <IoPersonAdd className="w-4 h-4" /> ADD FRIEND
+                            </Button>
+                        )}
+                    </div>
                 </div>
             </div>
         );
@@ -212,7 +260,7 @@ const ContactsPage = () => {
             )}
 
             {/* List Content */}
-            <div className="flex-1 bg-surface min-h-0">
+            <div style={{ flex: '1 1 auto', minHeight: 0 }} className="bg-surface">
                 {loading && displayData.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-full text-text-2 animate-pulse gap-3">
                         <div className="w-12 h-12 rounded-full border-4 border-primary/20 border-t-primary animate-spin" />

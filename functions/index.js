@@ -1562,17 +1562,24 @@ exports.cleanupStalePresence = onSchedule("every 15 minutes", async (event) => {
         const snapshot = await staleQuery.get();
         if (snapshot.empty) return;
 
-        const batch = db.batch();
-        snapshot.docs.forEach(docSnap => {
-            const uid = docSnap.id;
-            // 1. Mark location offline
-            batch.update(docSnap.ref, { isOnline: false });
-            // 2. Mark user profile offline
-            batch.update(db.collection('users').doc(uid), { isOnline: false });
-        });
+        // BATCHING FIX: Process in chunks of 200 (2 ops per doc = 400 ops, safe under 500 limit)
+        const chunkArray = (arr, size) => arr.length > size ? [arr.slice(0, size), ...chunkArray(arr.slice(size), size)] : [arr];
+        const chunks = chunkArray(snapshot.docs, 200);
 
-        await batch.commit();
-        logger.info(`Presence Sweep: Deactivated ${snapshot.size} stale users.`);
+        let processed = 0;
+
+        for (const chunk of chunks) {
+            const batch = db.batch();
+            chunk.forEach(docSnap => {
+                const uid = docSnap.id;
+                batch.update(docSnap.ref, { isOnline: false });
+                batch.update(db.collection('users').doc(uid), { isOnline: false });
+            });
+            await batch.commit();
+            processed += chunk.length;
+        }
+
+        logger.info(`Presence Sweep: Deactivated ${processed} stale users in ${chunks.length} batches.`);
     } catch (err) {
         logger.error("Presence Sweep Failed", err);
     }
@@ -1580,8 +1587,7 @@ exports.cleanupStalePresence = onSchedule("every 15 minutes", async (event) => {
 
 /**
  * ADMIN: Global Presence Reset
- * Forcefully marks all users as offline. Used primarily for system maintenance
- * or to clear "ghost" counts after a legacy architecture change.
+ * Forcefully marks all users as offline. Scaled for large user bases.
  */
 exports.adminResetAllPresence = onCall(async (request) => {
     if (!request.auth || (!request.auth.token.superAdmin && !request.auth.token.isAdmin)) {
@@ -1593,15 +1599,99 @@ exports.adminResetAllPresence = onCall(async (request) => {
         const onlineLocations = await db.collection('user_locations').where('isOnline', '==', true).get();
         const onlineUsers = await db.collection('users').where('isOnline', '==', true).get();
 
-        const batch = db.batch();
-        onlineLocations.docs.forEach(d => batch.update(d.ref, { isOnline: false }));
-        onlineUsers.docs.forEach(d => batch.update(d.ref, { isOnline: false }));
+        const writeOps = [];
 
-        await batch.commit();
-        logger.warn(`Admin ${request.auth.uid} triggered GLOBAL PRESENCE RESET. ${onlineLocations.size} locations cleared.`);
+        onlineLocations.docs.forEach(d => {
+            writeOps.push({ ref: d.ref, data: { isOnline: false } });
+        });
+        onlineUsers.docs.forEach(d => {
+            writeOps.push({ ref: d.ref, data: { isOnline: false } });
+        });
 
-        return { success: true, count: onlineLocations.size };
-    } catch (err) {
-        throw new HttpsError('internal', err.message);
+        // Batching Helper for massive resets
+        const BATCH_SIZE = 450;
+        const chunkArray = (arr, size) => arr.length > size ? [arr.slice(0, size), ...chunkArray(arr.slice(size), size)] : [arr];
+        const chunks = chunkArray(writeOps, BATCH_SIZE);
+
+        for (const chunk of chunks) {
+            const batch = db.batch();
+            chunk.forEach(op => batch.update(op.ref, op.data));
+            await batch.commit();
+        }
+
+        logger.info(`Admin Reset: Forced offline for ${onlineLocations.size} locations and ${onlineUsers.size} users.`);
+        return { success: true };
+    } catch (error) {
+        logger.error("Admin Reset Failed", error);
+        throw new HttpsError('internal', error.message);
     }
 });
+
+/**
+ * SECURE AI AGENT HELPER
+ * Handles direct Gemini API calls server-side to protect the API Key.
+ * Supports: 'summarize', 'smartReply'
+ */
+exports.aiAgentHelper = onCall(async (request) => {
+    if (!request.auth) throw new HttpsError('unauthenticated', 'Login required.');
+
+    const { mode, data } = request.data;
+    if (!['summarize', 'smartReply'].includes(mode)) {
+        throw new HttpsError('invalid-argument', 'Invalid mode.');
+    }
+
+    try {
+        let prompt;
+        if (mode === 'summarize') {
+            const { messages } = data;
+            if (!messages || messages.length === 0) return { result: "No messages to summarize." };
+
+            const transcript = messages.map(m => `${m.senderName}: ${m.text}`).join("\n");
+            prompt = `Please provide a concise, bullet-pointed summary of the following chat transcript. Highlight the main topics discussed and any decisions made:\n\n${transcript}`;
+        }
+        else if (mode === 'smartReply') {
+            const { messages } = data;
+            if (!messages || messages.length === 0) return { result: [] };
+
+            const lastMessages = messages.slice(-5).map(m => `${m.senderName}: ${m.text}`).join("\n");
+            prompt = `Based on the following recent messages in a WhatsApp chat, suggest 3 very short, natural-sounding quick replies (e.g., "Sounds good!", "I'm on it", "See you then"). Return ONLY a JSON array of strings:\n\n${lastMessages}`;
+        }
+
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }]
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`Gemini API Error: ${response.statusText}`);
+        }
+
+        const json = await response.json();
+        const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+
+        if (mode === 'smartReply') {
+            // Parse JSON for smart replies
+            const jsonMatch = text.match(/\[.*\]/s);
+            let replies = [];
+            if (jsonMatch) {
+                replies = JSON.parse(jsonMatch[0].trim());
+            } else {
+                const stripped = text.replace(/```json|```/g, "").trim();
+                if (stripped.startsWith("[") && stripped.endsWith("]")) {
+                    replies = JSON.parse(stripped);
+                }
+            }
+            return { result: replies };
+        }
+
+        return { result: text };
+
+    } catch (error) {
+        logger.error(`AI Helper Failed (${mode})`, error);
+        throw new HttpsError('internal', "AI Service Failed");
+    }
+});
+

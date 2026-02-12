@@ -1,59 +1,45 @@
-import { getGeminiResponse } from "./GeminiService";
+import { functions } from "../firebase";
+import { httpsCallable } from "firebase/functions";
+
+const aiAgentHelper = httpsCallable(functions, 'aiAgentHelper');
 
 /**
- * Summarizes a list of messages using Gemini AI.
+ * Summarizes a list of messages using Server-Side Gemini.
  * @param {Array} messages - List of message objects { senderName, text }.
  * @returns {Promise<string>} The summary text.
  */
 export async function summarizeChat(messages) {
     if (!messages || messages.length === 0) return "No messages to summarize.";
 
-    const chatTranscript = messages
-        .map(m => `${m.senderName}: ${m.text}`)
-        .join("\n");
-
-    const prompt = `Please provide a concise, bullet-pointed summary of the following chat transcript. Highlight the main topics discussed and any decisions made:\n\n${chatTranscript}`;
-
-    return await getGeminiResponse(prompt);
+    try {
+        const result = await aiAgentHelper({
+            mode: 'summarize',
+            data: { messages }
+        });
+        return result.data.result;
+    } catch (error) {
+        console.error("Summarize Chat Failed:", error);
+        return "Unable to generate summary at this time.";
+    }
 }
 
 /**
- * Generates smart reply suggestions based on the last few messages.
+ * Generates smart reply suggestions via Server-Side Gemini.
  * @param {Array} messages - List of recent message objects.
  * @returns {Promise<Array<string>>} List of suggested replies.
  */
 export async function getSmartReplies(messages) {
     if (!messages || messages.length === 0) return [];
 
-    const lastMessages = messages.slice(-5).map(m => `${m.senderName}: ${m.text}`).join("\n");
-
-    const prompt = `Based on the following recent messages in a WhatsApp chat, suggest 3 very short, natural-sounding quick replies (e.g., "Sounds good!", "I'm on it", "See you then"). Return ONLY a JSON array of strings:\n\n${lastMessages}`;
-
     try {
-        const response = await getGeminiResponse(prompt);
-        if (!response) return [];
-
-        // Find JSON array in the text (in case AI adds conversational filler outside triple backticks)
-        const jsonMatch = response.match(/\[.*\]/s);
-        if (jsonMatch) {
-            const cleaned = jsonMatch[0].trim();
-            return JSON.parse(cleaned);
-        }
-
-        // Fallback: strip markdown
-        const stripped = response.replace(/```json|```/g, "").trim();
-        if (stripped.startsWith("[") && stripped.endsWith("]")) {
-            return JSON.parse(stripped);
-        }
-
-        console.warn("AI response did not contain a valid JSON array:", response);
-        return [];
-    } catch (e) {
-        if (e.code === 'MISSING_API_KEY') {
-            // Silently fail for smart replies if key is missing
-            return [];
-        }
-        console.error("AI Suggestions Error:", e);
+        const result = await aiAgentHelper({
+            mode: 'smartReply',
+            data: { messages }
+        });
+        return result.data.result || [];
+    } catch (error) {
+        // Silently fail for smart replies to avoid UI clutter
+        console.debug("Smart Reply Failed:", error);
         return [];
     }
 }

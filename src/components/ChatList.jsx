@@ -11,6 +11,7 @@ import { useFriend } from "../contexts/FriendContext";
 import { IoPersonAdd } from "react-icons/io5";
 import { Virtuoso } from "react-virtuoso";
 import { cn } from "../lib/utils";
+import { getChatId } from "../utils/chatUtils";
 
 const SearchAction = React.memo(({ userId }) => {
     const { getFriendStatus, sendRequest } = useFriend();
@@ -67,21 +68,25 @@ const ChatList = React.memo(({ searchTerm }) => {
             setChats(filteredChats);
             setLoading(false);
             hasInitiallyLoaded = true;
-        });
+        }, 30, 'ChatList');
 
         return () => unsubscribe();
     }, [currentUser]);
 
-    // Filter existing chats locally by search term
+    // Filter AND Sort existing chats locally
     const filteredChats = useMemo(() => {
-        if (!searchTerm || !searchTerm.trim()) return chats;
-        const lowerTerm = searchTerm.toLowerCase().trim();
-        return chats.filter(chat => {
-            // Match against chat name or participant names
-            const chatName = (chat.name || chat.chatName || '').toLowerCase();
-            const participantNames = (chat.participantNames || []).map(n => (n || '').toLowerCase());
-            return chatName.includes(lowerTerm) || participantNames.some(n => n.includes(lowerTerm));
-        });
+        let result = chats;
+
+        if (searchTerm && searchTerm.trim()) {
+            const lowerTerm = searchTerm.toLowerCase().trim();
+            result = result.filter(chat => {
+                const chatName = (chat.name || chat.chatName || '').toLowerCase();
+                const participantNames = (chat.participantNames || []).map(n => (n || '').toLowerCase());
+                return chatName.includes(lowerTerm) || participantNames.some(n => n.includes(lowerTerm));
+            });
+        }
+
+        return result;
     }, [chats, searchTerm]);
 
     useEffect(() => {
@@ -102,7 +107,7 @@ const ChatList = React.memo(({ searchTerm }) => {
             }
         };
 
-        const timeout = setTimeout(handleSearch, 300);
+        const timeout = setTimeout(handleSearch, 200);
         return () => clearTimeout(timeout);
     }, [searchTerm, currentUser]);
 
@@ -135,16 +140,21 @@ const ChatList = React.memo(({ searchTerm }) => {
         ];
 
         return (
-            <div className="h-full w-full overflow-hidden">
+            <div style={{ flex: '1 1 auto', minHeight: 0 }} className="w-full h-full">
                 <Virtuoso
                     data={combinedResults}
                     style={{ height: '100%' }}
+                    totalCount={combinedResults.length}
+                    initialItemCount={15}
+                    increaseViewportBy={300}
                     className="custom-scrollbar"
                     itemContent={(index, item) => {
+                        if (!item) return null;
+
                         if (item.type === 'header') {
                             return (
                                 <div className={cn(
-                                    "p-2 text-xs font-semibold uppercase sticky top-0 bg-surface z-20", // Increased z-index
+                                    "p-2 text-xs font-semibold uppercase sticky top-0 bg-surface z-20",
                                     item.label === 'Chats' ? "text-muted-foreground" : "text-whatsapp-teal"
                                 )}>
                                     {item.label}
@@ -152,26 +162,25 @@ const ChatList = React.memo(({ searchTerm }) => {
                             );
                         }
 
-                        // It's a User Search Result
-                        if (item.email) {
-                            return (
-                                <div key={item.id} className="relative group border-b border-border/30 last:border-0 hover:bg-surface-elevated transition-colors">
-                                    <Link to={`/c/${item.id}`} className="flex items-center gap-4 p-4 cursor-pointer">
-                                        <Avatar src={item.photoURL} alt={item.displayName} size="lg" />
-                                        <div className="flex-1 min-w-0 text-left">
-                                            <h3 className="font-bold text-text-1 truncate text-[16px]">{item.displayName}</h3>
-                                            <p className="text-sm text-text-2 truncate">{item.email}</p>
-                                        </div>
-                                    </Link>
-                                    <div className="absolute right-4 top-1/2 -translate-y-1/2">
-                                        <SearchAction userId={item.id} />
-                                    </div>
-                                </div>
-                            );
+                        // Case 1: Active Chat Item
+                        if (item.participants || item.lastMessage) {
+                            return <ChatListItem key={item.id} chat={item} currentUserId={currentUser.uid} />;
                         }
 
-                        // It's a Chat List Item
-                        return <ChatListItem key={item.id} chat={item} currentUserId={currentUser.uid} />;
+                        // Case 2: User Search Result (Search mode)
+                        return (
+                            <Link
+                                to={`/c/${getChatId(currentUser.uid, item.id)}`}
+                                key={item.id}
+                                className="flex items-center gap-4 p-4 hover:bg-surface-elevated transition-colors border-b border-border/10"
+                            >
+                                <Avatar src={item.photoURL} alt={item.displayName} size="lg" />
+                                <div className="flex-1 min-w-0">
+                                    <h3 className="font-bold text-text-1 truncate">{item.displayName || "Unknown User"}</h3>
+                                    <p className="text-sm text-text-2 truncate">{item.email || "Click to start chatting"}</p>
+                                </div>
+                            </Link>
+                        );
                     }}
                     components={{
                         EmptyPlaceholder: () => (
@@ -196,11 +205,12 @@ const ChatList = React.memo(({ searchTerm }) => {
     }
 
     return (
-        <div className="h-full w-full overflow-hidden">
+        <div style={{ flex: '1 1 auto', minHeight: 0 }} className="h-full w-full">
             <Virtuoso
                 data={chats}
                 useWindowScroll={false}
                 initialItemCount={15}
+                increaseViewportBy={300}
                 style={{ height: '100%' }}
                 itemContent={(index, chat) => {
                     if (!chat || !currentUser) return null;

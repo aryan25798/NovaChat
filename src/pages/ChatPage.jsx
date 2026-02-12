@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { db } from "../firebase";
 import { doc, getDoc, collection, query, where, getDocs, limit, onSnapshot, updateDoc } from "firebase/firestore";
@@ -22,15 +22,37 @@ const ChatPage = () => {
         let unsubscribe = () => { };
 
         const resolveChat = async () => {
-            setLoading(true);
+            // NEW: Speculative Speculation (Zero-Wait)
+            const { GEMINI_BOT_ID } = await import("../constants");
+            const isBot = id === GEMINI_BOT_ID || id.startsWith('gemini_');
+            const speculatedId = isBot ? id : (id.includes('_') ? id : [currentUser.uid, id].sort().join("_"));
+
+            // 1. If we have state, use it immediately
+            if (location.state?.chatData) {
+                setChat(location.state.chatData);
+                setLoading(false);
+            }
+            // 2. OR Speculate if it's a direct URL hit (UID or encoded ID)
+            else if (id.length === 28 || id.includes('_')) {
+                setChat({
+                    id: speculatedId,
+                    isGhost: true, // Treat as ghost until we confirm existence
+                    participants: isBot ? [currentUser.uid, id] : (id.includes('_') ? null : [currentUser.uid, id]),
+                    type: isBot ? "gemini" : (id.includes('_') ? "group" : "private")
+                });
+                setLoading(false);
+            } else {
+                setLoading(true);
+            }
+
             try {
-                const { GEMINI_BOT_ID } = await import("../constants");
-                const isBot = id === GEMINI_BOT_ID || id.startsWith('gemini_');
+                // Background metadata resolution
                 const ghostId = isBot ? id : [currentUser.uid, id].sort().join("_");
                 const ghostChatRef = doc(db, "chats", ghostId);
-
-                // Run potential resolutions in parallel where possible
                 const directRef = doc(db, "chats", id);
+                let targetRef = null;
+                let initialData = null;
+
                 const results = await Promise.allSettled([
                     getDoc(directRef),
                     !isBot ? getDoc(doc(db, "users", id)) : Promise.resolve(null),
@@ -38,107 +60,54 @@ const ChatPage = () => {
                 ]);
 
                 if (isCancelled) return;
-
                 const [directSnap, userSnap, ghostSnap] = results.map(r => r.status === 'fulfilled' ? r.value : null);
-
-                let targetRef = null;
-                let initialData = null;
 
                 if (directSnap?.exists()) {
                     targetRef = directRef;
                 } else if (ghostSnap?.exists()) {
                     targetRef = ghostChatRef;
                 } else if (isBot) {
-                    // Bot ghost setup
                     initialData = {
-                        id: id,
-                        type: "gemini",
-                        participants: [currentUser.uid, id],
-                        isGhost: true,
-                        groupName: "Gemini AI",
+                        id: id, type: "gemini", participants: [currentUser.uid, id], isGhost: true,
                         participantInfo: {
                             [id]: { displayName: "Gemini AI", photoURL: "https://uxwing.com/wp-content/themes/uxwing/download/brands-and-social-media/google-gemini-icon.png" },
                             [currentUser.uid]: { displayName: currentUser.displayName, photoURL: currentUser.photoURL }
                         }
                     };
                 } else if (userSnap?.exists()) {
-                    // User ghost setup
                     initialData = {
-                        id: ghostId,
-                        type: "private",
-                        participants: [currentUser.uid, id],
+                        id: ghostId, type: "private", participants: [currentUser.uid, id], isGhost: true,
                         participantInfo: {
                             [id]: userSnap.data(),
                             [currentUser.uid]: { displayName: currentUser.displayName, photoURL: currentUser.photoURL }
-                        },
-                        isGhost: true
+                        }
                     };
                 }
 
-                if (!targetRef) {
-                    if (initialData) {
-                        setChat(initialData);
-                        setLoading(false);
-                    } else {
-                        // Final fallback: check for existing private chat if ID was a participant
-                        const q = query(
-                            collection(db, "chats"),
-                            where("participants", "array-contains", currentUser.uid),
-                            where("type", "==", "private"),
-                            limit(20)
-                        );
-                        const qSnap = await getDocs(q);
-                        const match = qSnap.docs.find(d => (d.data().participants || []).includes(id));
-                        if (match && !isCancelled) {
-                            targetRef = match.ref;
-                        } else {
-                            if (!isCancelled) {
-                                setChat(null);
-                                setLoading(false);
-                            }
-                            return;
-                        }
-                    }
+                if (!targetRef && !initialData) {
+                    // Final fallback Search
+                    const qSnaps = await getDocs(query(collection(db, "chats"), where("participants", "array-contains", currentUser.uid), limit(20)));
+                    const match = qSnaps.docs.find(d => (d.data().participants || []).includes(id));
+                    if (match && !isCancelled) targetRef = match.ref;
+                }
+
+                if (initialData && !isCancelled) {
+                    setChat(initialData);
                 }
 
                 if (targetRef && !isCancelled) {
                     const listenerKey = `chat-${targetRef.id}`;
                     unsubscribe = onSnapshot(targetRef, async (docSnap) => {
-                        if (isCancelled) return;
-                        if (docSnap.exists()) {
-                            const data = docSnap.data();
-                            // Self-healing metadata
-                            if (data.type === 'private' && !data.participantInfo) {
-                                const otherUid = data.participants?.find(uid => uid !== currentUser.uid);
-                                if (otherUid) {
-                                    const uSnap = await getDoc(doc(db, "users", otherUid));
-                                    if (uSnap.exists()) {
-                                        data.participantInfo = {
-                                            [otherUid]: uSnap.data(),
-                                            [currentUser.uid]: { displayName: currentUser.displayName, photoURL: currentUser.photoURL }
-                                        };
-                                        updateDoc(docSnap.ref, { participantInfo: data.participantInfo }).catch(() => { });
-                                    }
-                                }
-                            }
-                            setChat({ id: docSnap.id, ...data });
-                        } else {
-                            setChat(null);
-                        }
-                        setLoading(false);
+                        if (isCancelled || !docSnap.exists()) return;
+                        const data = docSnap.data();
+                        setChat({ id: docSnap.id, ...data, isGhost: false });
                     }, (err) => {
-                        if (!isCancelled) {
-                            listenerManager.handleListenerError(err, 'ChatPage');
-                            setLoading(false);
-                        }
+                        if (!isCancelled) listenerManager.handleListenerError(err, 'ChatPage');
                     });
                     listenerManager.subscribe(listenerKey, unsubscribe);
                 }
             } catch (error) {
-                if (!isCancelled) {
-                    console.error("Critical error resolving chat:", error);
-                    setLoading(false);
-                }
+                console.error("Chat Resolution Error:", error);
             }
         };
 

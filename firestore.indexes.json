@@ -23,6 +23,20 @@
                     "order": "ASCENDING"
                 },
                 {
+                    "fieldPath": "displayName",
+                    "order": "ASCENDING"
+                }
+            ]
+        },
+        {
+            "collectionGroup": "users",
+            "queryScope": "COLLECTION",
+            "fields": [
+                {
+                    "fieldPath": "superAdmin",
+                    "order": "ASCENDING"
+                },
+                {
                     "fieldPath": "searchableName",
                     "order": "ASCENDING"
                 }
