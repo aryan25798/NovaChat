@@ -77,7 +77,7 @@ export function MessageList({
     }
 
     return (
-        <div style={{ flex: "1 1 auto", minHeight: "200px", height: '100%', width: '100%' }} className="relative bg-transparent overflow-hidden">
+        <div style={{ flex: "1 1 auto", minHeight: "400px", height: '100%', width: '100%' }} className="relative bg-transparent overflow-hidden">
             {messages.length === 0 ? (
                 <div className="flex items-center justify-center h-full text-zinc-500">
                     No messages yet. Say hi!

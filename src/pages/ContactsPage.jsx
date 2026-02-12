@@ -260,7 +260,7 @@ const ContactsPage = () => {
             )}
 
             {/* List Content */}
-            <div style={{ flex: '1 1 auto', minHeight: "200px" }} className="bg-surface relative">
+            <div style={{ flex: '1 1 auto', minHeight: "400px", height: '100%' }} className="bg-surface relative overflow-hidden">
                 {loading && displayData.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-full text-text-2 animate-pulse gap-3">
                         <div className="w-12 h-12 rounded-full border-4 border-primary/20 border-t-primary animate-spin" />
@@ -290,11 +290,12 @@ const ContactsPage = () => {
                     <Virtuoso
                         data={displayData}
                         totalCount={displayData.length}
-                        initialItemCount={Math.min(displayData.length, 15)}
+                        initialItemCount={Math.min(displayData.length, 12)}
                         endReached={view === 'discover' && !searchTerm ? loadMoreGlobalUsers : undefined}
                         itemContent={renderContactItem}
                         increaseViewportBy={500}
                         style={{ height: '100%', width: '100%' }}
+                        defaultItemHeight={80}
                         className="custom-scrollbar"
                         components={{
                             Footer: () => (

@@ -140,13 +140,14 @@ const ChatList = React.memo(({ searchTerm }) => {
         ];
 
         return (
-            <div style={{ flex: '1 1 auto', minHeight: "100px" }} className="w-full h-full">
+            <div style={{ flex: '1 1 auto', minHeight: "300px", height: '100%' }} className="w-full h-full relative overflow-hidden">
                 <Virtuoso
                     data={combinedResults}
-                    style={{ height: '100%' }}
+                    style={{ height: '100%', width: '100%' }}
                     totalCount={combinedResults.length}
-                    initialItemCount={Math.min(combinedResults.length, 15)}
+                    initialItemCount={Math.min(combinedResults.length, 12)}
                     increaseViewportBy={300}
+                    defaultItemHeight={72}
                     className="custom-scrollbar"
                     itemContent={(index, item) => {
                         if (!item) return null;
@@ -205,14 +206,15 @@ const ChatList = React.memo(({ searchTerm }) => {
     }
 
     return (
-        <div style={{ flex: '1 1 auto', minHeight: "100px" }} className="h-full w-full">
+        <div style={{ flex: '1 1 auto', minHeight: "300px", height: '100%' }} className="h-full w-full relative overflow-hidden">
             <Virtuoso
                 data={chats}
                 useWindowScroll={false}
                 totalCount={chats.length}
-                initialItemCount={Math.min(chats.length, 15)}
+                initialItemCount={Math.min(chats.length, 12)}
                 increaseViewportBy={300}
-                style={{ height: '100%' }}
+                style={{ height: '100%', width: '100%' }}
+                defaultItemHeight={72}
                 itemContent={(index, chat) => {
                     if (!chat || !currentUser) return null;
                     return <ChatListItem key={chat.id} chat={chat} currentUserId={currentUser.uid} />;
