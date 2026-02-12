@@ -1,20 +1,14 @@
 {
-    "cleanUrls": true,
-    "rewrites": [
+    "routes": [
         {
-            "source": "/(.*)",
-            "destination": "/index.html"
-        }
-    ],
-    "headers": [
+            "handle": "filesystem"
+        },
         {
-            "source": "/(.*)",
-            "headers": [
-                {
-                    "key": "Cross-Origin-Opener-Policy",
-                    "value": "same-origin-allow-popups"
-                }
-            ]
+            "src": "/(.*)",
+            "dest": "/index.html",
+            "headers": {
+                "Cross-Origin-Opener-Policy": "same-origin-allow-popups"
+            }
         }
     ]
 }
