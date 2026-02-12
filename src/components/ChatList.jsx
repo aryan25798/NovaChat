@@ -158,11 +158,12 @@ const ChatList = React.memo(({ searchTerm }) => {
     }
 
     return (
-        <div className="flex-1 h-full overflow-hidden">
+        <div className="h-full w-full overflow-hidden">
             <Virtuoso
                 data={chats}
                 useWindowScroll={false}
                 initialItemCount={15}
+                style={{ height: '100%' }}
                 itemContent={(index, chat) => {
                     if (!chat || !currentUser) return null;
                     return <ChatListItem key={chat.id} chat={chat} currentUserId={currentUser.uid} />;

@@ -152,7 +152,7 @@ const Sidebar = React.memo(() => {
             </div>
 
             {/* Chat List */}
-            <div className="flex-1 overflow-y-auto no-scrollbar bg-surface-elevated">
+            <div className="flex-1 min-h-0 bg-surface-elevated">
                 <ChatList searchTerm={searchTerm} />
             </div>
 
