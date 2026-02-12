@@ -1,24 +1,5 @@
 {
-    "cleanUrls": true,
     "headers": [
-        {
-            "source": "/assets/(.*)",
-            "headers": [
-                {
-                    "key": "cache-control",
-                    "value": "public, max-age=31536000, immutable"
-                }
-            ]
-        },
-        {
-            "source": "/sw.js",
-            "headers": [
-                {
-                    "key": "cache-control",
-                    "value": "public, max-age=0, must-revalidate"
-                }
-            ]
-        },
         {
             "source": "/(.*)",
             "headers": [
@@ -29,21 +10,13 @@
                 {
                     "key": "X-Content-Type-Options",
                     "value": "nosniff"
-                },
-                {
-                    "key": "X-Frame-Options",
-                    "value": "DENY"
-                },
-                {
-                    "key": "X-XSS-Protection",
-                    "value": "1; mode=block"
                 }
             ]
         }
     ],
     "rewrites": [
         {
-            "source": "/(.*)",
+            "source": "/((?!assets/|sw.js|favicon.ico|nova-icon|manifest.webmanifest|sounds/).*)",
             "destination": "/index.html"
         }
     ]
