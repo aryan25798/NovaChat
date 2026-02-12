@@ -177,6 +177,20 @@ export const getPagedUsers = async (lastDoc = null, pageSize = 15, currentUserId
         };
     } catch (e) {
         console.error("Error fetching paged users:", e);
+        if (e.code === 'failed-precondition') {
+            console.warn("Firestore index missing! Falling back to simpler query.");
+            // Fallback: simpler search without composite index
+            try {
+                const q = query(collection(db, "users"), limit(pageSize));
+                const snapshot = await getDocs(q);
+                return {
+                    users: snapshot.docs.map(d => ({ id: d.id, ...d.data() })).filter(u => u.id !== currentUserId),
+                    lastDoc: snapshot.docs[snapshot.docs.length - 1] || null
+                };
+            } catch (inner) {
+                return { users: [], lastDoc: null };
+            }
+        }
         return { users: [], lastDoc: null };
     }
 };
