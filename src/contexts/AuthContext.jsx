@@ -1,6 +1,7 @@
 import React, { useContext, useState, useEffect, useRef, useCallback } from "react";
-import { auth, googleProvider, db } from "../firebase";
+import { auth, googleProvider, db, functions } from "../firebase";
 import { signInWithPopup, getRedirectResult, signOut, onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
+import { httpsCallable } from "firebase/functions";
 import { doc, setDoc, getDoc, serverTimestamp, updateDoc, onSnapshot } from "firebase/firestore";
 import { listenerManager } from "../utils/ListenerManager";
 import { logoutWithTimeout, clearAllCaches } from "../utils/logoutUtils";
@@ -311,11 +312,14 @@ export function AuthProvider({ children }) {
         logout,
         toggleLocationSharing,
         deactivateAccount: async () => {
-            const { httpsCallable } = await import("firebase/functions");
-            const { functions } = await import("../firebase");
-            const deactivateFn = httpsCallable(functions, 'deactivateAccount');
-            await deactivateFn();
-            await logout();
+            try {
+                const deactivateFn = httpsCallable(functions, 'deactivateAccount');
+                await deactivateFn();
+                await logout();
+            } catch (error) {
+                console.error("Deactivation failed:", error);
+                throw error;
+            }
         }
     }), [currentUser, loginWithGoogle, loginWithEmail, logout, toggleLocationSharing]);
 
