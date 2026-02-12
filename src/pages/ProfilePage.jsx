@@ -141,7 +141,7 @@ const ProfilePage = () => {
                         </div>
                     </div>
 
-                    <div className="pt-8 pb-10 border-t border-border mt-8">
+                    <div className="pt-8 pb-10 border-t border-border mt-8 space-y-4">
                         <Button
                             variant="destructive"
                             className="w-full rounded-xl h-12 font-bold shadow-sm active:scale-95 transition-transform"
@@ -160,12 +160,149 @@ const ProfilePage = () => {
                         >
                             {saving ? "REQUESTING..." : "REQUEST ACCOUNT DELETION"}
                         </Button>
+
+                        <div className="pt-4 border-t border-border space-y-3">
+                            <NetworkTestButton />
+                            <RepairDatabaseButton />
+                        </div>
+
                         <p className="text-[10px] text-center text-muted-foreground mt-4 leading-relaxed uppercase tracking-widest font-bold opacity-50">
                             Nova Messaging v1.2.0<br />End-to-End Encrypted
                         </p>
                     </div>
                 </div>
             </div>
+        </div>
+    );
+};
+
+const RepairDatabaseButton = () => {
+    const [status, setStatus] = useState('idle');
+
+    const handleRepair = async () => {
+        if (!window.confirm("Repair Local Database? This will refresh the app to fix potential errors.")) return;
+
+        setStatus('repairing');
+        const success = await clearCache();
+
+        if (success) {
+            alert("Database repaired. Reloading app...");
+            window.location.reload();
+        } else {
+            setStatus('error');
+            alert("Repair failed. Please try clearing browser cache manually.");
+        }
+    };
+
+    return (
+        <button
+            onClick={handleRepair}
+            disabled={status === 'repairing'}
+            className="w-full py-2 text-xs font-mono font-bold uppercase tracking-widest text-red-400/70 hover:text-red-400 hover:bg-red-400/5 transition-colors rounded border border-dashed border-red-400/30"
+        >
+            {status === 'repairing' ? 'Repairing Database...' : 'Repair Database (Reset Cache)'}
+        </button>
+    );
+};
+
+const NetworkTestButton = () => {
+    const [status, setStatus] = useState('idle'); // idle, testing, success, error
+    const [log, setLog] = useState('');
+
+    const runTest = async () => {
+        setStatus('testing');
+        setLog('Initializing...');
+
+        try {
+            // 1. Fetch Credentials (Duplicate logic from CallContext for isolation)
+            const apiKey = import.meta.env.VITE_METERED_API_KEY;
+            let iceServers = [];
+
+            setLog('Fetching TURN credentials...');
+            try {
+                if (apiKey) {
+                    const response = await fetch(`https://aryan89752.metered.live/api/v1/turn/credentials?apiKey=${apiKey}`);
+                    if (response.ok) {
+                        iceServers = await response.json();
+                        setLog('Credentials obtained from Metered API.');
+                    }
+                }
+            } catch (e) {
+                setLog('API failed, using fallback.');
+            }
+
+            if (iceServers.length === 0) {
+                iceServers = [
+                    { urls: "stun:stun.l.google.com:19302" },
+                    {
+                        urls: import.meta.env.VITE_TURN_SERVER_URL || "turn:open-relay.metered.ca:443",
+                        username: import.meta.env.VITE_TURN_SERVER_USER || "guest",
+                        credential: import.meta.env.VITE_TURN_SERVER_PWD || "guest"
+                    }
+                ];
+            }
+
+            // 2. Create Peer Connection
+            const pc = new RTCPeerConnection({ iceServers, iceCandidatePoolSize: 1 });
+
+            // 3. Must create data channel to trigger candidate gathering
+            pc.createDataChannel("test");
+
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            return new Promise((resolve) => {
+                let relayFound = false;
+                let candidates = [];
+
+                // Timeout after 10s
+                const timeout = setTimeout(() => {
+                    pc.close();
+                    if (relayFound) {
+                        setStatus('success');
+                        setLog('Success: TURN Relay Candidate found.');
+                        resolve();
+                    } else {
+                        setStatus('error');
+                        setLog(`Timeout. Found: ${candidates.join(', ')}. No Relay.`);
+                        resolve();
+                    }
+                }, 10000);
+
+                pc.onicecandidate = (e) => {
+                    if (e.candidate) {
+                        console.log("Candidate:", e.candidate.type, e.candidate.protocol);
+                        candidates.push(e.candidate.type);
+
+                        if (e.candidate.type === 'relay') {
+                            relayFound = true;
+                            clearTimeout(timeout);
+                            pc.close();
+                            setStatus('success');
+                            setLog('Verified: High-Speed TURN Relay Active.');
+                            resolve();
+                        }
+                    }
+                };
+            });
+
+        } catch (error) {
+            console.error(error);
+            setStatus('error');
+            setLog('Error: ' + error.message);
+        }
+    };
+
+    return (
+        <div className="w-full">
+            <button
+                onClick={runTest}
+                disabled={status === 'testing' || status === 'success'}
+                className="w-full py-2 text-xs font-mono font-bold uppercase tracking-widest text-whatsapp-teal/70 hover:text-whatsapp-teal hover:bg-whatsapp-teal/5 transition-colors rounded border border-dashed border-whatsapp-teal/30"
+            >
+                {status === 'testing' ? 'Testing Uplink...' : status === 'success' ? 'Network Secure' : 'Test Network (TURN)'}
+            </button>
+            {log && <p className={`text-[9px] mt-2 font-mono text-center ${status === 'success' ? 'text-green-500' : status === 'error' ? 'text-red-500' : 'text-gray-500'}`}>{log}</p>}
         </div>
     );
 };

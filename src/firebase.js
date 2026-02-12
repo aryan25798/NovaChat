@@ -23,10 +23,26 @@ setPersistence(auth, browserLocalPersistence);
 export const googleProvider = new GoogleAuthProvider();
 
 // Initialize Firestore with persistence settings
-// Using default single-tab persistence for stability
+import { initializeFirestore, persistentLocalCache, clearIndexedDbPersistence } from "firebase/firestore";
+
 export const db = initializeFirestore(app, {
     localCache: persistentLocalCache()
 });
+
+/**
+ * Emergency Repair: Clears local Firestore cache
+ * Use when experiencing "BloomFilterError" or stale data.
+ */
+export const clearCache = async () => {
+    try {
+        await clearIndexedDbPersistence(db);
+        console.log("Firestore cache cleared successfully.");
+        return true;
+    } catch (err) {
+        console.error("Failed to clear Firestore cache:", err);
+        return false;
+    }
+};
 
 import { getDatabase } from "firebase/database";
 import { getFunctions } from "firebase/functions";
