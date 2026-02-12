@@ -28,13 +28,15 @@ const ChatListItem = memo(({ chat, currentUserId }) => {
     }
 
     const isActive = id === chat.id; // Match against chat ID for the list
-    const lastMessageDate = chat.lastMessageTimestamp ? new Date(chat.lastMessageTimestamp.seconds * 1000) : null;
+    const lastMessageDate = chat.lastMessageTimestamp
+        ? (chat.lastMessageTimestamp.toDate ? chat.lastMessageTimestamp.toDate() : new Date(chat.lastMessageTimestamp.seconds * 1000))
+        : null;
 
     return (
         <Link
             to={`/c/${chat.id}`}
             className={cn(
-                "group flex items-center gap-3 md:gap-4 px-3 md:px-4 py-3 hover:bg-surface/50 transition-all duration-200 cursor-pointer relative border-b border-border/30 last:border-0",
+                "group flex items-center gap-3 md:gap-4 px-3 md:px-4 py-3 hover:bg-surface/50 transition-all duration-200 cursor-pointer relative border-b border-border/30 last:border-0 min-h-[72px]",
                 isActive ? "bg-surface-elevated dark:bg-surface/80" : "bg-transparent"
             )}
         >

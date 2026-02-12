@@ -21,8 +21,13 @@ const Message = memo(({ message, chat, isOwn, onDelete, onReply, onReact, onMedi
 
     const formatTime = (timestamp) => {
         if (!timestamp) return "";
-        const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-        return format(date, 'HH:mm');
+        try {
+            const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+            if (isNaN(date.getTime())) return "";
+            return format(date, 'HH:mm');
+        } catch (e) {
+            return "";
+        }
     };
 
     const handleCopy = () => {
@@ -159,10 +164,10 @@ const Message = memo(({ message, chat, isOwn, onDelete, onReply, onReact, onMedi
                             isOwn ? "bg-white/10 border-white/40" : "bg-surface border-primary/40"
                         )}>
                             <div className={cn("text-[12px] font-bold mb-0.5", isOwn ? "text-white" : "text-primary")}>
-                                {message.replyTo.senderName}
+                                {message.replyTo.senderName || "Unknown"}
                             </div>
                             <div className={cn("text-[13px] truncate", isOwn ? "text-white/80" : "text-text-2")}>
-                                {message.replyTo.text}
+                                {message.replyTo.text || "Message"}
                             </div>
                         </div>
                     )}

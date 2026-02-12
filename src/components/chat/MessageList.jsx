@@ -79,7 +79,7 @@ export function MessageList({
     }
 
     return (
-        <div className="flex-1 relative w-full overflow-hidden bg-transparent">
+        <div className="flex-1 min-h-0 relative w-full overflow-hidden bg-transparent">
             {/* 
                 Virtuoso handles virtualization. 
                 We use 'followOutput' to keep scroll at bottom when new items are added 
@@ -90,7 +90,6 @@ export function MessageList({
                 data={messages}
                 context={contextValue}
                 itemContent={itemContent}
-                initialTopMostItemIndex={messages.length - 1} // Start at bottom
                 followOutput={"smooth"} // Auto-scroll behavior
                 alignToBottom={true} // Stick to bottom on load
             />

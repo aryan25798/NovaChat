@@ -225,7 +225,7 @@ export const sendMediaMessage = async (chatId, sender, fileData, replyTo = null)
                 senderId: sender.uid,
                 timestamp: new Date(),
             },
-            timestamp: serverTimestamp(),
+            lastMessageTimestamp: serverTimestamp(),
         };
 
         const chatSnap = await getDoc(chatRef);
@@ -259,32 +259,54 @@ export const sendMessage = async (chatId, sender, text, replyTo = null) => {
         let chatSnap = await getDoc(chatRef);
 
         // GHOST CHAT AUTO-CREATION logic (moved up)
+        // GHOST CHAT AUTO-CREATION logic (moved up)
         if (!chatSnap.exists()) {
-            // If it's a private chat (UID_UID format), we know the participants
-            const participants = chatId.split('_');
-            if (participants.length === 2 && participants.includes(sender.uid)) {
-                const otherUid = participants.find(uid => uid !== sender.uid);
-                const otherUserSnap = await getDoc(doc(db, "users", otherUid));
-                const otherUserData = otherUserSnap.exists() ? otherUserSnap.data() : { displayName: "User" };
+            const { GEMINI_BOT_ID } = await import("../constants");
+            const isGemini = chatId === GEMINI_BOT_ID || chatId.startsWith('gemini_');
 
+            if (isGemini) {
                 const newChatData = {
                     id: chatId,
-                    participants,
+                    participants: [sender.uid, GEMINI_BOT_ID],
                     participantInfo: {
                         [sender.uid]: { displayName: sender.displayName, photoURL: sender.photoURL },
-                        [otherUid]: { displayName: otherUserData.displayName || "User", photoURL: otherUserData.photoURL }
+                        [GEMINI_BOT_ID]: { displayName: "Gemini AI", photoURL: "https://uxwing.com/wp-content/themes/uxwing/download/brands-and-social-media/google-gemini-icon.png" }
                     },
-                    type: 'private',
+                    type: 'gemini',
                     createdAt: serverTimestamp(),
                     lastMessage: null,
                     unreadCount: {},
                     mutedBy: {}
                 };
                 await setDoc(chatRef, newChatData);
-                chatSnap = await getDoc(chatRef); // Refresh snap
+                chatSnap = await getDoc(chatRef);
+            } else {
+                const participants = chatId.split('_');
+                if (participants.length === 2 && participants.includes(sender.uid)) {
+                    const otherUid = participants.find(uid => uid !== sender.uid);
+                    const otherUserSnap = await getDoc(doc(db, "users", otherUid));
+                    const otherUserData = otherUserSnap.exists() ? otherUserSnap.data() : { displayName: "User" };
+
+                    const newChatData = {
+                        id: chatId,
+                        participants,
+                        participantInfo: {
+                            [sender.uid]: { displayName: sender.displayName, photoURL: sender.photoURL },
+                            [otherUid]: { displayName: otherUserData.displayName || "User", photoURL: otherUserData.photoURL }
+                        },
+                        type: 'private',
+                        createdAt: serverTimestamp(),
+                        lastMessage: null,
+                        unreadCount: {},
+                        mutedBy: {}
+                    };
+                    await setDoc(chatRef, newChatData);
+                    chatSnap = await getDoc(chatRef);
+                }
             }
         }
 
+        const { GEMINI_BOT_ID } = await import("../constants");
         const isGeminiChat = chatId.includes(GEMINI_BOT_ID) || (chatSnap.exists() && chatSnap.data().participants?.includes(GEMINI_BOT_ID));
 
         const messageData = {
@@ -313,7 +335,7 @@ export const sendMessage = async (chatId, sender, text, replyTo = null) => {
                 senderId: sender.uid,
                 timestamp: new Date(),
             },
-            timestamp: serverTimestamp(),
+            lastMessageTimestamp: serverTimestamp(),
         };
 
         const chatData = chatSnap.exists() ? chatSnap.data() : {};

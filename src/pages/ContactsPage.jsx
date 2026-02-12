@@ -1,26 +1,33 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
-import { IoArrowBack, IoCheckmark, IoClose, IoPersonAdd } from "react-icons/io5";
+import { IoArrowBack, IoCheckmark, IoClose, IoPersonAdd, IoPeopleOutline, IoPlanetOutline } from "react-icons/io5";
 import { BsTelephone, BsCameraVideo, BsSearch } from "react-icons/bs";
 import { Avatar } from "../components/ui/Avatar";
 import { Input } from "../components/ui/Input";
 import { Button } from "../components/ui/Button";
 import { useCall } from "../contexts/CallContext";
 import { useFriend } from "../contexts/FriendContext";
-import { db } from "../firebase";
-import { collection, getDocs } from "firebase/firestore";
 import { useAuth } from "../contexts/AuthContext";
+import { getPagedUsers, searchUsers, getUsersByIds } from "../services/userService";
+import { Virtuoso } from "react-virtuoso";
 
 const ContactsPage = () => {
     const { startCall } = useCall();
     const { currentUser } = useAuth();
     const { sendRequest, acceptRequest, rejectRequest, getFriendStatus, incomingRequests, friends } = useFriend();
-    const [searchResults, setSearchResults] = useState([]);
-    const [searchTerm, setSearchTerm] = useState("");
-    const [loading, setLoading] = useState(false);
-    const [view, setView] = useState('all'); // 'all' or 'requests'
 
-    // Fetch full user details for friend IDs — with cache to avoid N+1 refetch
+    const [searchTerm, setSearchTerm] = useState("");
+    const [searchResults, setSearchResults] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [view, setView] = useState('friends'); // 'friends', 'discover', or 'requests'
+
+    // Pagination state for Discover
+    const [globalUsers, setGlobalUsers] = useState([]);
+    const [lastDoc, setLastDoc] = useState(null);
+    const [hasMore, setHasMore] = useState(true);
+    const [loadingMore, setLoadingMore] = useState(false);
+
+    // Friend details fetch
     const [friendUsers, setFriendUsers] = useState([]);
     const friendCacheRef = useRef(new Map());
 
@@ -30,30 +37,50 @@ const ContactsPage = () => {
                 setFriendUsers([]);
                 return;
             }
-
-            // Only fetch friends not already in cache
             const uncachedIds = friends.filter(fid => !friendCacheRef.current.has(fid));
-
             if (uncachedIds.length > 0) {
                 try {
-                    const { getUsersByIds } = await import("../services/userService");
                     const users = await getUsersByIds(uncachedIds);
-                    users.forEach(user => {
-                        friendCacheRef.current.set(user.id, user);
-                    });
+                    users.forEach(user => friendCacheRef.current.set(user.id, user));
                 } catch (e) {
                     console.error("Error fetching friend details:", e);
                 }
             }
-
-            // Build the final list from cache, keeping order consistent with friends array
-            const users = friends
-                .map(fid => friendCacheRef.current.get(fid))
-                .filter(Boolean);
+            const users = friends.map(fid => friendCacheRef.current.get(fid)).filter(Boolean);
             setFriendUsers(users);
         };
         fetchFriendDetails();
     }, [friends]);
+
+    // Initial load for Discover
+    useEffect(() => {
+        if (view === 'discover' && globalUsers.length === 0) {
+            loadInitialGlobalUsers();
+        }
+    }, [view]);
+
+    const loadInitialGlobalUsers = async () => {
+        setLoading(true);
+        const { users, lastDoc: newLastDoc } = await getPagedUsers(null, 20);
+        setGlobalUsers(users);
+        setLastDoc(newLastDoc);
+        setHasMore(users.length === 20);
+        setLoading(false);
+    };
+
+    const loadMoreGlobalUsers = async () => {
+        if (loadingMore || !hasMore || !!searchTerm) return;
+        setLoadingMore(true);
+        const { users, lastDoc: newLastDoc } = await getPagedUsers(lastDoc, 20);
+        if (users.length > 0) {
+            setGlobalUsers(prev => [...prev, ...users]);
+            setLastDoc(newLastDoc);
+            setHasMore(users.length === 20);
+        } else {
+            setHasMore(false);
+        }
+        setLoadingMore(false);
+    };
 
     // Handle Search
     useEffect(() => {
@@ -61,7 +88,6 @@ const ContactsPage = () => {
             if (searchTerm.trim().length > 0) {
                 setLoading(true);
                 try {
-                    const { searchUsers } = await import("../services/userService");
                     const results = await searchUsers(searchTerm, currentUser.uid);
                     setSearchResults(results);
                 } catch (error) {
@@ -73,198 +99,172 @@ const ContactsPage = () => {
                 setSearchResults([]);
             }
         }, 500);
-
         return () => clearTimeout(delayDebounce);
     }, [searchTerm, currentUser.uid]);
 
     const handleCall = (e, contact, type) => {
         e.stopPropagation();
         e.preventDefault();
-        const user = {
+        startCall({
             uid: contact.id,
             displayName: contact.displayName || contact.name || "User",
             photoURL: contact.photoURL
-        };
-        startCall(user, type);
+        }, type);
     };
 
-    const handleSendRequest = (e, uid) => {
-        e.stopPropagation();
-        e.preventDefault();
-        sendRequest(uid);
-    }
+    const renderContactItem = (index, contact) => {
+        if (!contact) return null;
+        const status = getFriendStatus(contact.id);
+        const isFriend = status === 'friend';
+        const isSent = status === 'sent';
+        const isReceived = status === 'received';
 
-    // Combined list: If searching, show search results. If not, show friends.
-    const displayList = searchTerm ? searchResults : friendUsers;
+        return (
+            <div className="relative group border-b border-border/30 last:border-0 bg-surface">
+                {isFriend ? (
+                    <Link to={`/c/${contact.id}`} className="flex items-center gap-4 p-4 hover:bg-surface-elevated transition-colors cursor-pointer">
+                        <Avatar src={contact.photoURL} alt={contact.displayName} size="lg" />
+                        <div className="flex-1 min-w-0">
+                            <h3 className="font-bold text-text-1 truncate text-[16px]">{contact.displayName || contact.name || "Unknown"}</h3>
+                            <p className="text-sm text-text-2 truncate">{contact.about || "Hey there! I am using NovaChat."}</p>
+                        </div>
+                    </Link>
+                ) : (
+                    <div className="flex items-center gap-4 p-4 hover:bg-surface-elevated transition-colors">
+                        <Avatar src={contact.photoURL} alt={contact.displayName} size="lg" />
+                        <div className="flex-1 min-w-0">
+                            <h3 className="font-bold text-text-1 truncate text-[16px]">{contact.displayName || contact.name || "Unknown"}</h3>
+                            <p className="text-sm text-text-2 truncate">{contact.about || "Hey there! I am using NovaChat."}</p>
+                        </div>
+                    </div>
+                )}
+
+                <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                    {isFriend ? (
+                        <>
+                            <button className="p-2 text-primary hover:bg-primary/10 rounded-full transition-colors" onClick={(e) => handleCall(e, contact, 'audio')}><BsTelephone className="w-5 h-5" /></button>
+                            <button className="p-2 text-primary hover:bg-primary/10 rounded-full transition-colors" onClick={(e) => handleCall(e, contact, 'video')}><BsCameraVideo className="w-5 h-5" /></button>
+                        </>
+                    ) : isSent ? (
+                        <span className="text-xs font-bold text-text-2 bg-surface-elevated px-3 py-1.5 rounded-full border border-border/50">SENT</span>
+                    ) : isReceived ? (
+                        <button onClick={() => setView('requests')} className="text-xs font-bold text-primary bg-primary/10 px-3 py-1.5 rounded-full hover:bg-primary/20 transition-all">CHECK REQUESTS</button>
+                    ) : (
+                        <Button size="sm" className="bg-primary hover:bg-primary/90 text-white h-8 px-4 rounded-full text-xs font-bold gap-1 shadow-sm" onClick={(e) => { e.stopPropagation(); sendRequest(contact.id); }}>
+                            <IoPersonAdd className="w-4 h-4" /> ADD
+                        </Button>
+                    )}
+                </div>
+            </div>
+        );
+    };
+
+    const getDisplayData = () => {
+        if (searchTerm) return searchResults;
+        if (view === 'friends') return friendUsers;
+        if (view === 'discover') return globalUsers;
+        return [];
+    };
+
+    const displayData = getDisplayData();
 
     return (
-        <div className="flex flex-col h-full bg-surface relative shadow-sm max-w-full">
+        <div className="flex flex-col h-full bg-surface relative shadow-sm max-w-full overflow-hidden">
             {/* Header */}
             <div className="bg-primary h-[85px] flex items-center px-6 gap-5 text-white shadow-lg shrink-0 z-20">
                 <Link to="/" className="text-xl hover:bg-white/10 p-2 rounded-full transition-colors">
                     <IoArrowBack />
                 </Link>
                 <div className="flex flex-col">
-                    <h1 className="text-lg font-bold leading-tight">Select Contact</h1>
+                    <h1 className="text-lg font-bold leading-tight">
+                        {view === 'friends' ? 'My Friends' : view === 'discover' ? 'Discover People' : 'Friend Requests'}
+                    </h1>
                     <p className="text-xs text-white/80">
-                        {view === 'all'
-                            ? (searchTerm ? `${searchResults.length} results` : `${friendUsers.length} friends`)
-                            : `${incomingRequests.length} requests`}
+                        {searchTerm ? `${searchResults.length} results` : view === 'friends' ? `${friendUsers.length} contacts` : view === 'discover' ? 'Global Directory' : `${incomingRequests.length} pending`}
                     </p>
                 </div>
             </div>
 
-            {/* Filter Tabs */}
+            {/* View Switcher Tabs */}
             <div className="flex bg-surface-elevated px-4 pt-0 shadow-sm z-10 shrink-0 border-b border-border/50">
-                <button
-                    className={`flex-1 py-4 text-sm font-medium uppercase transition-all relative ${view === 'all'
-                        ? 'text-primary'
-                        : 'text-text-2 hover:text-text-1'
-                        }`}
-                    onClick={() => setView('all')}
-                >
-                    All Contacts
-                    {view === 'all' && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t-full" />}
+                <button className={`flex-1 py-4 text-xs font-bold uppercase transition-all relative flex items-center justify-center gap-2 ${view === 'friends' ? 'text-primary' : 'text-text-2'}`} onClick={() => setView('friends')}>
+                    <IoPeopleOutline className="text-lg" /> Friends
+                    {view === 'friends' && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t-full" />}
                 </button>
-                <button
-                    className={`flex-1 py-4 text-sm font-medium uppercase transition-all relative ${view === 'requests'
-                        ? 'text-primary'
-                        : 'text-text-2 hover:text-text-1'
-                        }`}
-                    onClick={() => setView('requests')}
-                >
-                    Requests
-                    {incomingRequests.length > 0 && (
-                        <span className="ml-2 bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold">
-                            {incomingRequests.length}
-                        </span>
-                    )}
+                <button className={`flex-1 py-4 text-xs font-bold uppercase transition-all relative flex items-center justify-center gap-2 ${view === 'discover' ? 'text-primary' : 'text-text-2'}`} onClick={() => setView('discover')}>
+                    <IoPlanetOutline className="text-lg" /> Discover
+                    {view === 'discover' && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t-full" />}
+                </button>
+                <button className={`flex-1 py-4 text-xs font-bold uppercase transition-all relative flex items-center justify-center gap-2 ${view === 'requests' ? 'text-primary' : 'text-text-2'}`} onClick={() => setView('requests')}>
+                    Requests {incomingRequests.length > 0 && <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold ml-1">{incomingRequests.length}</span>}
                     {view === 'requests' && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-t-full" />}
                 </button>
             </div>
 
-            {/* Content Area */}
-            <div className="flex-1 overflow-y-auto bg-surface custom-scrollbar">
-                {view === 'all' && (
-                    <div className="p-3 bg-surface sticky top-0 z-10 border-b border-border/30">
-                        <div className="relative group">
-                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-2 group-focus-within:text-primary transition-colors">
-                                <BsSearch className="w-4 h-4" />
-                            </span>
-                            <Input
-                                placeholder="Search friends or find new people"
-                                value={searchTerm}
-                                onChange={(e) => setSearchTerm(e.target.value)}
-                                className="pl-10 h-10 bg-surface-elevated border-none placeholder:text-text-2/60 focus-visible:ring-1 focus-visible:ring-primary/50 rounded-xl text-sm transition-all"
-                            />
-                        </div>
+            {/* Search Bar (Only for Friends/Discover) */}
+            {view !== 'requests' && (
+                <div className="p-3 bg-surface z-10 border-b border-border/30">
+                    <div className="relative group">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-2 group-focus-within:text-primary transition-colors"><BsSearch className="w-4 h-4" /></span>
+                        <Input placeholder={view === 'friends' ? "Search your friends..." : "Find new people globaly..."} value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-10 h-10 bg-surface-elevated border-none placeholder:text-text-2/60 focus-visible:ring-1 focus-visible:ring-primary/50 rounded-xl text-sm transition-all" />
                     </div>
-                )}
+                </div>
+            )}
 
-                {loading ? (
-                    <div className="p-8 text-center text-text-2 animate-pulse">Searching...</div>
+            {/* List Content */}
+            <div className="flex-1 bg-surface min-h-0">
+                {loading && displayData.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full text-text-2 animate-pulse gap-3">
+                        <div className="w-12 h-12 rounded-full border-4 border-primary/20 border-t-primary animate-spin" />
+                        <p className="text-sm font-medium">Fetching users...</p>
+                    </div>
                 ) : view === 'requests' ? (
-                    <div className="pb-4">
+                    <div className="h-full overflow-y-auto custom-scrollbar">
                         {incomingRequests.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center py-20 opacity-60 text-text-2 gap-2">
+                            <div className="flex flex-col items-center justify-center h-full opacity-60 text-text-2 gap-2">
                                 <IoPersonAdd className="w-12 h-12 stroke-1" />
-                                <p>No pending friend requests</p>
+                                <p className="text-sm">No pending requests</p>
                             </div>
                         ) : (
                             incomingRequests.map(req => (
                                 <div key={req.id} className="flex items-center gap-4 p-4 hover:bg-surface-elevated transition-colors border-b border-border/30">
                                     <Avatar src={req.fromPhoto} size="lg" />
-                                    <div className="flex-1 min-w-0">
-                                        <h3 className="font-bold text-text-1 truncate text-base">{req.fromName || "Unknown User"}</h3>
-                                        <p className="text-sm text-text-2">Sent you a friend request</p>
-                                    </div>
+                                    <div className="flex-1 min-w-0"><h3 className="font-bold text-text-1 truncate text-base">{req.fromName || "Unknown User"}</h3><p className="text-sm text-text-2">Sent you a friend request</p></div>
                                     <div className="flex gap-2">
-                                        <button onClick={() => acceptRequest(req)} className="p-2 bg-primary/10 text-primary rounded-full hover:bg-primary/20 transition-colors">
-                                            <IoCheckmark className="w-5 h-5" />
-                                        </button>
-                                        <button onClick={() => rejectRequest(req.id)} className="p-2 bg-surface-elevated text-text-2 rounded-full hover:bg-red-50 hover:text-red-500 transition-colors">
-                                            <IoClose className="w-5 h-5" />
-                                        </button>
+                                        <button onClick={() => acceptRequest(req)} className="p-2 bg-primary/10 text-primary rounded-full hover:bg-primary/20 transition-colors"><IoCheckmark className="w-5 h-5" /></button>
+                                        <button onClick={() => rejectRequest(req.id)} className="p-2 bg-surface-elevated text-text-2 rounded-full hover:bg-red-50 hover:text-red-500 transition-colors"><IoClose className="w-5 h-5" /></button>
                                     </div>
                                 </div>
                             ))
                         )}
                     </div>
                 ) : (
-                    <div className="pb-4">
-                        {!searchTerm && friendUsers.length === 0 ? (
-                            <div className="p-8 text-center text-text-2">
-                                <p>No friends yet. Search above to find people!</p>
-                            </div>
-                        ) : displayList.length === 0 ? (
-                            <div className="p-8 text-center text-text-2">
-                                <p>No results found.</p>
-                            </div>
-                        ) : (
-                            displayList.map(contact => {
-                                const status = getFriendStatus(contact.id);
-                                const isFriend = status === 'friend';
-                                const isSent = status === 'sent';
-                                const isReceived = status === 'received';
-
-                                return (
-                                    <div key={contact.id} className="relative group border-b border-border/30 last:border-0">
-                                        {/* Clickable Area for Friends */}
-                                        {isFriend ? (
-                                            <Link to={`/c/${contact.id}`} className="flex items-center gap-4 p-4 hover:bg-surface-elevated transition-colors cursor-pointer">
-                                                <Avatar src={contact.photoURL} alt={contact.displayName} size="lg" />
-                                                <div className="flex-1 min-w-0">
-                                                    <h3 className="font-bold text-text-1 truncate text-[16px]">{contact.displayName || contact.name || "Unknown"}</h3>
-                                                    <p className="text-sm text-text-2 truncate">{contact.about || "Hey there! I am using WhatsClone AI."}</p>
-                                                </div>
-                                            </Link>
-                                        ) : (
-                                            <div className="flex items-center gap-4 p-4 hover:bg-surface-elevated transition-colors">
-                                                <Avatar src={contact.photoURL} alt={contact.displayName} size="lg" />
-                                                <div className="flex-1 min-w-0">
-                                                    <h3 className="font-bold text-text-1 truncate text-[16px]">{contact.displayName || contact.name || "Unknown"}</h3>
-                                                    <p className="text-sm text-text-2 truncate">{contact.about || "Hey there! I am using WhatsClone AI."}</p>
-                                                </div>
-                                            </div>
-                                        )}
-
-                                        {/* Action Buttons Overlay */}
-                                        <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
-                                            {isFriend ? (
-                                                <>
-                                                    <button
-                                                        className="p-2 text-primary hover:bg-primary/10 rounded-full transition-colors"
-                                                        onClick={(e) => handleCall(e, contact, 'audio')}
-                                                    >
-                                                        <BsTelephone className="w-5 h-5" />
-                                                    </button>
-                                                    <button
-                                                        className="p-2 text-primary hover:bg-primary/10 rounded-full transition-colors"
-                                                        onClick={(e) => handleCall(e, contact, 'video')}
-                                                    >
-                                                        <BsCameraVideo className="w-5 h-5" />
-                                                    </button>
-                                                </>
-                                            ) : isSent ? (
-                                                <span className="text-xs font-bold text-text-2 bg-surface-elevated px-3 py-1.5 rounded-full border border-border/50">SENT</span>
-                                            ) : isReceived ? (
-                                                <span className="text-xs font-bold text-primary bg-primary/10 px-3 py-1.5 rounded-full">CHECK REQUESTS</span>
-                                            ) : (
-                                                <Button
-                                                    size="sm"
-                                                    className="bg-primary hover:bg-primary/90 text-white h-8 px-4 rounded-full text-xs font-bold gap-1 shadow-sm"
-                                                    onClick={(e) => handleSendRequest(e, contact.id)}
-                                                >
-                                                    <IoPersonAdd className="w-4 h-4" />
-                                                    ADD
-                                                </Button>
-                                            )}
-                                        </div>
+                    <Virtuoso
+                        data={displayData}
+                        endReached={view === 'discover' && !searchTerm ? loadMoreGlobalUsers : undefined}
+                        itemContent={renderContactItem}
+                        increaseViewportBy={300}
+                        style={{ height: '100%' }}
+                        className="custom-scrollbar"
+                        components={{
+                            Footer: () => (
+                                (loadingMore || (view === 'discover' && hasMore && !searchTerm)) ? (
+                                    <div className="p-4 text-center text-text-2 text-xs flex items-center justify-center gap-2">
+                                        <div className="w-4 h-4 rounded-full border-2 border-primary/20 border-t-primary animate-spin" />
+                                        Loading more...
                                     </div>
-                                );
-                            })
-                        )}
-                    </div>
+                                ) : displayData.length > 0 ? (
+                                    <div className="p-10 text-center text-text-2 text-xs opacity-50 font-medium italic">You've reached the end of the list.</div>
+                                ) : null
+                            ),
+                            EmptyPlaceholder: () => (
+                                <div className="flex flex-col items-center justify-center h-full text-center text-text-2 p-10 gap-3 opacity-60">
+                                    <IoPeopleOutline className="w-16 h-16 stroke-1" />
+                                    <p className="text-sm">No one here yet. Try a different search!</p>
+                                </div>
+                            )
+                        }}
+                    />
                 )}
             </div>
         </div>

@@ -22,29 +22,27 @@ export function NotificationProvider({ children }) {
 
     // 1. Permission & Token Logic
     const requestPermission = async () => {
-        // Guard against React StrictMode double-invocation
+        // Guard against any parallel or repeated calls in the same lifecycle
         if (permissionRequested.current) return;
         permissionRequested.current = true;
 
         try {
+            // Check if browser even supports Notifications
+            if (!('Notification' in window) || !('serviceWorker' in navigator)) {
+                return;
+            }
+
             const rawPermission = await Notification.requestPermission();
 
             if (rawPermission === 'granted') {
-                let registration = await navigator.serviceWorker.getRegistration();
+                const registration = await navigator.serviceWorker.ready;
                 if (!registration) {
-                    registration = await navigator.serviceWorker.ready;
-                }
-
-                if (!registration) {
-                    console.warn("No Service Worker registration found — push notifications disabled.");
+                    console.warn("No Service Worker registration found.");
                     return;
                 }
 
-                const msg = getMessagingInstance();
-                if (!msg) {
-                    console.debug('Firebase Messaging not available — push notifications disabled.');
-                    return;
-                }
+                const msg = await getMessagingInstance();
+                if (!msg) return;
 
                 const currentToken = await getToken(msg, {
                     vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY,
@@ -53,8 +51,8 @@ export function NotificationProvider({ children }) {
 
                 if (currentToken) {
                     setToken(currentToken);
-                    const existingTokens = currentUser?.fcmTokens || [];
-                    if (!existingTokens.includes(currentToken)) {
+                    // Single update if token belongs to user
+                    if (currentUser?.uid && (!currentUser.fcmTokens || !currentUser.fcmTokens.includes(currentToken))) {
                         await updateDoc(doc(db, "users", currentUser.uid), {
                             fcmTokens: arrayUnion(currentToken)
                         });
@@ -62,69 +60,73 @@ export function NotificationProvider({ children }) {
                 }
             }
         } catch (error) {
-            // Push service errors are expected in localhost dev — silently ignore
-            if (error.name === 'AbortError' || error.message?.includes('push service')) {
-                // Silent in dev: FCM push can't register on localhost
-                if (import.meta.env.PROD) console.warn("Push service unavailable:", error.message);
+            // Push service errors are common in non-standard environments
+            if (error.message?.includes('push service') || error.name === 'AbortError') {
+                console.debug("Push registration skipped:", error.message);
             } else {
-                console.error("Notification permission error:", error);
+                console.warn("Notification error:", error);
             }
         }
     };
 
     useEffect(() => {
-        // Wait for the FULL user profile to be loaded from Firestore (not just auth uid).
-        // AuthContext sets currentUser with Firestore fields (like createdAt) AFTER
-        // the user doc is created/synced. This prevents the race condition where
-        // we try to updateDoc before the user doc exists.
-        if (currentUser?.uid && currentUser?.createdAt) {
-            permissionRequested.current = false; // Reset on user change
+        // Reset guard if user identity fundamentally changes
+        if (currentUser?.uid) {
             requestPermission();
         }
-    }, [currentUser?.uid, currentUser?.createdAt]);
+    }, [currentUser?.uid]);
 
     // 2. Foreground FCM Messages (Existing)
     const { activeChatId } = React.useContext(PresenceContext) || {};
 
     useEffect(() => {
-        const msg = getMessagingInstance();
-        if (!msg) return; // Messaging not available yet
+        const initMessagingListener = async () => {
+            const msg = await getMessagingInstance();
+            if (!msg) return; // Messaging not available yet
 
-        const unsubscribe = onMessage(msg, async (payload) => {
-            console.log('Foreground Message:', payload);
+            const unsubscribe = onMessage(msg, async (payload) => {
+                console.log('Foreground Message:', payload);
 
-            const chatId = payload.data?.chatId;
+                const chatId = payload.data?.chatId;
 
-            // WHATSAPP LOGIC: Suppress if user is looking at this chat
-            if (chatId && activeChatId === chatId) {
-                console.log("Suppressed foreground notification (Active Chat):", chatId);
-                return;
-            }
+                // WHATSAPP LOGIC: Suppress if user is looking at this chat
+                if (chatId && activeChatId === chatId) {
+                    console.log("Suppressed foreground notification (Active Chat):", chatId);
+                    return;
+                }
 
-            if (chatId && currentUser) {
-                const chatRef = doc(db, "chats", chatId);
-                const chatSnap = await getDoc(chatRef);
-                if (chatSnap.exists()) {
-                    const isMuted = chatSnap.data().mutedBy?.[currentUser.uid];
-                    if (isMuted) {
-                        console.log("Suppressed notification for muted chat:", chatId);
-                        return; // Don't show toast or notify
+                if (chatId && currentUser) {
+                    const chatRef = doc(db, "chats", chatId);
+                    const chatSnap = await getDoc(chatRef);
+                    if (chatSnap.exists()) {
+                        const isMuted = chatSnap.data().mutedBy?.[currentUser.uid];
+                        if (isMuted) {
+                            console.log("Suppressed notification for muted chat:", chatId);
+                            return; // Don't show toast or notify
+                        }
                     }
                 }
-            }
 
-            // Show toast ONLY (No system notification in foreground)
-            toast(payload.notification.body, {
-                icon: '🔔',
-                duration: 4000,
-                position: 'top-center',
-                style: {
-                    background: '#333',
-                    color: '#fff',
-                }
+                // Show toast ONLY (No system notification in foreground)
+                toast(payload.notification.body, {
+                    icon: '🔔',
+                    duration: 4000,
+                    position: 'top-center',
+                    style: {
+                        background: '#333',
+                        color: '#fff',
+                    }
+                });
             });
-        });
-        return unsubscribe;
+            return unsubscribe;
+        };
+
+        const cleanupPromise = initMessagingListener();
+        return () => {
+            cleanupPromise.then(unsubscribe => {
+                if (unsubscribe && typeof unsubscribe === 'function') unsubscribe();
+            });
+        };
     }, [activeChatId, currentUser]);
 
     // 3. Firestore Notifications (New)

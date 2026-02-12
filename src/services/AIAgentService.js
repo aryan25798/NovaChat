@@ -53,7 +53,7 @@ export async function getSmartReplies(messages) {
             // Silently fail for smart replies if key is missing
             return [];
         }
-        console.error("Failed to generate or parse smart replies:", e);
+        console.error("AI Suggestions Error:", e);
         return [];
     }
 }

@@ -50,9 +50,7 @@ export const subscribeToUserChats = (userId, callback, limitCount = 30) => {
 };
 
 export const createPrivateChat = async (currentUser, otherUser) => {
-    const combinedId = currentUser.uid > otherUser.uid
-        ? currentUser.uid + otherUser.uid
-        : otherUser.uid + currentUser.uid;
+    const combinedId = [currentUser.uid, otherUser.uid].sort().join('_');
 
     try {
         const chatRef = doc(db, "chats", combinedId);

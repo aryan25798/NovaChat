@@ -1,7 +1,7 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider, browserLocalPersistence, setPersistence } from "firebase/auth";
 import { getStorage } from "firebase/storage";
-import { getMessaging } from "firebase/messaging";
+import { getMessaging, isSupported } from "firebase/messaging";
 
 const firebaseConfig = {
     apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -47,17 +47,22 @@ export const rtdb = getDatabase(app);
 export const storage = getStorage(app);
 export const functions = getFunctions(app);
 
-// Lazy-initialize messaging to prevent crash if SW not registered
+
+// Lazy-initialize messaging to prevent crash if SW not registered or browser unsupported
 let _messaging = null;
-export function getMessagingInstance() {
-    if (!_messaging) {
-        try {
+export async function getMessagingInstance() {
+    if (_messaging) return _messaging;
+
+    try {
+        const supported = await isSupported();
+        if (supported) {
             _messaging = getMessaging(app);
-        } catch (err) {
-            console.debug('Firebase Messaging init deferred:', err.message);
+            return _messaging;
         }
+    } catch (err) {
+        console.debug('Firebase Messaging support check failed:', err.message);
     }
-    return _messaging;
+    return null;
 }
 // Keep backward-compatible export (lazy getter)
 export const messaging = null; // Use getMessagingInstance() instead

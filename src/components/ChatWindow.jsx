@@ -15,6 +15,7 @@ import { useFileUpload } from "../contexts/FileUploadContext";
 import { getDownloadURL } from "firebase/storage";
 
 import { useFriend } from "../contexts/FriendContext";
+import { Button } from "./ui/Button";
 
 // Modular Components
 import ChatHeader from "./chat/ChatHeader";
@@ -122,6 +123,10 @@ export default function ChatWindow({ chat, setChat }) {
             // The subscription will eventually replace the temp message with the real one
         } catch (err) {
             console.error("Failed to send message", err);
+            // Check for adblock/blocking errors
+            if (err.message?.includes('network') || err.code === 'unavailable') {
+                alert("Connection lost or blocked. Please check if an AdBlocker is interfering with the chat.");
+            }
             // Remove temp message and restore input on failure
             setMessages(prev => prev.filter(m => m.id !== temporaryId));
             setNewMessage(textToSend);
@@ -186,16 +191,12 @@ export default function ChatWindow({ chat, setChat }) {
 
     // ... (handlers)
 
-    // Subscriptions
     useEffect(() => {
         if (!chat?.id || !currentUser?.uid) return;
-        setLoading(true); // Reset loading when chat changes
-
-        // Reset limit when chat changes
-        // But we need to distinguish between chat change and limit change to avoid resetting limit on scroll
-        // Actually, easier to let the dependency array handle it. 
-        // We'll wrap the setLimit in a separate effect that depends on chat.id
-    }, [chat?.id]);
+        // Only set loading if the chat ID actually changed
+        // This prevents re-loading when chat document updates (e.g. typing or read receipts)
+        setLoading(chat.isGhost ? false : true);
+    }, [chat?.id]); // Only depend on ID
 
     // Clear history when chat changes
     useEffect(() => {
@@ -204,16 +205,17 @@ export default function ChatWindow({ chat, setChat }) {
     }, [chat?.id]);
 
     useEffect(() => {
-        if (!chat?.id || !currentUser?.uid || chat.isGhost) return;
+        if (!chat?.id || !currentUser?.uid) return;
 
         // Reset limit logic removed. We now subscribe to fixed LAST 50 messages.
+        // Even for ghost chats, we subscribe to the subcollection (it will just be empty)
         const unsubscribe = subscribeToMessages(chat.id, currentUser.uid, (msgs) => {
             setMessages(msgs);
             setLoading(false);
         }, true, 50); // Fixed limit of 50 for real-time listener
 
         return () => unsubscribe();
-    }, [chat?.id, currentUser?.uid, chat?.isGhost]);
+    }, [chat?.id, currentUser?.uid]);
 
     // Handler for loading older messages
     const handleLoadMore = async () => {
@@ -310,7 +312,12 @@ export default function ChatWindow({ chat, setChat }) {
                     <p className="text-text-2 text-[15px] leading-relaxed mb-8">
                         Experience the next generation of messaging. Secure, fast, and beautifully designed for your desktop.
                     </p>
-                    <Button className="rounded-full px-8 shadow-premium">Start a conversation</Button>
+                    <Button
+                        className="rounded-full px-8 shadow-premium"
+                        onClick={() => navigate('/contacts')}
+                    >
+                        Start a conversation
+                    </Button>
                 </motion.div>
 
                 <div className="absolute bottom-10 text-text-2/40 text-xs flex items-center gap-2 font-medium">
@@ -337,18 +344,17 @@ export default function ChatWindow({ chat, setChat }) {
     const filteredMessages = React.useMemo(() => {
         const clearedAt = chat?.clearedAt?.[currentUser.uid]?.toDate?.() || new Date(0);
 
-        // Combine History + RealTime
-        // Deduplicate using Map because real-time window might overlap with history if not carefully managed
-        const allLocalMessages = [...historyMessages, ...messages];
-        const uniqueLocalMap = new Map();
-        allLocalMessages.forEach(m => uniqueLocalMap.set(m.id, m));
+        // Create a unique set of messages based on ID, prioritizing real-time messages
+        // if they have the same ID as history messages (collision prevention)
+        const uniqueMessages = new Map();
+        historyMessages.forEach(m => uniqueMessages.set(m.id, m));
+        messages.forEach(m => uniqueMessages.set(m.id, m));
 
-        const uniqueLocalMessages = Array.from(uniqueLocalMap.values());
+        const allMessages = Array.from(uniqueMessages.values());
 
         // 1. Filter local messages
-        const localMatches = uniqueLocalMessages.filter(m => {
+        const localMatches = allMessages.filter(m => {
             const msgTime = m.timestamp?.toDate?.() || new Date();
-            // Use textLower for search match if available (fallback to text)
             const searchText = m.textLower || m.text?.toLowerCase() || "";
             const matchesSearch = searchQuery ? searchText.includes(searchQuery.toLowerCase()) : true;
             const isHidden = m.hiddenBy?.includes(currentUser.uid);
@@ -356,20 +362,21 @@ export default function ChatWindow({ chat, setChat }) {
         });
 
         // 2. Merge with server results (deduplicate)
+        let finalResults = localMatches;
         if (serverResults.length > 0) {
-            const combined = [...localMatches, ...serverResults];
-            const unique = Array.from(new Map(combined.map(m => [m.id, m])).values());
-            return unique.sort((a, b) => {
-                const tA = a.timestamp?.toDate?.() || new Date(a.timestamp);
-                const tB = b.timestamp?.toDate?.() || new Date(b.timestamp);
-                return tA - tB; // Sort OLD to NEW
+            const serverMap = new Map(localMatches.map(m => [m.id, m]));
+            serverResults.forEach(m => {
+                if (!serverMap.has(m.id)) {
+                    serverMap.set(m.id, m);
+                }
             });
+            finalResults = Array.from(serverMap.values());
         }
 
         // Sort OLD to NEW
-        return localMatches.sort((a, b) => {
-            const tA = a.timestamp?.toDate?.() || new Date(a.timestamp);
-            const tB = b.timestamp?.toDate?.() || new Date(b.timestamp);
+        return finalResults.sort((a, b) => {
+            const tA = a.timestamp?.toDate?.() || new Date(a.timestamp || Date.now());
+            const tB = b.timestamp?.toDate?.() || new Date(b.timestamp || Date.now());
             return tA - tB;
         });
     }, [messages, historyMessages, searchQuery, serverResults, chat, currentUser.uid]);

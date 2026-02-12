@@ -1,5 +1,5 @@
 import { db } from "../firebase";
-import { collection, query, where, getDocs, limit, doc, updateDoc, arrayUnion, arrayRemove, documentId } from "firebase/firestore";
+import { collection, query, where, getDocs, limit, doc, updateDoc, arrayUnion, arrayRemove, documentId, orderBy, startAfter } from "firebase/firestore";
 
 /**
  * Searches for users by email or display name using prefix search.
@@ -17,7 +17,6 @@ export const searchUsers = async (searchTerm, currentUserId) => {
         try {
             const q = query(
                 usersRef,
-                where("superAdmin", "==", false),
                 limit(MAX_RESULTS)
             );
             const snap = await getDocs(q);
@@ -42,7 +41,6 @@ export const searchUsers = async (searchTerm, currentUserId) => {
     // Query 1: Search by Email (emails are always stored lowercase)
     const qEmail = query(
         usersRef,
-        where('superAdmin', '==', false),
         where('email', '>=', term),
         where('email', '<=', term + '\uf8ff'),
         limit(MAX_RESULTS)
@@ -51,16 +49,14 @@ export const searchUsers = async (searchTerm, currentUserId) => {
     // Query 3: Search by displayName (Fallback for legacy users missing searchableName)
     const qDisplayName = query(
         usersRef,
-        where('superAdmin', '==', false),
         where('displayName', '>=', term),
         where('displayName', '<=', term + '\uf8ff'),
         limit(MAX_RESULTS)
     );
 
     try {
-        const [emailSnap, nameSnap, dispSnap] = await Promise.all([
+        const [emailSnap, dispSnap] = await Promise.all([
             getDocs(qEmail),
-            getDocs(qName),
             getDocs(qDisplayName)
         ]);
 
@@ -76,7 +72,6 @@ export const searchUsers = async (searchTerm, currentUserId) => {
         };
 
         addToMap(emailSnap);
-        addToMap(nameSnap);
         addToMap(dispSnap);
 
         return Array.from(userMap.values()).slice(0, MAX_RESULTS);
@@ -146,3 +141,35 @@ export const getUsersByIds = async (userIds) => {
         return [];
     }
 };
+
+/**
+ * Fetches users in pages using cursor-based pagination.
+ * @param {Object} lastDoc - The last document snapshot from previous page.
+ * @param {number} pageSize - Number of users per page.
+ * @returns {Promise<Object>} - { users: Array, lastDoc: Object }
+ */
+export const getPagedUsers = async (lastDoc = null, pageSize = 20) => {
+    try {
+        let q = query(
+            collection(db, "users"),
+            orderBy("displayName"),
+            limit(pageSize)
+        );
+
+        if (lastDoc) {
+            q = query(q, startAfter(lastDoc));
+        }
+
+        const snapshot = await getDocs(q);
+        const users = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        return {
+            users,
+            lastDoc: snapshot.docs[snapshot.docs.length - 1] || null
+        };
+    } catch (e) {
+        console.error("Error fetching paged users:", e);
+        return { users: [], lastDoc: null };
+    }
+};
+

@@ -10,6 +10,7 @@ import { searchUsers } from "../services/userService";
 import { useFriend } from "../contexts/FriendContext";
 import { IoPersonAdd } from "react-icons/io5";
 import { Virtuoso } from "react-virtuoso";
+import { cn } from "../lib/utils";
 
 const SearchAction = React.memo(({ userId }) => {
     const { getFriendStatus, sendRequest } = useFriend();
@@ -95,6 +96,8 @@ const ChatList = React.memo(({ searchTerm }) => {
                 setSearchResults(results);
             } catch (e) {
                 console.error("Search error:", e);
+            } finally {
+                setSearching(false);
             }
         };
 
@@ -115,44 +118,78 @@ const ChatList = React.memo(({ searchTerm }) => {
         );
     }
 
-    // When searching: show filtered existing chats + global search results
+    // When searching: show combined results in a virtualized list
     if (searching || (searchTerm && searchTerm.trim())) {
+        // Deduplicate: Exclude users from searchResults if they already appear in filteredChats
+        const activeChatUserIds = new Set(
+            chats.flatMap(c => c.participants || [])
+                .filter(uid => uid !== currentUser.uid)
+        );
+
+        const uniquePeopleResults = searchResults.filter(u => !activeChatUserIds.has(u.id));
+
+        const combinedResults = [
+            ...(filteredChats.length > 0 ? [{ type: 'header', label: 'Chats' }, ...filteredChats] : []),
+            ...(uniquePeopleResults.length > 0 ? [{ type: 'header', label: 'People' }, ...uniquePeopleResults] : [])
+        ];
+
         return (
-            <div className="flex-1 overflow-y-auto custom-scrollbar">
-                {/* Show filtered existing chats first */}
-                {filteredChats.length > 0 && (
-                    <>
-                        <div className="p-2 text-xs font-semibold text-muted-foreground uppercase">Chats</div>
-                        {filteredChats.map((chat) => (
-                            <ChatListItem key={chat.id} chat={chat} currentUserId={currentUser.uid} />
-                        ))}
-                    </>
-                )}
-
-                {/* Then show global search results */}
-                {searchResults.length > 0 && (
-                    <>
-                        <div className="p-2 text-xs font-semibold text-whatsapp-teal uppercase">People</div>
-                        {searchResults.map(user => (
-                            <div key={user.id} className="relative group border-b border-border/30 last:border-0 hover:bg-surface-elevated transition-colors">
-                                <Link to={`/c/${user.id}`} className="flex items-center gap-4 p-4 cursor-pointer">
-                                    <Avatar src={user.photoURL} alt={user.displayName} size="lg" />
-                                    <div className="flex-1 min-w-0 text-left">
-                                        <h3 className="font-bold text-text-1 truncate text-[16px]">{user.displayName}</h3>
-                                        <p className="text-sm text-text-2 truncate">{user.email}</p>
-                                    </div>
-                                </Link>
-                                <div className="absolute right-4 top-1/2 -translate-y-1/2">
-                                    <SearchAction userId={user.id} />
+            <div className="h-full w-full overflow-hidden">
+                <Virtuoso
+                    data={combinedResults}
+                    style={{ height: '100%' }}
+                    className="custom-scrollbar"
+                    itemContent={(index, item) => {
+                        if (item.type === 'header') {
+                            return (
+                                <div className={cn(
+                                    "p-2 text-xs font-semibold uppercase sticky top-0 bg-surface z-20", // Increased z-index
+                                    item.label === 'Chats' ? "text-muted-foreground" : "text-whatsapp-teal"
+                                )}>
+                                    {item.label}
                                 </div>
-                            </div>
-                        ))}
-                    </>
-                )}
+                            );
+                        }
 
-                {filteredChats.length === 0 && searchResults.length === 0 && (
-                    <div className="p-4 text-center text-muted-foreground">No results found.</div>
-                )}
+                        // It's a User Search Result
+                        if (item.email) {
+                            return (
+                                <div key={item.id} className="relative group border-b border-border/30 last:border-0 hover:bg-surface-elevated transition-colors">
+                                    <Link to={`/c/${item.id}`} className="flex items-center gap-4 p-4 cursor-pointer">
+                                        <Avatar src={item.photoURL} alt={item.displayName} size="lg" />
+                                        <div className="flex-1 min-w-0 text-left">
+                                            <h3 className="font-bold text-text-1 truncate text-[16px]">{item.displayName}</h3>
+                                            <p className="text-sm text-text-2 truncate">{item.email}</p>
+                                        </div>
+                                    </Link>
+                                    <div className="absolute right-4 top-1/2 -translate-y-1/2">
+                                        <SearchAction userId={item.id} />
+                                    </div>
+                                </div>
+                            );
+                        }
+
+                        // It's a Chat List Item
+                        return <ChatListItem key={item.id} chat={item} currentUserId={currentUser.uid} />;
+                    }}
+                    components={{
+                        EmptyPlaceholder: () => (
+                            !searching && <div className="p-4 text-center text-muted-foreground">No results found.</div>
+                        ),
+                        Footer: () => (
+                            <div className="p-4 flex flex-col items-center justify-center gap-2 text-xs text-muted-foreground border-t border-border/10 mt-10">
+                                {searching ? (
+                                    <>
+                                        <div className="w-3 h-3 rounded-full border-2 border-primary/20 border-t-primary animate-spin" />
+                                        Searching...
+                                    </>
+                                ) : (
+                                    combinedResults.length === 0 && <p>No results found for "{searchTerm}"</p>
+                                )}
+                            </div>
+                        )
+                    }}
+                />
             </div>
         );
     }
