@@ -1,3 +1,7 @@
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import { VitePWA } from 'vite-plugin-pwa'
+
 // Build-time validation for environment variables
 const requiredEnv = [
   'VITE_FIREBASE_API_KEY',
