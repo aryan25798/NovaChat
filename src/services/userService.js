@@ -47,18 +47,18 @@ export const searchUsers = async (searchTerm, currentUserId) => {
         limit(MAX_RESULTS)
     );
 
-    // Query 3: Search by displayName (Fallback for legacy users missing searchableName)
-    const qDisplayName = query(
+    // Query 2: Search by searchableName (Case-insensitive prefix)
+    const qName = query(
         usersRef,
-        where('displayName', '>=', term),
-        where('displayName', '<=', term + '\uf8ff'),
+        where('searchableName', '>=', term),
+        where('searchableName', '<=', term + '\uf8ff'),
         limit(MAX_RESULTS)
     );
 
     try {
-        const [emailSnap, dispSnap] = await Promise.all([
+        const [emailSnap, nameSnap] = await Promise.all([
             getDocs(qEmail),
-            getDocs(qDisplayName)
+            getDocs(qName)
         ]);
 
         const userMap = new Map();
@@ -73,7 +73,7 @@ export const searchUsers = async (searchTerm, currentUserId) => {
         };
 
         addToMap(emailSnap);
-        addToMap(dispSnap);
+        addToMap(nameSnap);
 
         return Array.from(userMap.values()).slice(0, MAX_RESULTS);
 
