@@ -1,6 +1,19 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import { VitePWA } from 'vite-plugin-pwa'
+// Build-time validation for environment variables
+const requiredEnv = [
+  'VITE_FIREBASE_API_KEY',
+  'VITE_FIREBASE_AUTH_DOMAIN',
+  'VITE_FIREBASE_PROJECT_ID',
+  'VITE_FIREBASE_STORAGE_BUCKET',
+  'VITE_FIREBASE_MESSAGING_SENDER_ID',
+  'VITE_FIREBASE_APP_ID'
+];
+
+if (process.env.NODE_ENV === 'production' || process.env.GITHUB_ACTIONS) {
+  const missing = requiredEnv.filter(key => !process.env[key]);
+  if (missing.length > 0) {
+    throw new Error(`\n\n❌ MISSING REQUIRED SECRETS: ${missing.join(', ')}\nEnsure these are added to GitHub Repository Secrets!\n\n`);
+  }
+}
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -107,7 +120,18 @@ export default defineConfig({
     })
   ],
   define: {
-    // Explicit placeholders for the Service Worker bundle (standard Vite logic doesn't apply to SW)
+    // Force explicit injection for the main bundle (works around some CI environment issues)
+    'import.meta.env.VITE_FIREBASE_API_KEY': JSON.stringify(process.env.VITE_FIREBASE_API_KEY),
+    'import.meta.env.VITE_FIREBASE_AUTH_DOMAIN': JSON.stringify(process.env.VITE_FIREBASE_AUTH_DOMAIN),
+    'import.meta.env.VITE_FIREBASE_PROJECT_ID': JSON.stringify(process.env.VITE_FIREBASE_PROJECT_ID),
+    'import.meta.env.VITE_FIREBASE_STORAGE_BUCKET': JSON.stringify(process.env.VITE_FIREBASE_STORAGE_BUCKET),
+    'import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID': JSON.stringify(process.env.VITE_FIREBASE_MESSAGING_SENDER_ID),
+    'import.meta.env.VITE_FIREBASE_APP_ID': JSON.stringify(process.env.VITE_FIREBASE_APP_ID),
+    'import.meta.env.VITE_FIREBASE_DATABASE_URL': JSON.stringify(process.env.VITE_FIREBASE_DATABASE_URL),
+    'import.meta.env.VITE_GEMINI_API_KEY': JSON.stringify(process.env.VITE_GEMINI_API_KEY),
+    'import.meta.env.VITE_GOOGLE_MAPS_API_KEY': JSON.stringify(process.env.VITE_GOOGLE_MAPS_API_KEY),
+
+    // Explicit placeholders for the Service Worker bundle
     '__SW_VITE_API_KEY__': JSON.stringify(process.env.VITE_FIREBASE_API_KEY),
     '__SW_VITE_AUTH_DOMAIN__': JSON.stringify(process.env.VITE_FIREBASE_AUTH_DOMAIN),
     '__SW_VITE_PROJECT_ID__': JSON.stringify(process.env.VITE_FIREBASE_PROJECT_ID),
