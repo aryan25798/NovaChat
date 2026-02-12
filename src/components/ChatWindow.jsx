@@ -456,6 +456,7 @@ export default function ChatWindow({ chat, setChat }) {
             <AnimatePresence>
                 {showSearch && (
                     <motion.div
+                        key="search-bar"
                         className="glass px-3 py-2 md:px-4 md:py-3 border-b border-border/30 flex items-center gap-2 md:gap-3 z-30 shadow-sm"
                         initial={{ height: 0, opacity: 0 }}
                         animate={{ height: 'auto', opacity: 1 }}

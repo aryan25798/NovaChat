@@ -77,7 +77,7 @@ export function MessageList({
     }
 
     return (
-        <div style={{ flex: "1 1 auto", minHeight: 0, height: '100%', width: '100%' }} className="relative bg-transparent overflow-hidden">
+        <div style={{ flex: "1 1 auto", minHeight: "200px", height: '100%', width: '100%' }} className="relative bg-transparent overflow-hidden">
             {messages.length === 0 ? (
                 <div className="flex items-center justify-center h-full text-zinc-500">
                     No messages yet. Say hi!
@@ -87,16 +87,18 @@ export function MessageList({
                     ref={virtuosoRef}
                     style={{ height: "100%", width: "100%" }}
                     data={messages}
+                    totalCount={messages.length} // Explicitly provide count
+                    initialItemCount={Math.min(messages.length, 20)} // Help with initial measurement
                     computeItemKey={msg => msg.id}
                     context={contextValue}
                     itemContent={itemContent}
                     initialTopMostItemIndex={messages.length > 0 ? messages.length - 1 : 0}
                     followOutput={(isAtBottom) => isAtBottom ? "auto" : false}
                     alignToBottom={true}
-                    defaultItemHeight={72} // Slightly larger for safety
-                    increaseViewportBy={800} // More aggressive pre-rendering
+                    defaultItemHeight={72}
+                    increaseViewportBy={800}
                     atBottomThreshold={100}
-                    overscan={200} // Pre-render 200px of content above/below
+                    overscan={200}
                     components={{
                         Footer: () => <div className="h-4 w-full invisible" aria-hidden="true" />,
                         Header: () => <div className="h-4 w-full invisible" aria-hidden="true" />

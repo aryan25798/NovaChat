@@ -140,12 +140,12 @@ const ChatList = React.memo(({ searchTerm }) => {
         ];
 
         return (
-            <div style={{ flex: '1 1 auto', minHeight: 0 }} className="w-full h-full">
+            <div style={{ flex: '1 1 auto', minHeight: "100px" }} className="w-full h-full">
                 <Virtuoso
                     data={combinedResults}
                     style={{ height: '100%' }}
                     totalCount={combinedResults.length}
-                    initialItemCount={15}
+                    initialItemCount={Math.min(combinedResults.length, 15)}
                     increaseViewportBy={300}
                     className="custom-scrollbar"
                     itemContent={(index, item) => {
@@ -205,11 +205,12 @@ const ChatList = React.memo(({ searchTerm }) => {
     }
 
     return (
-        <div style={{ flex: '1 1 auto', minHeight: 0 }} className="h-full w-full">
+        <div style={{ flex: '1 1 auto', minHeight: "100px" }} className="h-full w-full">
             <Virtuoso
                 data={chats}
                 useWindowScroll={false}
-                initialItemCount={15}
+                totalCount={chats.length}
+                initialItemCount={Math.min(chats.length, 15)}
                 increaseViewportBy={300}
                 style={{ height: '100%' }}
                 itemContent={(index, chat) => {
