@@ -50,16 +50,24 @@ importScripts('https://www.gstatic.com/firebasejs/9.22.0/firebase-messaging-comp
 importScripts('https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js');
 
 // Initialize the Firebase app in the service worker
+const firebaseConfig = {
+    apiKey: "__VITE_FIREBASE_API_KEY__",
+    authDomain: "__VITE_FIREBASE_AUTH_DOMAIN__",
+    projectId: "__VITE_FIREBASE_PROJECT_ID__",
+    storageBucket: "__VITE_FIREBASE_STORAGE_BUCKET__",
+    messagingSenderId: "__VITE_FIREBASE_MESSAGING_SENDER_ID__",
+    appId: "__VITE_FIREBASE_APP_ID__",
+    databaseURL: "__VITE_FIREBASE_DATABASE_URL__"
+};
+
+// If placeholders haven't been replaced (e.g. dev mode or build issue), 
+// we try to use global replacements if provided via vite-plugin-pwa.
+if (firebaseConfig.apiKey.startsWith('__')) {
+    console.warn("Service Worker using build-time placeholders. Ensure injection is working.");
+}
+
 if (firebase.apps.length === 0) {
-    firebase.initializeApp({
-        apiKey: "__VITE_FIREBASE_API_KEY__",
-        authDomain: "__VITE_FIREBASE_AUTH_DOMAIN__",
-        projectId: "__VITE_FIREBASE_PROJECT_ID__",
-        storageBucket: "__VITE_FIREBASE_STORAGE_BUCKET__",
-        messagingSenderId: "__VITE_FIREBASE_MESSAGING_SENDER_ID__",
-        appId: "__VITE_FIREBASE_APP_ID__",
-        databaseURL: "__VITE_FIREBASE_DATABASE_URL__"
-    });
+    firebase.initializeApp(firebaseConfig);
 }
 
 // Retrieve an instance of Firebase Messaging

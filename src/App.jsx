@@ -18,15 +18,7 @@ const CallsPage = lazy(() => import('./pages/CallsPage'));
 const ContactsPage = lazy(() => import('./pages/ContactsPage'));
 const SharePage = lazy(() => import('./pages/SharePage'));
 
-// Loading Fallback
-const Loading = () => (
-  <div className="flex items-center justify-center h-screen w-screen bg-whatsapp-background dark:bg-gray-900 text-whatsapp-teal">
-    <div className="flex flex-col items-center gap-4">
-      <div className="w-12 h-12 border-4 border-whatsapp-teal/30 border-t-whatsapp-teal rounded-full animate-spin" />
-      <div className="text-sm font-medium uppercase tracking-widest">Loading WhatsApp...</div>
-    </div>
-  </div>
-);
+import Loading from './components/ui/Loading';
 
 function PrivateRoute({ children }) {
   const { currentUser } = useAuth();

@@ -5,6 +5,7 @@ import { httpsCallable } from "firebase/functions";
 import { doc, setDoc, getDoc, serverTimestamp, updateDoc, onSnapshot } from "firebase/firestore";
 import { listenerManager } from "../utils/ListenerManager";
 import { logoutWithTimeout, clearAllCaches } from "../utils/logoutUtils";
+import Loading from "../components/ui/Loading";
 
 const AuthContext = React.createContext();
 
@@ -325,7 +326,7 @@ export function AuthProvider({ children }) {
 
     return (
         <AuthContext.Provider value={value}>
-            {!loading && children}
+            {loading ? <Loading /> : children}
         </AuthContext.Provider>
     );
 }
