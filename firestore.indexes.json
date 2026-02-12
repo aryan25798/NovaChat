@@ -9,6 +9,24 @@
                     "order": "ASCENDING"
                 },
                 {
+                    "fieldPath": "isAdmin",
+                    "order": "ASCENDING"
+                },
+                {
+                    "fieldPath": "displayName",
+                    "order": "ASCENDING"
+                }
+            ]
+        },
+        {
+            "collectionGroup": "users",
+            "queryScope": "COLLECTION",
+            "fields": [
+                {
+                    "fieldPath": "superAdmin",
+                    "order": "ASCENDING"
+                },
+                {
                     "fieldPath": "email",
                     "order": "ASCENDING"
                 }
