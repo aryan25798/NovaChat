@@ -13,10 +13,6 @@ const firebaseConfig = {
     databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL
 };
 
-import { initializeFirestore, persistentLocalCache } from "firebase/firestore";
-
-// ... (imports remain)
-
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 setPersistence(auth, browserLocalPersistence);

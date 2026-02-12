@@ -40,14 +40,14 @@ export default defineConfig({
         ],
         screenshots: [
           {
-            src: "/nova-icon.png", // Placeholder, ideally actual screenshots
+            src: "/nova-icon.png",
             sizes: "512x512",
             type: "image/png",
             form_factor: "wide",
             label: "Desktop"
           },
           {
-            src: "/nova-icon.png", // Placeholder
+            src: "/nova-icon.png",
             sizes: "512x512",
             type: "image/png",
             form_factor: "narrow",

@@ -5,7 +5,7 @@ import { doc, updateDoc, serverTimestamp as firestoreServerTimestamp } from "fir
 import { useAuth } from "./AuthContext";
 import { listenerManager } from "../utils/ListenerManager";
 
-const PresenceContext = createContext();
+export const PresenceContext = createContext();
 
 export function usePresence() {
     return useContext(PresenceContext);

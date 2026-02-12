@@ -21,7 +21,7 @@ export function useCall() {
     return useContext(CallContext);
 }
 
-const getIceServers = async () => {
+export const getIceServers = async () => {
     const apiKey = import.meta.env.VITE_METERED_API_KEY;
     const fallbackStun = [
         { urls: "stun:stun.l.google.com:19302" },

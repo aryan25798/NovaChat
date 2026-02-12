@@ -3,7 +3,7 @@ import { getMessagingInstance, db } from '../firebase';
 import { getToken, onMessage } from 'firebase/messaging';
 import { doc, updateDoc, arrayUnion, getDoc } from 'firebase/firestore';
 import { useAuth } from './AuthContext';
-import { PresenceContext } from './PresenceContext'; // Import Context directly to avoid circular dep if needed, or use usePresence but check for circular
+import { PresenceContext } from './PresenceContext';
 import { subscribeToNotifications, markNotificationAsRead } from '../services/notificationService';
 import { toast } from 'react-hot-toast';
 
@@ -84,7 +84,7 @@ export function NotificationProvider({ children }) {
     }, [currentUser?.uid, currentUser?.createdAt]);
 
     // 2. Foreground FCM Messages (Existing)
-    const { activeChatId } = React.useContext(PresenceContext) || {}; // Access safely if context exists
+    const { activeChatId } = React.useContext(PresenceContext) || {};
 
     useEffect(() => {
         const msg = getMessagingInstance();

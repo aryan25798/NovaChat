@@ -43,7 +43,7 @@ export default function ChatWindow({ chat, setChat }) {
 
     const { currentUser } = useAuth();
     const { startCall } = useCall();
-    const { getUserPresence, updateActiveChat } = usePresence(); // Added updateActiveChat
+    const { getUserPresence, updateActiveChat } = usePresence(); // Re-added updateActiveChat
     const navigate = useNavigate();
 
     const messagesEndRef = useRef(null);

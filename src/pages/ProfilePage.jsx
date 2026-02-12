@@ -10,6 +10,8 @@ import { doc, updateDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import { uploadProfilePhoto } from "../services/authService";
 import { motion } from "framer-motion";
+import { clearCache } from "../firebase";
+import { getIceServers } from "../contexts/CallContext";
 
 const ProfilePage = () => {
     const { currentUser, deactivateAccount } = useAuth();
@@ -198,9 +200,9 @@ const RepairDatabaseButton = () => {
         <button
             onClick={handleRepair}
             disabled={status === 'repairing'}
-            className="w-full py-2 text-xs font-mono font-bold uppercase tracking-widest text-red-400/70 hover:text-red-400 hover:bg-red-400/5 transition-colors rounded border border-dashed border-red-400/30"
+            className="w-full py-2 text-xs font-mono font-bold uppercase tracking-widest text-red-500/70 hover:text-red-500 hover:bg-red-500/5 transition-colors rounded border border-dashed border-red-500/30"
         >
-            {status === 'repairing' ? 'Repairing Database...' : 'Repair Database (Reset Cache)'}
+            {status === 'repairing' ? 'REPAIRING...' : 'REPAIR DATABASE (RESET CACHE)'}
         </button>
     );
 };
@@ -214,33 +216,9 @@ const NetworkTestButton = () => {
         setLog('Initializing...');
 
         try {
-            // 1. Fetch Credentials (Duplicate logic from CallContext for isolation)
-            const apiKey = import.meta.env.VITE_METERED_API_KEY;
-            let iceServers = [];
-
-            setLog('Fetching TURN credentials...');
-            try {
-                if (apiKey) {
-                    const response = await fetch(`https://aryan89752.metered.live/api/v1/turn/credentials?apiKey=${apiKey}`);
-                    if (response.ok) {
-                        iceServers = await response.json();
-                        setLog('Credentials obtained from Metered API.');
-                    }
-                }
-            } catch (e) {
-                setLog('API failed, using fallback.');
-            }
-
-            if (iceServers.length === 0) {
-                iceServers = [
-                    { urls: "stun:stun.l.google.com:19302" },
-                    {
-                        urls: import.meta.env.VITE_TURN_SERVER_URL || "turn:open-relay.metered.ca:443",
-                        username: import.meta.env.VITE_TURN_SERVER_USER || "guest",
-                        credential: import.meta.env.VITE_TURN_SERVER_PWD || "guest"
-                    }
-                ];
-            }
+            // 1. Fetch Credentials
+            const iceServers = await getIceServers();
+            setLog('ICE servers obtained.');
 
             // 2. Create Peer Connection
             const pc = new RTCPeerConnection({ iceServers, iceCandidatePoolSize: 1 });
@@ -271,9 +249,7 @@ const NetworkTestButton = () => {
 
                 pc.onicecandidate = (e) => {
                     if (e.candidate) {
-                        console.log("Candidate:", e.candidate.type, e.candidate.protocol);
                         candidates.push(e.candidate.type);
-
                         if (e.candidate.type === 'relay') {
                             relayFound = true;
                             clearTimeout(timeout);
@@ -306,5 +282,4 @@ const NetworkTestButton = () => {
         </div>
     );
 };
-
 export default ProfilePage;
