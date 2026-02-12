@@ -351,21 +351,26 @@ async function handleGeminiReply(chatId, userText, senderName) {
             .limitToLast(10)
             .get();
 
-        // Build History with Multimodal Support
+        // 5. Build History with Strict Role Alternation (MANDATORY for Gemini API)
         const history = [];
+        let lastRole = null;
+
         for (const doc of messagesSnap.docs) {
             const data = doc.data();
             const role = data.senderId === GEMINI_BOT_ID ? 'model' : 'user';
 
+            // Gemini API Requirement: roles must strictly alternate user -> model -> user
+            if (role === lastRole) {
+                // If same role, append text to previous part instead of creating new block
+                if (history.length > 0) {
+                    const lastBlock = history[history.length - 1];
+                    lastBlock.parts[0].text += `\n\n${data.text || ''}`;
+                    continue;
+                }
+            }
+
             if (data.type === 'image' && data.fileUrl) {
-                // For now, we just tell Gemini it's an image if we can't fetch it easily in this environment
-                // In a full implementation, we'd fetch the bytes. 
-                // However, Gemini 2.5 Flash supports image URLs in some contexts, but let's stick to text description if complex.
-                // WAIT! Users want "Multimodal". We must try to fetch the image.
                 try {
-                    // We need to fetch the image to base64
-                    // Since we are in Cloud Functions, we should use 'axios' or 'fetch'
-                    // but we might not have axios installed. 'fetch' is available in Node 18+.
                     const imgResp = await fetch(data.fileUrl);
                     if (imgResp.ok) {
                         const arrayBuffer = await imgResp.arrayBuffer();
@@ -383,6 +388,7 @@ async function handleGeminiReply(chatId, userText, senderName) {
                                 }
                             ]
                         });
+                        lastRole = role;
                         continue;
                     }
                 } catch (e) {
@@ -394,6 +400,7 @@ async function handleGeminiReply(chatId, userText, senderName) {
                 role: role,
                 parts: [{ text: data.text || '' }]
             });
+            lastRole = role;
         }
 
         const SYSTEM_INSTRUCTION = `You are the Gemini AI Assistant in a WhatsApp Clone app called NovaCHAT.
@@ -404,20 +411,22 @@ async function handleGeminiReply(chatId, userText, senderName) {
         - Format responses using Markdown.
         - You are talking to ${senderName || 'Active User'}.`;
 
-        const contents = [
-            { role: "user", parts: [{ text: SYSTEM_INSTRUCTION }] },
-            ...history
-        ];
-
-        // If the VERY last message was just added and not in history yet (due to race condition), 
-        // we might want to ensure it's there. But 'onMessageCreated' triggers AFTER write.
-        // However, 'limitToLast(10)' might miss the current one if we have huge concurrency.
-        // Usually it's fine.
+        // If the VERY last message in history is 'model', Gemini can't reply to itself.
+        // We must ensure 'user' is always the last role sent to 'generateContent'.
+        if (history.length > 0 && history[history.length - 1].role === 'model') {
+            logger.info("Skipping reply: Last message was already from AI.");
+            return;
+        }
 
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ contents })
+            body: JSON.stringify({
+                contents: history,
+                system_instruction: {
+                    parts: [{ text: SYSTEM_INSTRUCTION }]
+                }
+            })
         });
 
         if (!response.ok) {

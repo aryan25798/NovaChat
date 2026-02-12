@@ -35,16 +35,14 @@ const MainLayout = () => {
             )}>
 
                 {/* Sidebar Pane (Chat List) */}
-                {showSidebar && (
-                    <aside
-                        className={cn(
-                            "flex flex-col border-r border-border/50 bg-surface-elevated relative z-30 shrink-0 h-full",
-                            isMobile ? "w-full" : (isTablet ? "w-[340px]" : "w-[420px] lg:w-[450px] xl:w-[480px]")
-                        )}
-                    >
-                        <Sidebar />
-                    </aside>
-                )}
+                <aside
+                    className={cn(
+                        "flex-col border-r border-border/50 bg-surface-elevated relative z-30 shrink-0 h-full transition-all duration-300",
+                        isMobile ? (showSidebar ? "w-full flex" : "hidden") : (isTablet ? "w-[340px] flex" : "w-[420px] lg:w-[450px] xl:w-[480px] flex")
+                    )}
+                >
+                    <Sidebar />
+                </aside>
 
                 {/* Main Content Area (Active Chat / Profile / Status etc.) */}
                 {showContent && (

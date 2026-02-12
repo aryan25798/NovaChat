@@ -8,10 +8,11 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { doc, updateDoc } from "firebase/firestore";
 import { db } from "../firebase";
-import { uploadProfilePhoto } from "../services/authService";
+import { uploadProfilePhoto, updateUserProfile } from "../services/authService";
 import { motion } from "framer-motion";
 import { clearCache } from "../firebase";
 import { getIceServers } from "../contexts/CallContext";
+import { toast } from "react-hot-toast";
 
 const ProfilePage = () => {
     const { currentUser, deactivateAccount } = useAuth();

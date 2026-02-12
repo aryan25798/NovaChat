@@ -9,6 +9,7 @@ import { subscribeToUserChats } from "../services/chatListService";
 import { searchUsers } from "../services/userService";
 import { useFriend } from "../contexts/FriendContext";
 import { IoPersonAdd } from "react-icons/io5";
+import { Virtuoso } from "react-virtuoso";
 
 const SearchAction = React.memo(({ userId }) => {
     const { getFriendStatus, sendRequest } = useFriend();
@@ -32,10 +33,14 @@ const SearchAction = React.memo(({ userId }) => {
     );
 });
 
+// Persistent cache for chat list to prevent "white flash" on re-mount
+let cachedChats = [];
+let hasInitiallyLoaded = false;
+
 const ChatList = React.memo(({ searchTerm }) => {
     const { currentUser } = useAuth();
-    const [chats, setChats] = useState([]);
-    const [loading, setLoading] = useState(true);
+    const [chats, setChats] = useState(cachedChats);
+    const [loading, setLoading] = useState(!hasInitiallyLoaded);
     const [searchResults, setSearchResults] = useState([]);
     const [searching, setSearching] = useState(false);
 
@@ -49,8 +54,10 @@ const ChatList = React.memo(({ searchTerm }) => {
                 const isHidden = chat.hiddenBy?.includes(currentUser.uid);
                 return lastMsgTime > clearedAt && !isHidden;
             });
+            cachedChats = filteredChats;
             setChats(filteredChats);
             setLoading(false);
+            hasInitiallyLoaded = true;
         });
 
         return () => unsubscribe();
@@ -144,10 +151,20 @@ const ChatList = React.memo(({ searchTerm }) => {
     }
 
     return (
-        <div className="flex-1 overflow-y-auto custom-scrollbar">
-            {chats.map((chat) => (
-                <ChatListItem key={chat.id} chat={chat} currentUserId={currentUser.uid} />
-            ))}
+        <div className="flex-1 h-full overflow-hidden">
+            <Virtuoso
+                data={chats}
+                useWindowScroll={false}
+                initialItemCount={15}
+                itemContent={(index, chat) => (
+                    <ChatListItem key={chat.id} chat={chat} currentUserId={currentUser.uid} />
+                )}
+                components={{
+                    Header: () => <div className="h-2" />,
+                    Footer: () => <div className="h-4" />,
+                }}
+                className="custom-scrollbar"
+            />
         </div>
     );
 });

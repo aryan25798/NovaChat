@@ -48,24 +48,24 @@ export const searchUsers = async (searchTerm, currentUserId) => {
         limit(MAX_RESULTS)
     );
 
-    // Query 2: Search by searchableName (single lowercase query)
-    const qName = query(
+    // Query 3: Search by displayName (Fallback for legacy users missing searchableName)
+    const qDisplayName = query(
         usersRef,
         where('superAdmin', '==', false),
-        where('searchableName', '>=', term),
-        where('searchableName', '<=', term + '\uf8ff'),
+        where('displayName', '>=', term),
+        where('displayName', '<=', term + '\uf8ff'),
         limit(MAX_RESULTS)
     );
 
     try {
-        const [emailSnap, nameSnap] = await Promise.all([
+        const [emailSnap, nameSnap, dispSnap] = await Promise.all([
             getDocs(qEmail),
-            getDocs(qName)
+            getDocs(qName),
+            getDocs(qDisplayName)
         ]);
 
         const userMap = new Map();
 
-        // Client-side filtering: exclude self, admins, superAdmins
         const addToMap = (snap) => {
             snap.forEach(doc => {
                 const data = doc.data();
@@ -77,6 +77,7 @@ export const searchUsers = async (searchTerm, currentUserId) => {
 
         addToMap(emailSnap);
         addToMap(nameSnap);
+        addToMap(dispSnap);
 
         return Array.from(userMap.values()).slice(0, MAX_RESULTS);
 

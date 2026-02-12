@@ -15,24 +15,20 @@ export async function getGeminiResponse(message, history = []) {
     }
 
     try {
-        const contents = [
-            {
-                role: "user",
-                parts: [{ text: SYSTEM_INSTRUCTION }]
-            },
-            ...history,
-            {
-                role: "user",
-                parts: [{ text: message }]
-            }
-        ];
-
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
             },
-            body: JSON.stringify({ contents })
+            body: JSON.stringify({
+                contents: history.concat({
+                    role: "user",
+                    parts: [{ text: message }]
+                }),
+                system_instruction: {
+                    parts: [{ text: SYSTEM_INSTRUCTION }]
+                }
+            })
         });
 
         const data = await response.json();

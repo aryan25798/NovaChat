@@ -28,21 +28,18 @@ exports.generateAIResponse = onCall(async (request) => {
     - You are talking to ${senderName || 'Active User'}.`;
 
     try {
-        const contents = [
-            {
-                role: "user",
-                parts: [{ text: SYSTEM_INSTRUCTION }]
-            },
-            ...messages.map(msg => ({
-                role: msg.role === 'user' ? 'user' : 'model',
-                parts: [{ text: msg.text }]
-            }))
-        ];
-
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ contents })
+            body: JSON.stringify({
+                contents: messages.map(msg => ({
+                    role: msg.role === 'user' ? 'user' : 'model',
+                    parts: [{ text: msg.text }]
+                })),
+                system_instruction: {
+                    parts: [{ text: SYSTEM_INSTRUCTION }]
+                }
+            })
         });
 
         if (!response.ok) {
