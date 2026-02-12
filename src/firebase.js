@@ -13,6 +13,22 @@ const firebaseConfig = {
     databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL
 };
 
+// Diagnostic Check for Production Builds
+if (import.meta.env.PROD) {
+    const missingKeys = Object.entries(firebaseConfig)
+        .filter(([_, value]) => !value)
+        .map(([key]) => key);
+
+    if (missingKeys.length > 0) {
+        console.error("CRITICAL: Firebase Configuration is incomplete!", {
+            missing: missingKeys,
+            envSource: "import.meta.env"
+        });
+    } else {
+        console.log("Firebase config verified (PROD)");
+    }
+}
+
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 setPersistence(auth, browserLocalPersistence);

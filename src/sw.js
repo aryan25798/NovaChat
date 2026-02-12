@@ -71,14 +71,18 @@ importScripts('https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-comp
 
 // Initialize the Firebase app in the service worker
 const firebaseConfig = {
-    apiKey: typeof __SW_VITE_API_KEY__ !== 'undefined' ? __SW_VITE_API_KEY__ : process.env.VITE_FIREBASE_API_KEY,
-    authDomain: typeof __SW_VITE_AUTH_DOMAIN__ !== 'undefined' ? __SW_VITE_AUTH_DOMAIN__ : process.env.VITE_FIREBASE_AUTH_DOMAIN,
-    projectId: typeof __SW_VITE_PROJECT_ID__ !== 'undefined' ? __SW_VITE_PROJECT_ID__ : process.env.VITE_FIREBASE_PROJECT_ID,
-    storageBucket: typeof __SW_VITE_STORAGE_BUCKET__ !== 'undefined' ? __SW_VITE_STORAGE_BUCKET__ : process.env.VITE_FIREBASE_STORAGE_BUCKET,
-    messagingSenderId: typeof __SW_VITE_MESSAGING_SENDER_ID__ !== 'undefined' ? __SW_VITE_MESSAGING_SENDER_ID__ : process.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-    appId: typeof __SW_VITE_APP_ID__ !== 'undefined' ? __SW_VITE_APP_ID__ : process.env.VITE_FIREBASE_APP_ID,
-    databaseURL: typeof __SW_VITE_DATABASE_URL__ !== 'undefined' ? __SW_VITE_DATABASE_URL__ : process.env.VITE_FIREBASE_DATABASE_URL
+    apiKey: typeof __SW_VITE_API_KEY__ !== 'undefined' ? __SW_VITE_API_KEY__ : null,
+    authDomain: typeof __SW_VITE_AUTH_DOMAIN__ !== 'undefined' ? __SW_VITE_AUTH_DOMAIN__ : null,
+    projectId: typeof __SW_VITE_PROJECT_ID__ !== 'undefined' ? __SW_VITE_PROJECT_ID__ : null,
+    storageBucket: typeof __SW_VITE_STORAGE_BUCKET__ !== 'undefined' ? __SW_VITE_STORAGE_BUCKET__ : null,
+    messagingSenderId: typeof __SW_VITE_MESSAGING_SENDER_ID__ !== 'undefined' ? __SW_VITE_MESSAGING_SENDER_ID__ : null,
+    appId: typeof __SW_VITE_APP_ID__ !== 'undefined' ? __SW_VITE_APP_ID__ : null,
+    databaseURL: typeof __SW_VITE_DATABASE_URL__ !== 'undefined' ? __SW_VITE_DATABASE_URL__ : null
 };
+
+if (!firebaseConfig.apiKey) {
+    console.error("Service Worker: Missing Firebase API Key! Injection failed during build.");
+}
 
 // If placeholders haven't been replaced (e.g. dev mode or build issue), 
 // we try to use global replacements if provided via vite-plugin-pwa.

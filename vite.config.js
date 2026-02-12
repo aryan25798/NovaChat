@@ -107,15 +107,7 @@ export default defineConfig({
     })
   ],
   define: {
-    'process.env.VITE_FIREBASE_API_KEY': JSON.stringify(process.env.VITE_FIREBASE_API_KEY),
-    'process.env.VITE_FIREBASE_AUTH_DOMAIN': JSON.stringify(process.env.VITE_FIREBASE_AUTH_DOMAIN),
-    'process.env.VITE_FIREBASE_PROJECT_ID': JSON.stringify(process.env.VITE_FIREBASE_PROJECT_ID),
-    'process.env.VITE_FIREBASE_STORAGE_BUCKET': JSON.stringify(process.env.VITE_FIREBASE_STORAGE_BUCKET),
-    'process.env.VITE_FIREBASE_MESSAGING_SENDER_ID': JSON.stringify(process.env.VITE_FIREBASE_MESSAGING_SENDER_ID),
-    'process.env.VITE_FIREBASE_APP_ID': JSON.stringify(process.env.VITE_FIREBASE_APP_ID),
-    'process.env.VITE_FIREBASE_DATABASE_URL': JSON.stringify(process.env.VITE_FIREBASE_DATABASE_URL),
-
-    // Explicit placeholders for the Service Worker bundle
+    // Explicit placeholders for the Service Worker bundle (standard Vite logic doesn't apply to SW)
     '__SW_VITE_API_KEY__': JSON.stringify(process.env.VITE_FIREBASE_API_KEY),
     '__SW_VITE_AUTH_DOMAIN__': JSON.stringify(process.env.VITE_FIREBASE_AUTH_DOMAIN),
     '__SW_VITE_PROJECT_ID__': JSON.stringify(process.env.VITE_FIREBASE_PROJECT_ID),
@@ -123,14 +115,6 @@ export default defineConfig({
     '__SW_VITE_MESSAGING_SENDER_ID__': JSON.stringify(process.env.VITE_FIREBASE_MESSAGING_SENDER_ID),
     '__SW_VITE_APP_ID__': JSON.stringify(process.env.VITE_FIREBASE_APP_ID),
     '__SW_VITE_DATABASE_URL__': JSON.stringify(process.env.VITE_FIREBASE_DATABASE_URL),
-
-    '__VITE_FIREBASE_API_KEY__': JSON.stringify(process.env.VITE_FIREBASE_API_KEY || 'AIzaSyAtqHwOk2zwqdmr_3puMCVH_aAmzx0GtTI'),
-    '__VITE_FIREBASE_AUTH_DOMAIN__': JSON.stringify(process.env.VITE_FIREBASE_AUTH_DOMAIN || 'whatsappclone-50b5b.firebaseapp.com'),
-    '__VITE_FIREBASE_PROJECT_ID__': JSON.stringify(process.env.VITE_FIREBASE_PROJECT_ID || 'whatsappclone-50b5b'),
-    '__VITE_FIREBASE_STORAGE_BUCKET__': JSON.stringify(process.env.VITE_FIREBASE_STORAGE_BUCKET || 'whatsappclone-50b5b.firebasestorage.app'),
-    '__VITE_FIREBASE_MESSAGING_SENDER_ID__': JSON.stringify(process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '662334343258'),
-    '__VITE_FIREBASE_APP_ID__': JSON.stringify(process.env.VITE_FIREBASE_APP_ID || '1:662334343258:web:a1b7a9fe49563c9aeaf063'),
-    '__VITE_FIREBASE_DATABASE_URL__': JSON.stringify(process.env.VITE_FIREBASE_DATABASE_URL || 'https://whatsappclone-50b5b-default-rtdb.firebaseio.com'),
   },
   build: {
     target: 'esnext',
