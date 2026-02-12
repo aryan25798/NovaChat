@@ -45,7 +45,14 @@ const ChatList = React.memo(({ searchTerm }) => {
     const [searching, setSearching] = useState(false);
 
     useEffect(() => {
-        if (!currentUser) return;
+        if (!currentUser) {
+            // Clear cache on logout to prevent data leakage/stale state
+            cachedChats = [];
+            hasInitiallyLoaded = false;
+            setChats([]);
+            setLoading(false);
+            return;
+        }
 
         const unsubscribe = subscribeToUserChats(currentUser.uid, (chatData) => {
             const filteredChats = chatData.filter(chat => {
@@ -156,9 +163,10 @@ const ChatList = React.memo(({ searchTerm }) => {
                 data={chats}
                 useWindowScroll={false}
                 initialItemCount={15}
-                itemContent={(index, chat) => (
-                    <ChatListItem key={chat.id} chat={chat} currentUserId={currentUser.uid} />
-                )}
+                itemContent={(index, chat) => {
+                    if (!chat || !currentUser) return null;
+                    return <ChatListItem key={chat.id} chat={chat} currentUserId={currentUser.uid} />;
+                }}
                 components={{
                     Header: () => <div className="h-2" />,
                     Footer: () => <div className="h-4" />,
