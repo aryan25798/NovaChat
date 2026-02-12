@@ -7,7 +7,7 @@ import { GEMINI_BOT_ID } from "../constants";
 import { useAuth } from "../contexts/AuthContext";
 import { useCall } from "../contexts/CallContext";
 import { useNavigate } from "react-router-dom";
-import { subscribeToMessages, sendMessage, sendMediaMessage, deleteMessage, addReaction, searchMessages, clearChat, hideChat } from "../services/chatService";
+import { subscribeToMessages, sendMessage, sendMediaMessage, deleteMessage, addReaction, searchMessages, clearChat, hideChat, loadOlderMessages } from "../services/chatService";
 import { setTypingStatus, subscribeToTypingStatus } from "../services/typingService";
 import { usePresence } from "../contexts/PresenceContext";
 import { motion, AnimatePresence } from "framer-motion";
@@ -24,7 +24,8 @@ import ContactInfoPanel from "./ContactInfoPanel";
 import FullScreenMedia from "./FullScreenMedia";
 
 export default function ChatWindow({ chat, setChat }) {
-    const [messages, setMessages] = useState([]);
+    const [messages, setMessages] = useState([]); // Real-time messages (latest chunk)
+    const [historyMessages, setHistoryMessages] = useState([]); // Manually fetched older messages
     const [newMessage, setNewMessage] = useState("");
     const [typingUsers, setTypingUsers] = useState({});
     const [showContactInfo, setShowContactInfo] = useState(false);
@@ -32,8 +33,8 @@ export default function ChatWindow({ chat, setChat }) {
     const [showSearch, setShowSearch] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
     const [loading, setLoading] = useState(false);
+    const [loadingHistory, setLoadingHistory] = useState(false); // New loading state for pagination
     const [isSending, setIsSending] = useState(false);
-    const [messageLimit, setMessageLimit] = useState(50);
     const [hasMoreMessages, setHasMoreMessages] = useState(true);
     const [serverResults, setServerResults] = useState([]);
 
@@ -189,36 +190,58 @@ export default function ChatWindow({ chat, setChat }) {
         // We'll wrap the setLimit in a separate effect that depends on chat.id
     }, [chat?.id]);
 
+    // Clear history when chat changes
     useEffect(() => {
-        setMessageLimit(50);
+        setHistoryMessages([]);
+        setHasMoreMessages(true);
     }, [chat?.id]);
 
     useEffect(() => {
         if (!chat?.id || !currentUser?.uid || chat.isGhost) return;
 
+        // Reset limit logic removed. We now subscribe to fixed LAST 50 messages.
         const unsubscribe = subscribeToMessages(chat.id, currentUser.uid, (msgs) => {
             setMessages(msgs);
             setLoading(false);
-            if (msgs.length < messageLimit) {
-                setHasMoreMessages(false);
-            } else {
-                setHasMoreMessages(true);
-            }
-        }, true, messageLimit);
+        }, true, 50); // Fixed limit of 50 for real-time listener
 
         return () => unsubscribe();
-    }, [chat?.id, currentUser?.uid, messageLimit, chat?.isGhost]);
+    }, [chat?.id, currentUser?.uid, chat?.isGhost]);
+
+    // Handler for loading older messages
+    const handleLoadMore = async () => {
+        if (loadingHistory || !hasMoreMessages) return;
+
+        // Cursor is the oldest message we have (could be from history or live list)
+        // Correct order: [...history, ...live]
+        // Oldest is history[0] or messages[0]
+        const oldestMessage = historyMessages.length > 0 ? historyMessages[0] : messages[0];
+
+        if (!oldestMessage?._doc) {
+            console.warn("No cursor found for pagination");
+            return;
+        }
+
+        setLoadingHistory(true);
+        const olderMsgs = await loadOlderMessages(chat.id, oldestMessage._doc);
+
+        if (olderMsgs.length < 50) {
+            setHasMoreMessages(false);
+        }
+
+        if (olderMsgs.length > 0) {
+            setHistoryMessages(prev => [...olderMsgs, ...prev]);
+        }
+        setLoadingHistory(false);
+    };
 
     useEffect(() => {
-        // Only scroll to bottom if we are near bottom or it's initial load (limit 50)
-        // For simplicity, we scroll to bottom on new message if near bottom.
-        // But if we just loaded older messages (limit increased), we want to stay where we were?
-        // That requires complex scroll management.
-        // MVP: Scroll to bottom only if limit is 50. If limit > 50, user is scrolling up.
-        if (messageLimit === 50) {
+        // Only scroll to bottom on initial load of LIVE messages
+        // History load should NOT trigger scroll to bottom
+        if (historyMessages.length === 0 && messages.length > 0) {
             scrollToBottom();
         }
-    }, [messages, messageLimit]);
+    }, [messages.length, historyMessages.length]);
 
     useEffect(() => {
         if (!chat?.id || !currentUser?.uid || chat.isGhost) return;
@@ -307,10 +330,20 @@ export default function ChatWindow({ chat, setChat }) {
     const filteredMessages = React.useMemo(() => {
         const clearedAt = chat?.clearedAt?.[currentUser.uid]?.toDate?.() || new Date(0);
 
+        // Combine History + RealTime
+        // Deduplicate using Map because real-time window might overlap with history if not carefully managed
+        const allLocalMessages = [...historyMessages, ...messages];
+        const uniqueLocalMap = new Map();
+        allLocalMessages.forEach(m => uniqueLocalMap.set(m.id, m));
+
+        const uniqueLocalMessages = Array.from(uniqueLocalMap.values());
+
         // 1. Filter local messages
-        const localMatches = messages.filter(m => {
+        const localMatches = uniqueLocalMessages.filter(m => {
             const msgTime = m.timestamp?.toDate?.() || new Date();
-            const matchesSearch = searchQuery ? m.text?.toLowerCase().includes(searchQuery.toLowerCase()) : true;
+            // Use textLower for search match if available (fallback to text)
+            const searchText = m.textLower || m.text?.toLowerCase() || "";
+            const matchesSearch = searchQuery ? searchText.includes(searchQuery.toLowerCase()) : true;
             const isHidden = m.hiddenBy?.includes(currentUser.uid);
             return msgTime > clearedAt && matchesSearch && !isHidden;
         });
@@ -322,12 +355,17 @@ export default function ChatWindow({ chat, setChat }) {
             return unique.sort((a, b) => {
                 const tA = a.timestamp?.toDate?.() || new Date(a.timestamp);
                 const tB = b.timestamp?.toDate?.() || new Date(b.timestamp);
-                return tA - tB;
+                return tA - tB; // Sort OLD to NEW
             });
         }
 
-        return localMatches;
-    }, [messages, searchQuery, serverResults, chat, currentUser.uid]);
+        // Sort OLD to NEW
+        return localMatches.sort((a, b) => {
+            const tA = a.timestamp?.toDate?.() || new Date(a.timestamp);
+            const tB = b.timestamp?.toDate?.() || new Date(b.timestamp);
+            return tA - tB;
+        });
+    }, [messages, historyMessages, searchQuery, serverResults, chat, currentUser.uid]);
 
     // Media Gallery Logic
     const mediaMessages = React.useMemo(() => {
@@ -451,10 +489,11 @@ export default function ChatWindow({ chat, setChat }) {
                 {hasMoreMessages && !loading && (
                     <div className="flex justify-center p-2 z-10">
                         <button
-                            onClick={() => setMessageLimit(prev => prev + 50)}
-                            className="text-xs bg-surface-elevated text-text-2 px-3 py-1 rounded-full shadow-sm hover:bg-surface border border-border/10 transition-colors"
+                            onClick={handleLoadMore}
+                            disabled={loadingHistory}
+                            className="text-xs bg-surface-elevated text-text-2 px-3 py-1 rounded-full shadow-sm hover:bg-surface border border-border/10 transition-colors disabled:opacity-50"
                         >
-                            Load Older Messages
+                            {loadingHistory ? "Loading..." : "Load Older Messages"}
                         </button>
                     </div>
                 )}

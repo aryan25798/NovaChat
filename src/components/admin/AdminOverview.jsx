@@ -18,9 +18,9 @@ const GrowthChart = React.memo(({ data, hasMounted }) => (
                 <Activity size={20} />
             </div>
         </div>
-        <div className="h-[300px] min-h-[300px] w-full overflow-hidden">
+        <div style={{ width: '100%', height: 300 }}>
             {hasMounted && (
-                <ResponsiveContainer width="99%" height="100%" minWidth={0} debounce={50}>
+                <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={data}>
                         <defs>
                             <linearGradient id="colorUsers" x1="0" y1="0" x2="0" y2="1">
@@ -77,9 +77,9 @@ const TrafficChart = React.memo(({ data, hasMounted }) => (
                 <BarChart3 size={20} />
             </div>
         </div>
-        <div className="h-[300px] min-h-[300px] w-full overflow-hidden">
+        <div style={{ width: '100%', height: 300 }}>
             {hasMounted && (
-                <ResponsiveContainer width="99%" height="100%" minWidth={0} debounce={50}>
+                <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={data}>
                         <CartesianGrid strokeDasharray="8 8" vertical={false} stroke="#374151" opacity={0.05} />
                         <XAxis

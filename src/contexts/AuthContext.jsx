@@ -180,7 +180,12 @@ export function AuthProvider({ children }) {
             await clearAllCaches(db);
 
             // STEP 6: Sign out from Firebase Auth
-            await signOut(auth);
+            try {
+                await signOut(auth);
+            } catch (e) {
+                // Ignore network errors during logout (e.g. ERR_BLOCKED_BY_CLIENT)
+                console.warn("Logout network signal interrupted (harmless):", e.code);
+            }
 
             console.debug('Secure logout complete');
 

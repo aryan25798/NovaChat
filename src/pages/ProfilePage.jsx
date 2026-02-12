@@ -61,6 +61,16 @@ const ProfilePage = () => {
                 <h1 className="text-lg xs:text-xl font-semibold">Profile</h1>
             </div>
 
+            {currentUser?.deletionRequested && (
+                <div className="mx-4 mt-4 p-3 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-3">
+                    <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                    <div>
+                        <h4 className="text-xs font-bold text-red-500 uppercase tracking-wide">Deletion Pending</h4>
+                        <p className="text-[10px] text-muted-foreground">Your account is scheduled for removal. An admin will process this shortly.</p>
+                    </div>
+                </div>
+            )}
+
             <div className="flex-1 overflow-y-auto px-4 xs:px-6 py-6 space-y-6 xs:space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 no-scrollbar">
                 {/* Avatar Section */}
                 <div className="flex flex-col items-center gap-4">
@@ -148,7 +158,7 @@ const ProfilePage = () => {
                             }}
                             disabled={saving}
                         >
-                            {saving ? "REQUESTING..." : "DELETE ACCOUNT"}
+                            {saving ? "REQUESTING..." : "REQUEST ACCOUNT DELETION"}
                         </Button>
                         <p className="text-[10px] text-center text-muted-foreground mt-4 leading-relaxed uppercase tracking-widest font-bold opacity-50">
                             Nova Messaging v1.2.0<br />End-to-End Encrypted

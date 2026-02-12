@@ -13,6 +13,7 @@ import { collection, query, orderBy, limit, getDocs, where, doc, updateDoc } fro
 import { httpsCallable } from 'firebase/functions';
 import { format } from 'date-fns';
 import { LogOut, LayoutDashboard, Users, Map, Eye, ShieldAlert, Megaphone, Menu, X, Search } from 'lucide-react';
+import { Avatar } from '../components/ui/Avatar';
 
 // Sub-component for chat selection in Spy Mode (Refactored for User-Centric Intelligence)
 const ChatSelector = ({ onSelectChat, onSwitchToRegistry, activeChatId }) => {
@@ -149,9 +150,11 @@ const ChatSelector = ({ onSelectChat, onSwitchToRegistry, activeChatId }) => {
                                     className={`p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer transition-all flex items-center gap-3 ${expandedUser === group.profile.uid ? 'bg-indigo-50/50 dark:bg-indigo-900/10' : ''}`}
                                 >
                                     <div className="relative">
-                                        <img
-                                            src={group.profile.photoURL || `https://api.dicebear.com/9.x/avataaars/svg?seed=${group.profile.uid}`}
-                                            className="w-10 h-10 rounded-xl object-cover border border-gray-200 dark:border-gray-700"
+                                        <Avatar
+                                            src={group.profile.photoURL}
+                                            alt={group.profile.displayName}
+                                            fallback={group.profile.displayName?.[0]}
+                                            className="w-10 h-10 rounded-xl border border-gray-200 dark:border-gray-700"
                                         />
                                         {group.profile.isOnline && (
                                             <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-white dark:border-[#1f2937]" />

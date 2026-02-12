@@ -96,6 +96,18 @@ export default defineConfig({
       }
     })
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'firebase-vendor': ['firebase/app', 'firebase/auth', 'firebase/firestore', 'firebase/database', 'firebase/storage', 'firebase/messaging', 'firebase/functions'],
+          'maps-vendor': ['@react-google-maps/api'],
+          'ui-vendor': ['framer-motion', 'lucide-react', 'recharts', 'react-virtuoso'],
+        }
+      }
+    }
+  },
   server: {
     port: 5173,
     host: true,

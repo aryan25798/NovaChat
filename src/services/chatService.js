@@ -2,7 +2,7 @@ import { db, auth, storage } from "../firebase"; // Ensure storage is exported f
 import {
     collection, addDoc, query, where, orderBy, onSnapshot,
     doc, updateDoc, deleteDoc, getDoc, setDoc, getDocs,
-    serverTimestamp, increment, arrayUnion, writeBatch, deleteField, limit, limitToLast // added limit/limitToLast
+    serverTimestamp, increment, arrayUnion, writeBatch, deleteField, limit, limitToLast, startAfter // added limit/limitToLast
 } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
 import { listenerManager } from "../utils/ListenerManager";
@@ -35,28 +35,64 @@ export const subscribeToMessages = (chatId, currentUserId, callback, updateReadS
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-        const messages = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-        }));
+        const messages = snapshot.docs.map(doc => {
+            const data = doc.data();
+            const source = doc.metadata.hasPendingWrites ? 'Local' : 'Server';
+            return {
+                id: doc.id,
+                ...data,
+                // Status Logic: Pending if local write, otherwise check delivered/read
+                status: doc.metadata.hasPendingWrites ? 'pending' : (data.read ? 'read' : (data.delivered ? 'delivered' : 'sent')),
+                _doc: doc // Expose doc snapshot for pagination cursor (hidden property)
+            };
+        });
 
         callback(messages);
 
         if (currentUserId) {
+            // Only update read/delivered status for SERVER messages
+            const serverDocs = snapshot.docs.filter(d => !d.metadata.hasPendingWrites);
             if (updateReadStatus) {
-                markMessagesAsRead(chatId, currentUserId, snapshot.docs);
+                markMessagesAsRead(chatId, currentUserId, serverDocs);
             }
-            markMessagesAsDelivered(chatId, currentUserId, snapshot.docs);
+            markMessagesAsDelivered(chatId, currentUserId, serverDocs);
         }
     }, (error) => {
         listenerManager.handleListenerError(error, `Messages-${chatId}`);
-    });
+    }, { includeMetadataChanges: true }); // CRITICAL: Listen for local changes
 
     listenerManager.subscribe(listenerKey, unsubscribe);
 
     return () => {
         listenerManager.unsubscribe(listenerKey);
     };
+};
+
+/**
+ * Load older messages for pagination (Cursor-Based)
+ */
+export const loadOlderMessages = async (chatId, lastDoc, limitCount = 50) => {
+    if (!chatId || !lastDoc) return [];
+
+    try {
+        const q = query(
+            collection(db, CHATS_COLLECTION, chatId, MESSAGES_COLLECTION),
+            orderBy("timestamp", "desc"), // DESC for older
+            startAfter(lastDoc),
+            limit(limitCount)
+        );
+
+        const snapshot = await getDocs(q);
+        return snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data(),
+            status: doc.data().read ? 'read' : (doc.data().delivered ? 'delivered' : 'sent'),
+            _doc: doc // Keep ref for next cursor
+        })).reverse(); // Reverse back to ASC for display
+    } catch (error) {
+        console.error("Error loading older messages:", error);
+        return [];
+    }
 };
 
 /**
@@ -170,6 +206,7 @@ export const sendMediaMessage = async (chatId, sender, fileData, replyTo = null)
         fileSize: fileData.fileSize,
         fileType: fileData.fileType,
         text: type === 'image' ? '📷 Photo' : type === 'video' ? '🎥 Video' : '📎 File',
+        textLower: (type === 'image' ? '📷 Photo' : type === 'video' ? '🎥 Video' : '📎 File').toLowerCase(),
         replyTo: replyTo ? {
             id: replyTo.id,
             text: replyTo.text,
@@ -258,6 +295,7 @@ export const sendMessage = async (chatId, sender, text, replyTo = null) => {
             read: isGeminiChat, // Auto-read for Gemini
             delivered: isGeminiChat, // Auto-deliver for Gemini
             type: 'text',
+            textLower: text.toLowerCase(), // For Search
             replyTo: replyTo ? {
                 id: replyTo.id,
                 text: replyTo.text,
@@ -428,7 +466,7 @@ export const searchMessages = async (chatId, queryText) => {
         );
         // Correct query for prefix search:
         // We need an index on 'text'.
-        const q2 = query(messagesRef, where('text', '>=', queryText), where('text', '<=', queryText + '\uf8ff'));
+        const q2 = query(messagesRef, where('textLower', '>=', queryText.toLowerCase()), where('textLower', '<=', queryText.toLowerCase() + '\uf8ff'));
 
         const snapshot = await getDocs(q2);
         return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));

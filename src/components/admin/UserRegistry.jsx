@@ -7,6 +7,7 @@ import SpyChatViewer from './SpyChatViewer';
 import UserDossier from './UserDossier';
 import { format } from 'date-fns';
 import { Search, Filter, Shield, ShieldAlert, User, MoreHorizontal, RefreshCw, Eye, Trash2, MapPin, ExternalLink } from 'lucide-react';
+import { Avatar } from '../ui/Avatar';
 
 const UserRegistry = ({ onOpenDossier, onBan, onNuke }) => {
     const { currentUser } = useAuth();
@@ -223,10 +224,11 @@ const UserRegistry = ({ onOpenDossier, onBan, onNuke }) => {
                                         <div className="flex items-center gap-4">
                                             <div className="relative flex-shrink-0">
                                                 <div className="absolute -inset-1 bg-gradient-to-tr from-indigo-500 to-purple-500 rounded-full opacity-0 group-hover:opacity-20 blur-sm transition-opacity" />
-                                                <img
-                                                    src={user.photoURL || `https://api.dicebear.com/9.x/avataaars/svg?seed=${user.id}`}
-                                                    alt=""
-                                                    className="w-11 h-11 rounded-full object-cover border-2 border-white dark:border-gray-800 shadow-sm relative z-10"
+                                                <Avatar
+                                                    src={user.photoURL}
+                                                    alt={user.displayName}
+                                                    fallback={user.displayName?.[0]}
+                                                    className="w-11 h-11 rounded-full border-2 border-white dark:border-gray-800 shadow-sm relative z-10"
                                                 />
                                                 {user.isOnline && (
                                                     <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 rounded-full border-[3px] border-white dark:border-[#1f2937] z-20" />

@@ -1,5 +1,5 @@
 import React, { useState, memo, useEffect } from 'react';
-import { FaCheck, FaCheckDouble, FaChevronDown, FaReply, FaCopy, FaPhone, FaVideo, FaTrash, FaDownload, FaFileAlt, FaFilePdf, FaFileWord, FaFileExcel, FaFilePowerpoint, FaFileArchive, FaFileAudio, FaPlay, FaPause } from "react-icons/fa";
+import { FaCheck, FaCheckDouble, FaChevronDown, FaReply, FaCopy, FaPhone, FaVideo, FaTrash, FaDownload, FaFileAlt, FaFilePdf, FaFileWord, FaFileExcel, FaFilePowerpoint, FaFileArchive, FaFileAudio, FaPlay, FaPause, FaClock } from "react-icons/fa";
 import { useAuth } from "../contexts/AuthContext";
 import { cn } from "../lib/utils";
 import { format } from 'date-fns';
@@ -209,7 +209,7 @@ const Message = memo(({ message, chat, isOwn, onDelete, onReply, onReact, onMedi
                                     "text-[15px] transition-colors duration-300 -mt-0.5",
                                     message.read ? "text-[#53bdeb]" : "text-black/30 dark:text-white/30"
                                 )}>
-                                    {message.read ? <FaCheckDouble /> : (message.delivered ? <FaCheckDouble /> : <FaCheck />)}
+                                    {message.status === 'pending' ? <FaClock className="text-[10px]" /> : (message.read ? <FaCheckDouble /> : (message.delivered ? <FaCheckDouble /> : <FaCheck />))}
                                 </span>
                             )}
                         </div>

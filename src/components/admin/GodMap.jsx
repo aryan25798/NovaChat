@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { GoogleMap, useJsApiLoader, OverlayView, OverlayViewF, InfoWindow, MarkerClustererF } from '@react-google-maps/api';
 import { db } from '../../firebase';
 import { collection, query, onSnapshot, orderBy, limit, where, doc, getDoc } from 'firebase/firestore';
+import { Avatar } from '../ui/Avatar';
 
 const containerStyle = {
     width: '100%',
@@ -44,12 +45,12 @@ const UserMarker = React.memo(({ user, onClick }) => (
 
             {/* User Avatar */}
             <div className="relative">
-                <div className="w-10 h-10 rounded-full border-2 border-cyan-400 p-0.5 bg-black shadow-[0_0_15px_rgba(34,211,238,0.4)] group-hover:shadow-[0_0_30px_rgba(34,211,238,0.8)] transition-all duration-300 overflow-hidden">
-                    <img
-                        src={user.photoURL || `https://api.dicebear.com/9.x/avataaars/svg?seed=${user.id}`}
+                <div className="w-10 h-10 rounded-full border-2 border-cyan-400 p-0.5 bg-black shadow-[0_0_15px_rgba(34,211,238,0.4)] group-hover:shadow-[0_0_30px_rgba(34,211,238,0.8)] transition-all duration-300 overflow-hidden flex items-center justify-center">
+                    <Avatar
+                        src={user.photoURL}
                         alt={user.displayName}
-                        className="w-full h-full rounded-full object-cover"
-                        loading="lazy"
+                        fallback={user.displayName?.[0]}
+                        className="w-full h-full rounded-full"
                     />
                 </div>
                 {/* Online Indicator Dot */}
@@ -74,78 +75,52 @@ const GodMap = () => {
     const [selectedUser, setSelectedUser] = useState(null);
     const mapRef = useRef(null);
 
-    const { isLoaded } = useJsApiLoader({
+    const { isLoaded, loadError } = useJsApiLoader({
         id: 'google-map-script',
         googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY
     });
 
-    useEffect(() => {
-        // INDUSTRY GRADE ROBUST STREAMING:
-        // 1. Attempt to query online users (requires index).
-        // 2. Fallback to general query + client-side filter if index is building.
-        // 3. Filter out admins client-side for stealth.
+    const [timeoutError, setTimeoutError] = useState(false);
 
+    useEffect(() => {
+        if (!isLoaded && !loadError) {
+            const timer = setTimeout(() => {
+                setTimeoutError(true);
+            }, 8000); // 8s timeout for ad blockers
+            return () => clearTimeout(timer);
+        }
+    }, [isLoaded, loadError]);
+
+    useEffect(() => {
         let currentUnsub = null;
 
-        const startListening = (q, isFallback = false) => {
-            return onSnapshot(q, (locSnapshot) => {
-                const combined = locSnapshot.docs.map(docSnap => {
-                    const data = docSnap.data();
-                    const timestamp = data.timestamp?.toDate() || new Date(0);
-                    const now = new Date();
-                    const diffMins = (now - timestamp) / (1000 * 60);
-
-                    return {
-                        id: docSnap.id,
-                        lat: Number(data.lat),
-                        lng: Number(data.lng),
-                        displayName: data.displayName || 'Agent',
-                        photoURL: data.photoURL,
-                        email: data.email,
-                        lastUpdate: data.timestamp,
-                        isOnline: data.isOnline,
-                        isAdmin: data.isAdmin,
-                        superAdmin: data.superAdmin,
-                        platform: data.platform || 'Unknown',
-                        userAgent: data.userAgent || 'Unknown',
-                        diffMins
-                    };
-                }).filter(u => {
-                    const isValid = !isNaN(u.lat) && !isNaN(u.lng);
-                    const isNotAdmin = !u.isAdmin && !u.superAdmin;
-                    const onlineMatch = isFallback ? u.isOnline : true;
-                    // INDUSTRY GRADE: Freshness Validation (10 minute cutoff)
-                    const isFresh = u.diffMins < 10;
-
-                    return isValid && isNotAdmin && onlineMatch && isFresh;
-                });
-
-                setLiveUsers(combined);
-            }, (err) => {
-                if (!isFallback && (err.code === 'failed-precondition' || err.message.includes('index'))) {
-                    console.warn("Index building - switching to robust fallback mode.");
-                    const fallbackQuery = query(
-                        collection(db, 'user_locations'),
-                        orderBy('timestamp', 'desc'),
-                        limit(300)
-                    );
-                    if (currentUnsub) currentUnsub();
-                    currentUnsub = startListening(fallbackQuery, true);
-                } else {
-                    console.error("Map stream error:", err);
-                }
-            });
-        };
-
-        const locQuery = query(
-            collection(db, 'user_locations'),
-            where('isOnline', '==', true),
-            orderBy('timestamp', 'desc'),
-            limit(1000)
+        // SCALABILITY: Filter server-side for ONLY online users.
+        const q = query(
+            collection(db, 'users'),
+            where('isOnline', '==', true)
         );
 
-        currentUnsub = startListening(locQuery);
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const users = snapshot.docs.map(doc => {
+                const data = doc.data();
+                // SCHEMA FIX: Read from lastLoginLocation object, not root
+                const loc = data.lastLoginLocation || {};
+                return {
+                    id: doc.id,
+                    ...data,
+                    lat: loc.lat,
+                    lng: loc.lng
+                };
+            }).filter(u => {
+                const isValid = u.lat && u.lng;
+                const isNotAdmin = !u.isAdmin;
+                return isValid && isNotAdmin;
+            });
 
+            setLiveUsers(users);
+        });
+
+        currentUnsub = unsubscribe;
         return () => currentUnsub && currentUnsub();
     }, []);
 
@@ -168,18 +143,38 @@ const GodMap = () => {
     const clusterStyles = [
         {
             textColor: 'white',
-            url: 'data:image/svg+xml;base64,' + btoa(`
-                <svg width="40" height="40" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
-                    <circle cx="20" cy="20" r="18" fill="rgba(0, 0, 0, 0.8)" stroke="rgba(34, 211, 238, 0.6)" stroke-width="2"/>
-                    <circle cx="20" cy="20" r="14" fill="none" stroke="rgba(34, 211, 238, 0.3)" stroke-width="1"/>
-                </svg>
-            `),
-            height: 40,
-            width: 40,
-            textSize: 10,
-            fontWeight: '900'
+            url: 'https://raw.githubusercontent.com/googlemaps/v3-utility-library/master/markerclustererplus/images/m1.png',
+            height: 50,
+            width: 50,
+            anchorText: [16, 16],
+            fontFamily: 'monospace',
+            fontWeight: 'bold'
         }
     ];
+
+    if (loadError || timeoutError) {
+        const errorMessage = loadError?.message || "Connection Timed Out (Client Blocked)";
+        return (
+            <div className="h-full w-full flex flex-col items-center justify-center bg-black gap-6 font-mono p-8 text-center">
+                <div className="w-16 h-16 rounded-full bg-red-500/10 flex items-center justify-center border border-red-500 animate-pulse">
+                    <div className="w-8 h-8 bg-red-500 rounded-sm transform rotate-45" />
+                </div>
+                <div>
+                    <h3 className="text-red-500 font-black text-xl tracking-[0.2em] uppercase">Signal Lost</h3>
+                    <p className="text-red-400/60 text-xs mt-2 max-w-sm mx-auto leading-relaxed">
+                        Satellite Uplink Failed. This matches the signature of a client-side interception (AdBlock) or Invalid API Credentials.
+                    </p>
+                    <p className="text-red-500/40 text-[10px] mt-1 font-bold">Error Code: {errorMessage}</p>
+                </div>
+                <button
+                    onClick={() => window.location.reload()}
+                    className="px-6 py-2 bg-red-900/30 border border-red-500/50 text-red-500 text-xs font-black uppercase tracking-widest hover:bg-red-500/20 transition-all"
+                >
+                    Re-Initialize Uplink
+                </button>
+            </div>
+        );
+    }
 
     if (!isLoaded) return (
         <div className="h-full w-full flex flex-col items-center justify-center bg-black gap-4 font-mono">
@@ -229,9 +224,10 @@ const GodMap = () => {
                     >
                         <div className="p-2 min-w-[240px] bg-black text-white font-mono rounded-lg overflow-hidden border border-cyan-500/30">
                             <div className="flex items-center gap-3 mb-3 border-b border-cyan-500/30 pb-3">
-                                <img
-                                    src={selectedUser.photoURL || `https://api.dicebear.com/9.x/avataaars/svg?seed=${selectedUser.id}`}
-                                    alt=""
+                                <Avatar
+                                    src={selectedUser.photoURL}
+                                    alt={selectedUser.displayName}
+                                    fallback={selectedUser.displayName?.[0]}
                                     className="w-12 h-12 rounded-full border-2 border-cyan-500 shadow-[0_0_10px_cyan]"
                                 />
                                 <div className="min-w-0">
@@ -315,9 +311,11 @@ const GodMap = () => {
                             <span className="text-[9px] font-bold text-cyan-500/50 tracking-widest uppercase italic">Subscribers</span>
                             <div className="flex -space-x-2.5 mt-2">
                                 {liveUsers.slice(0, 5).map(u => (
-                                    <img
+                                    <Avatar
                                         key={u.id}
-                                        src={u.photoURL || `https://api.dicebear.com/9.x/avataaars/svg?seed=${u.id}`}
+                                        src={u.photoURL}
+                                        alt={u.displayName}
+                                        fallback={u.displayName?.[0]}
                                         className="w-7 h-7 rounded-full border-2 border-black ring-1 ring-cyan-500/30"
                                     />
                                 ))}
