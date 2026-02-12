@@ -68,10 +68,11 @@ export default function ChatWindow({ chat, setChat }) {
         if (chat?.type === 'group') {
             return { displayName: chat.groupName, photoURL: chat.groupImage, isGroup: true, uid: chat.id };
         }
+        const isGemini = otherUid === GEMINI_BOT_ID || chat?.type === 'gemini';
         if (chat?.participantInfo && otherUid) {
-            return { uid: otherUid, ...chat.participantInfo[otherUid] };
+            return { uid: otherUid, ...chat.participantInfo[otherUid], isGemini };
         }
-        return { uid: otherUid, displayName: 'User', photoURL: null };
+        return { uid: otherUid, displayName: isGemini ? 'Gemini AI' : 'User', photoURL: isGemini ? "https://uxwing.com/wp-content/themes/uxwing/download/brands-and-social-media/google-gemini-icon.png" : null, isGemini };
     }, [chat?.type, chat?.groupName, chat?.groupImage, chat?.participantInfo, otherUid, chat?.id]);
 
     // Handlers

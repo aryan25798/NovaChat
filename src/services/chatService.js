@@ -248,7 +248,7 @@ export const sendMediaMessage = async (chatId, sender, fileData, replyTo = null)
     }
 };
 
-export const sendMessage = async (chatId, sender, text, replyTo = null) => {
+export const sendMessage = async (chatId, sender, text, replyTo = null, chatType = 'private') => {
     if (!text.trim()) return;
 
     // 🛡️ ANTI-SPAM PROTECTED
@@ -258,14 +258,13 @@ export const sendMessage = async (chatId, sender, text, replyTo = null) => {
         const chatRef = doc(db, "chats", chatId);
         let chatSnap = await getDoc(chatRef);
 
-        // GHOST CHAT AUTO-CREATION logic (moved up)
-        // GHOST CHAT AUTO-CREATION logic (moved up)
+        // GHOST CHAT AUTO-CREATION logic
         if (!chatSnap.exists()) {
-            const { GEMINI_BOT_ID } = await import("../constants");
             const isGemini = chatId === GEMINI_BOT_ID || chatId.startsWith('gemini_');
 
+            let newChatData;
             if (isGemini) {
-                const newChatData = {
+                newChatData = {
                     id: chatId,
                     participants: [sender.uid, GEMINI_BOT_ID],
                     participantInfo: {
@@ -278,8 +277,6 @@ export const sendMessage = async (chatId, sender, text, replyTo = null) => {
                     unreadCount: {},
                     mutedBy: {}
                 };
-                await setDoc(chatRef, newChatData);
-                chatSnap = await getDoc(chatRef);
             } else {
                 const participants = chatId.split('_');
                 if (participants.length === 2 && participants.includes(sender.uid)) {
@@ -287,7 +284,7 @@ export const sendMessage = async (chatId, sender, text, replyTo = null) => {
                     const otherUserSnap = await getDoc(doc(db, "users", otherUid));
                     const otherUserData = otherUserSnap.exists() ? otherUserSnap.data() : { displayName: "User" };
 
-                    const newChatData = {
+                    newChatData = {
                         id: chatId,
                         participants,
                         participantInfo: {
@@ -300,14 +297,16 @@ export const sendMessage = async (chatId, sender, text, replyTo = null) => {
                         unreadCount: {},
                         mutedBy: {}
                     };
-                    await setDoc(chatRef, newChatData);
-                    chatSnap = await getDoc(chatRef);
                 }
+            }
+
+            if (newChatData) {
+                await setDoc(chatRef, newChatData);
+                chatSnap = await getDoc(chatRef);
             }
         }
 
-        const { GEMINI_BOT_ID } = await import("../constants");
-        const isGeminiChat = chatId.includes(GEMINI_BOT_ID) || (chatSnap.exists() && chatSnap.data().participants?.includes(GEMINI_BOT_ID));
+        const isGeminiChat = chatId.includes(GEMINI_BOT_ID) || (chatSnap.exists() && chatSnap.data().type === 'gemini');
 
         const messageData = {
             text,
@@ -338,15 +337,17 @@ export const sendMessage = async (chatId, sender, text, replyTo = null) => {
             lastMessageTimestamp: serverTimestamp(),
         };
 
-        const chatData = chatSnap.exists() ? chatSnap.data() : {};
-        if (chatData.participants) {
-            chatData.participants.forEach(uid => {
-                if (uid !== sender.uid) {
-                    updates[`unreadCount.${uid}`] = (chatData.unreadCount?.[uid] || 0) + 1;
-                }
-            });
+        if (chatSnap.exists()) {
+            const chatData = chatSnap.data();
+            if (chatData.participants) {
+                chatData.participants.forEach(uid => {
+                    if (uid !== sender.uid) {
+                        updates[`unreadCount.${uid}`] = (chatData.unreadCount?.[uid] || 0) + 1;
+                    }
+                });
+            }
+            await updateDoc(chatRef, updates);
         }
-        await updateDoc(chatRef, updates);
 
     } catch (error) {
         console.error("Error sending message:", error);
