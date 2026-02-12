@@ -46,7 +46,7 @@ workbox.precaching.precacheAndRoute(self.__WB_MANIFEST);
 // 2. Navigation Fallback (Fix for 404 on refresh)
 workbox.routing.registerRoute(
     new workbox.routing.NavigationRoute(
-        workbox.precaching.getCacheKeyForURL('/index.html')
+        workbox.precaching.getCacheKeyForURL('index.html')
     )
 );
 

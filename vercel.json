@@ -6,17 +6,13 @@
                 {
                     "key": "Cross-Origin-Opener-Policy",
                     "value": "same-origin-allow-popups"
-                },
-                {
-                    "key": "X-Content-Type-Options",
-                    "value": "nosniff"
                 }
             ]
         }
     ],
     "rewrites": [
         {
-            "source": "/((?!assets/|sw.js|favicon.ico|nova-icon|manifest.webmanifest|sounds/).*)",
+            "source": "/(.*)",
             "destination": "/index.html"
         }
     ]
