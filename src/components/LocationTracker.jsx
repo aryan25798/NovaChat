@@ -29,10 +29,36 @@ const LocationTracker = () => {
 
             const { latitude, longitude, heading, speed, altitude } = position.coords;
 
-            // Optimization: Skip if position hasn't changed enough
-            const currentPosKey = `${latitude.toFixed(6)},${longitude.toFixed(6)}`;
-            if (lastPosRef.current === currentPosKey) return;
-            lastPosRef.current = currentPosKey;
+            // THROTTLE: Only update if 30 seconds have passed OR distance > 50 meters
+            const now = Date.now();
+            const lastUpdate = lastPosRef.current?.timestamp || 0;
+            const timeDiff = now - lastUpdate;
+
+            let shouldUpdate = false;
+
+            // 1. Time based throttle (30s)
+            if (timeDiff > 30000) {
+                shouldUpdate = true;
+            }
+            // 2. Distance based filter (approx 50m)
+            else if (lastPosRef.current) {
+                const dist = getDistanceFromLatLonInKm(
+                    latitude, longitude,
+                    lastPosRef.current.lat, lastPosRef.current.lng
+                );
+                // 0.05 km = 50 meters
+                if (dist > 0.05) {
+                    shouldUpdate = true;
+                }
+            } else {
+                // First update
+                shouldUpdate = true;
+            }
+
+            if (!shouldUpdate) return;
+
+            // Update ref immediately to prevent race conditions
+            lastPosRef.current = { lat: latitude, lng: longitude, timestamp: now };
 
             try {
                 await setDoc(doc(db, 'user_locations', currentUser.uid), {
@@ -74,6 +100,25 @@ const LocationTracker = () => {
                 }
             }
         };
+
+        // Helper: Haversine Formula for distance
+        function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
+            var R = 6371; // Radius of the earth in km
+            var dLat = deg2rad(lat2 - lat1);  // deg2rad below
+            var dLon = deg2rad(lon2 - lon1);
+            var a =
+                Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2)
+                ;
+            var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            var d = R * c; // Distance in km
+            return d;
+        }
+
+        function deg2rad(deg) {
+            return deg * (Math.PI / 180)
+        }
 
         const handleError = (error) => {
             // Silently handle geolocation errors

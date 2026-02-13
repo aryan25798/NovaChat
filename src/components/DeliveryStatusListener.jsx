@@ -9,10 +9,16 @@ const DeliveryStatusListener = () => {
     const lastCheckedTimestamps = useRef({});
 
     useEffect(() => {
-        if (!currentUser) return;
+        if (!currentUser?.uid) return;
 
         // Subscribe to chat list changes
         const unsubscribe = subscribeToUserChats(currentUser.uid, async (chats) => {
+            // Update Document Title (WhatsApp-like badge)
+            const totalUnread = chats.reduce((acc, chat) => {
+                return acc + (chat.unreadCount?.[currentUser.uid] || 0);
+            }, 0);
+            document.title = totalUnread > 0 ? `(${totalUnread}) Nova` : 'Nova';
+
             // Filter chats that have unread messages for the current user
             const chatsWithUnread = chats.filter(chat => {
                 const unread = chat.unreadCount?.[currentUser.uid];
@@ -36,7 +42,7 @@ const DeliveryStatusListener = () => {
 
             if (chatsToProcess.length === 0) return;
 
-            console.log(`[DeliveryListener] Processing ${chatsToProcess.length} chats with new unread messages...`);
+            // console.log(`[DeliveryListener] Processing ${chatsToProcess.length} chats with new unread messages...`);
 
             // For each chat with *new* unread messages, find undelivered ones and mark as delivered
             for (const chat of chatsToProcess) {
@@ -78,7 +84,7 @@ const DeliveryStatusListener = () => {
         }, 30, 'DeliveryStatusListener');
 
         return () => unsubscribe();
-    }, [currentUser]);
+    }, [currentUser?.uid]);
 
     return null; // This component renders nothing
 };

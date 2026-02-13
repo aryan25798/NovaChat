@@ -8,7 +8,7 @@ import { doc, collection } from "firebase/firestore";
 import { useAuth } from "../contexts/AuthContext";
 import { useCall } from "../contexts/CallContext";
 import { useNavigate } from "react-router-dom";
-import { subscribeToMessages, sendMessage, sendMediaMessage, deleteMessage, addReaction, searchMessages, clearChat, hideChat, loadOlderMessages } from "../services/chatService";
+import { subscribeToMessages, sendMessage, sendMediaMessage, deleteMessage, addReaction, searchMessages, clearChat, hideChat, loadOlderMessages, resetChatUnreadCount } from "../services/chatService";
 import { lightningSync } from "../services/LightningService";
 import { usePresence } from "../contexts/PresenceContext";
 import { motion, AnimatePresence } from "framer-motion";
@@ -124,7 +124,7 @@ export default function ChatWindow({ chat, setChat }) {
         setPendingQueue(prev => [...prev, optimisticMsg]);
 
         try {
-            console.log(`[ChatWindow] Ultra-Lightning send: ${messageId}`);
+            // console.log(`[ChatWindow] Ultra-Lightning send: ${messageId}`); // Squelch debug log
 
             const metadata = {
                 type: chat.type,
@@ -205,16 +205,26 @@ export default function ChatWindow({ chat, setChat }) {
         setHistoryMessages([]);
         setHasMoreMessages(true);
         setLoading(true);
-    }, [chat?.id]);
+        if (chat?.id && currentUser?.uid) {
+            resetChatUnreadCount(chat.id, currentUser.uid);
+        }
+    }, [chat?.id, currentUser?.uid]);
 
     // Hybrid Listeners (Firestore + RTDB)
     useEffect(() => {
         if (!chat?.id || !currentUser?.uid) return;
 
-        const unsubscribe = subscribeToMessages(chat.id, currentUser.uid, (msgs) => {
-            setMessages(msgs);
-            setLoading(false);
-        }, true, 50);
+        setLoading(true);
+        // Use a ref to track if mounted to avoid setting state on unmounted component
+        let isMounted = true;
+
+        const unsubscribe = subscribeToMessages(chat.id, currentUser.uid, (newMessages) => {
+            if (isMounted) {
+                setMessages(newMessages);
+                setLoading(false);
+                setHasMoreMessages(newMessages.length >= 20); // Sync initial logic
+            }
+        });
 
         const unsubStatus = lightningSync.subscribeToStatusSignals(chat.id, (signals) => {
             setRtdbStatus(prev => ({ ...prev, ...signals }));
@@ -303,22 +313,25 @@ export default function ChatWindow({ chat, setChat }) {
         setServerResults(results);
         setLoading(false);
     }, [searchQuery, chat?.id]);
-
     useEffect(() => {
         if (!searchQuery) setServerResults([]);
     }, [searchQuery]);
 
-    const filteredMessages = useMemo(() => {
-        const clearedAt = chat?.clearedAt?.[currentUser.uid]?.toDate?.() || new Date(0);
+    // Prune pending messages when they appear in real lists
+    useEffect(() => {
+        if (pendingQueue.length === 0) return;
+
         const dbIds = new Set(messages.map(m => m.id));
         const historyIds = new Set(historyMessages.map(m => m.id));
 
-        if (pendingQueue.length > 0) {
-            const stillPending = pendingQueue.filter(m => !dbIds.has(m.id) && !historyIds.has(m.id));
-            if (stillPending.length !== pendingQueue.length) {
-                setPendingQueue(stillPending);
-            }
-        }
+        setPendingQueue(prev => {
+            const stillPending = prev.filter(m => !dbIds.has(m.id) && !historyIds.has(m.id));
+            return stillPending.length !== prev.length ? stillPending : prev;
+        });
+    }, [messages, historyMessages]);
+
+    const filteredMessages = useMemo(() => {
+        const clearedAt = chat?.clearedAt?.[currentUser.uid]?.toDate?.() || new Date(0);
 
         const uniqueMessages = new Map();
         if (serverResults?.length > 0) serverResults.forEach(m => uniqueMessages.set(m.id, m));
@@ -466,6 +479,8 @@ export default function ChatWindow({ chat, setChat }) {
                             <FaSearch className="text-text-2 text-sm mr-2 md:mr-3" />
                             <input
                                 type="text"
+                                name="search-messages"
+                                id="search-messages"
                                 placeholder="Filter messages..."
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -498,7 +513,7 @@ export default function ChatWindow({ chat, setChat }) {
                 )}
             </AnimatePresence>
 
-            <div className="flex-1 flex flex-col relative" id="message-container">
+            <div className="flex-1 flex flex-col relative min-h-0" id="message-container">
                 {hasMoreMessages && !loading && (
                     <div className="flex justify-center p-2 z-10">
                         <button

@@ -77,7 +77,7 @@ export function NotificationProvider({ children }) {
             if (error.message?.includes('push service') || error.name === 'AbortError') {
                 console.debug("Push registration skipped:", error.message);
             } else {
-                console.warn("Notification error:", error);
+                console.warn("Notification permission error:", error);
             }
         }
     };

@@ -71,7 +71,7 @@ const ChatList = React.memo(({ searchTerm }) => {
         }, 30, 'ChatList');
 
         return () => unsubscribe();
-    }, [currentUser]);
+    }, [currentUser?.uid]);
 
     // Filter AND Sort existing chats locally
     const filteredChats = useMemo(() => {
@@ -107,7 +107,7 @@ const ChatList = React.memo(({ searchTerm }) => {
             }
         };
 
-        const timeout = setTimeout(handleSearch, 200);
+        const timeout = setTimeout(handleSearch, 500);
         return () => clearTimeout(timeout);
     }, [searchTerm, currentUser]);
 
@@ -146,6 +146,7 @@ const ChatList = React.memo(({ searchTerm }) => {
                     style={{ height: '100%', width: '100%' }}
                     totalCount={combinedResults.length}
                     initialItemCount={Math.min(combinedResults.length, 12)}
+                    computeItemKey={(index, item) => item.id || `header-${index}`}
                     increaseViewportBy={300}
                     defaultItemHeight={72}
                     className="custom-scrollbar"
@@ -169,9 +170,22 @@ const ChatList = React.memo(({ searchTerm }) => {
                         }
 
                         // Case 2: User Search Result (Search mode)
+                        const chatId = getChatId(currentUser.uid, item.id);
+                        const chatData = {
+                            id: chatId,
+                            type: 'private',
+                            participants: [currentUser.uid, item.id],
+                            participantInfo: {
+                                [currentUser.uid]: { displayName: currentUser.displayName, photoURL: currentUser.photoURL },
+                                [item.id]: { displayName: item.displayName, photoURL: item.photoURL }
+                            },
+                            isGhost: true
+                        };
+
                         return (
                             <Link
-                                to={`/c/${getChatId(currentUser.uid, item.id)}`}
+                                to={`/c/${chatId}`}
+                                state={{ chatData }}
                                 key={item.id}
                                 className="flex items-center gap-4 p-4 hover:bg-surface-elevated transition-colors border-b border-border/10"
                             >
@@ -212,6 +226,7 @@ const ChatList = React.memo(({ searchTerm }) => {
                 useWindowScroll={false}
                 totalCount={chats.length}
                 initialItemCount={Math.min(chats.length, 12)}
+                computeItemKey={(index, chat) => chat.id}
                 increaseViewportBy={300}
                 style={{ height: '100%', width: '100%' }}
                 defaultItemHeight={72}

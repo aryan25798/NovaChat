@@ -143,9 +143,32 @@ export function AuthProvider({ children }) {
             // Use popup — more reliable with modern third-party cookie restrictions
             // COOP header 'same-origin-allow-popups' is configured in vercel.json, firebase.json, and vite.config.js
             googleProvider.setCustomParameters({ prompt: 'select_account' });
-            const result = await signInWithPopup(auth, googleProvider);
-            // onAuthStateChanged will handle profile setup
-            return result;
+
+            try {
+                const result = await signInWithPopup(auth, googleProvider);
+                // onAuthStateChanged will handle profile setup
+                return result;
+            } catch (popupError) {
+                // Check if it's a user cancellation
+                const errorCode = popupError.code;
+                if (errorCode === 'auth/popup-closed-by-user' ||
+                    errorCode === 'auth/cancelled-popup-request' ||
+                    errorCode === 'auth/user-cancelled') { // Added extra check
+                    throw popupError; // User intended to close
+                }
+
+                console.warn("[Auth] Popup sign-in failed (likely COOP/COEP or Strict Mode), falling back to Redirect...", popupError);
+
+                // Fallback to Redirect
+                try {
+                    const { signInWithRedirect } = await import("firebase/auth");
+                    await signInWithRedirect(auth, googleProvider);
+                    return null; // Page will reload
+                } catch (redirectError) {
+                    console.error("Redirect fallback failed:", redirectError);
+                    throw redirectError;
+                }
+            }
         } catch (error) {
             console.error("Google Login Error:", error.code, error.message);
             const message = getAuthErrorMessage(error);
@@ -176,47 +199,51 @@ export function AuthProvider({ children }) {
     }, []);
 
     async function logout() {
-        return logoutWithTimeout(async () => {
-            console.debug('Starting secure logout sequence...');
+        // LOCK UI: Prevent multiple clicks
+        if (isLoggingOutRef.current) return;
+        isLoggingOutRef.current = true;
+        setLoading(true); // Show loading spinner IMMEDIATELY
 
-            isLoggingOutRef.current = true;
+        console.debug('Starting INSTANT logout sequence...');
 
-            // STEP 1: Cleanup ALL Firestore listeners FIRST
+        // 1. Fire-and-forget Firebase SignOut (Don't await it)
+        // We do this first to invalidate the token on the server/network layer
+        signOut(auth).catch(e => console.warn("Background SignOut warning:", e));
+
+        // 2. Fire-and-forget User Status Update (Don't await)
+        if (currentUser) {
+            updateDoc(doc(db, "users", currentUser.uid), {
+                isOnline: false,
+                lastSeen: serverTimestamp()
+            }).catch(e => console.debug("Status update skipped:", e));
+        }
+
+        // 3. Clear Listeners & State
+        try {
             listenerManager.unsubscribeAll();
-
-            // STEP 2: Cleanup auth-specific listener
             if (userDocUnsubscribeRef.current) {
                 userDocUnsubscribeRef.current();
                 userDocUnsubscribeRef.current = null;
             }
-
-            // STEP 3: Update user status (NON-BLOCKING)
-            if (currentUser) {
-                updateDoc(doc(db, "users", currentUser.uid), {
-                    isOnline: false
-                }).catch((err) => {
-                    console.debug("Status update error (non-critical):", err.code);
-                });
-            }
-
-            // STEP 4: Clear user state before signing out
             setCurrentUser(null);
+        } catch (e) {
+            console.warn("Cleanup warning:", e);
+        }
 
-            // STEP 5: Clear app-specific caches (but NOT Firebase auth persistence)
-            await clearAllCaches(db);
+        // 4. Clear Storage Synchronously 
+        // We use the synchronous part of clearAllStorage to ensure standard tokens are gone
+        try {
+            localStorage.clear();
+            sessionStorage.clear();
+        } catch (e) { console.error(e); }
 
-            // STEP 6: Sign out from Firebase Auth
-            try {
-                await signOut(auth);
-            } catch (e) {
-                // Ignore network errors during logout (e.g. ERR_BLOCKED_BY_CLIENT)
-                console.warn("Logout network signal interrupted (harmless):", e.code);
-            }
-
-            console.debug('Secure logout complete');
-
-            isLoggingOutRef.current = false;
-        }, 10000);
+        // 5. Short delay to allow `signOut` network packet to potentially leave
+        // But we DO NOT wait for a response.
+        setTimeout(() => {
+            // 6. Hard Reload to Login Page
+            // This cancels all pending network requests (fixing permission errors) and clears memory
+            window.location.href = '/login';
+        }, 100);
     }
 
     useEffect(() => {
@@ -272,7 +299,13 @@ export function AuthProvider({ children }) {
                             }
 
                             // Update Context State
-                            setCurrentUser(prev => ({ ...prev, ...userData }));
+                            setCurrentUser(prev => {
+                                const newData = { ...prev, ...userData };
+                                if (JSON.stringify(prev) === JSON.stringify(newData)) {
+                                    return prev;
+                                }
+                                return newData;
+                            });
 
                             // Auto-Populate Searchable Name if missing
                             if (!userData.searchableName && userData.displayName) {

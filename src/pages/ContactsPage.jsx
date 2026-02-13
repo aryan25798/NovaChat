@@ -167,13 +167,25 @@ const ContactsPage = () => {
                     >
                         <div className="relative">
                             <Avatar src={contact.photoURL} alt={contact.displayName} size="lg" className="border border-border/20 shadow-sm" />
-                            {/* Online Status Indicator (Optional - if data available) */}
-                            {contact.isOnline && <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-surface rounded-full"></span>}
+                            {/* Online Status Indicator */}
+                            {contact.isOnline && <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-surface rounded-full shadow-sm"></span>}
                         </div>
 
-                        <div className="flex-1 min-w-0">
-                            <h3 className="font-bold text-text-1 truncate text-[16px] leading-snug">{contact.displayName || contact.name || "Unknown"}</h3>
-                            <p className="text-sm text-text-2/80 truncate">{contact.about || "Hey there! I am using NovaChat."}</p>
+                        <div className="flex-1 min-w-0 flex flex-col justify-center">
+                            <div className="flex items-center gap-2">
+                                <h3 className="font-bold text-text-1 truncate text-[16px] leading-snug">{contact.displayName || contact.name || "Unknown"}</h3>
+                                {isFriend && <span className="bg-primary/10 text-primary text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">Friend</span>}
+                            </div>
+
+                            {/* NEW: Show Email for better identification */}
+                            {contact.email && (
+                                <p className="text-xs text-text-2/70 truncate font-mono">{contact.email}</p>
+                            )}
+
+                            {/* NEW: Show About/Bio */}
+                            <p className="text-sm text-text-2/80 truncate mt-0.5">
+                                {contact.about || contact.bio || "Hey there! I am using NovaChat."}
+                            </p>
                         </div>
                     </Link>
 
@@ -185,17 +197,21 @@ const ContactsPage = () => {
                                 <Link to={`/c/${chatId}`} className="p-2.5 text-primary bg-primary/5 hover:bg-primary/10 rounded-full transition-colors" title="Message"><IoPeopleOutline className="w-5 h-5" /></Link>
                             </div>
                         ) : isSent ? (
-                            <span className="flex items-center gap-1 text-xs font-bold text-text-2 bg-surface-elevated px-4 py-2 rounded-full border border-border/50 select-none">
-                                <span className="w-1.5 h-1.5 bg-yellow-500 rounded-full animate-pulse"></span> REQUEST SENT
+                            <span className="flex items-center gap-2 text-xs font-bold text-text-2 bg-surface-elevated pl-3 pr-4 py-2 rounded-full border border-border/50 select-none shadow-sm">
+                                <span className="relative flex h-2 w-2">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-yellow-500"></span>
+                                </span>
+                                REQUEST SENT
                             </span>
                         ) : isReceived ? (
-                            <button onClick={() => setView('requests')} className="flex items-center gap-1 text-xs font-bold text-primary bg-primary/10 px-4 py-2 rounded-full hover:bg-primary/20 transition-all">
+                            <button onClick={() => setView('requests')} className="flex items-center gap-1 text-xs font-bold text-white bg-primary px-4 py-2 rounded-full hover:bg-primary-dark transition-all shadow-md active:scale-95">
                                 RESPOND
                             </button>
                         ) : (
                             <Button
                                 size="sm"
-                                className="bg-gradient-to-r from-primary to-whatsapp-teal text-white h-9 px-5 rounded-full text-xs font-bold shadow-md hover:shadow-lg hover:brightness-110 active:scale-95 transition-all flex items-center gap-2"
+                                className="bg-surface-elevated hover:bg-primary hover:text-white text-text-1 border border-border/50 h-9 px-5 rounded-full text-xs font-bold shadow-sm hover:shadow-md transition-all flex items-center gap-2"
                                 onClick={(e) => { e.stopPropagation(); sendRequest(contact.id); }}
                             >
                                 <IoPersonAdd className="w-4 h-4" /> ADD FRIEND
@@ -251,11 +267,43 @@ const ContactsPage = () => {
 
             {/* Search Bar (Only for Friends/Discover) */}
             {view !== 'requests' && (
-                <div className="p-3 bg-surface z-10 border-b border-border/30">
+                <div className="p-3 bg-surface z-10 border-b border-border/30 space-y-3">
                     <div className="relative group">
                         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-2 group-focus-within:text-primary transition-colors"><BsSearch className="w-4 h-4" /></span>
                         <Input placeholder={view === 'friends' ? "Search your friends..." : "Find new people globaly..."} value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-10 h-10 bg-surface-elevated border-none placeholder:text-text-2/60 focus-visible:ring-1 focus-visible:ring-primary/50 rounded-xl text-sm transition-all" />
                     </div>
+                </div>
+            )}
+
+            {/* ADMIN DEBUG MENU */}
+            {(currentUser?.superAdmin || currentUser?.isAdmin) && (
+                <div className="px-4 py-2 bg-red-500/5 mt-1 mx-2 rounded-lg border border-red-500/20">
+                    <h3 className="text-[10px] uppercase font-bold text-red-500 mb-2 tracking-wider">Admin Zone</h3>
+                    <Button
+                        onClick={async () => {
+                            if (window.confirm("⚠️ DANGER ZONE ⚠️\n\nThis will delete ALL users, chats, and messages (except your account).\n\nAre you sure you want to RESET THE APP?")) {
+                                if (window.confirm("Really? There is no undo.")) {
+                                    const { httpsCallable, getFunctions } = await import('firebase/functions');
+                                    const functions = getFunctions();
+                                    const debugResetApp = httpsCallable(functions, 'debugResetApp');
+
+                                    const toast = (await import('react-hot-toast')).default;
+                                    const toastId = toast.loading("Reseting App... Do not close.");
+
+                                    try {
+                                        await debugResetApp();
+                                        toast.success("App Reset Complete!", { id: toastId });
+                                        window.location.reload();
+                                    } catch (e) {
+                                        toast.error("Reset Failed: " + e.message, { id: toastId });
+                                    }
+                                }
+                            }
+                        }}
+                        className="w-full bg-red-600 hover:bg-red-700 text-white text-xs h-8"
+                    >
+                        ⛔ FACTORY RESET APP
+                    </Button>
                 </div>
             )}
 

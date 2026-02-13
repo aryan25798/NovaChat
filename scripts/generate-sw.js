@@ -49,4 +49,23 @@ const content = template
     .replace('__VITE_FIREBASE_DATABASE_URL__', getVar('VITE_FIREBASE_DATABASE_URL'));
 
 fs.writeFileSync(outputPath, content);
-console.log('✅ Generated public/firebase-messaging-sw.js with environment variables.');
+console.log('✅ Generated public/firebase-messaging-sw.js');
+
+// Also generate src/sw.js from src/sw.template.js
+const mainSwTemplatePath = path.resolve(__dirname, '../src/sw.template.js');
+const mainSwOutputPath = path.resolve(__dirname, '../src/sw.js');
+
+if (fs.existsSync(mainSwTemplatePath)) {
+    const mainSwTemplate = fs.readFileSync(mainSwTemplatePath, 'utf-8');
+    const mainSwContent = mainSwTemplate
+        .replace('__VITE_FIREBASE_API_KEY__', getVar('VITE_FIREBASE_API_KEY'))
+        .replace('__VITE_FIREBASE_AUTH_DOMAIN__', getVar('VITE_FIREBASE_AUTH_DOMAIN'))
+        .replace('__VITE_FIREBASE_PROJECT_ID__', getVar('VITE_FIREBASE_PROJECT_ID'))
+        .replace('__VITE_FIREBASE_STORAGE_BUCKET__', getVar('VITE_FIREBASE_STORAGE_BUCKET'))
+        .replace('__VITE_FIREBASE_MESSAGING_SENDER_ID__', getVar('VITE_FIREBASE_MESSAGING_SENDER_ID'))
+        .replace('__VITE_FIREBASE_APP_ID__', getVar('VITE_FIREBASE_APP_ID'))
+        .replace('__VITE_FIREBASE_DATABASE_URL__', getVar('VITE_FIREBASE_DATABASE_URL'));
+
+    fs.writeFileSync(mainSwOutputPath, mainSwContent);
+    console.log('✅ Generated src/sw.js with environment variables.');
+}

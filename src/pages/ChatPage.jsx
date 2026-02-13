@@ -22,23 +22,36 @@ const ChatPage = () => {
         let unsubscribe = () => { };
 
         const resolveChat = async () => {
-            // NEW: Speculative Speculation (Zero-Wait)
             const { GEMINI_BOT_ID } = await import("../constants");
             const isBot = id === GEMINI_BOT_ID || id.startsWith('gemini_');
-            const speculatedId = isBot ? id : (id.includes('_') ? id : [currentUser.uid, id].sort().join("_"));
+
+            // CANONICAL ID ENFORCEMENT
+            let speculatedId = id;
+            if (!isBot) {
+                if (id.includes('_')) {
+                    // If it looks like a composite ID, split and sort to ensure A_B (canonical)
+                    const parts = id.split('_');
+                    if (parts.length === 2) {
+                        speculatedId = parts.sort().join('_');
+                    }
+                } else {
+                    // If it's a single UID, combine with current user and sort
+                    speculatedId = [currentUser.uid, id].sort().join("_");
+                }
+            }
 
             // 1. If we have state, use it immediately
             if (location.state?.chatData) {
                 setChat(location.state.chatData);
                 setLoading(false);
             }
-            // 2. OR Speculate if it's a direct URL hit (UID or encoded ID)
+            // 2. OR Speculate if it's a direct URL hit
             else if (id.length === 28 || id.includes('_')) {
                 setChat({
-                    id: speculatedId,
-                    isGhost: true, // Treat as ghost until we confirm existence
-                    participants: isBot ? [currentUser.uid, id] : (id.includes('_') ? null : [currentUser.uid, id]),
-                    type: isBot ? "gemini" : (id.includes('_') ? "group" : "private")
+                    id: speculatedId, // use strict canonical ID
+                    isGhost: true,
+                    participants: isBot ? [currentUser.uid, id] : speculatedId.split('_'),
+                    type: isBot ? "gemini" : "private"
                 });
                 setLoading(false);
             } else {
@@ -47,15 +60,15 @@ const ChatPage = () => {
 
             try {
                 // Background metadata resolution
-                const ghostId = isBot ? id : [currentUser.uid, id].sort().join("_");
+                const ghostId = speculatedId;
                 const ghostChatRef = doc(db, "chats", ghostId);
-                const directRef = doc(db, "chats", id);
+                const directRef = doc(db, "chats", id); // Still check the RAW id just in case it's a group
                 let targetRef = null;
                 let initialData = null;
 
                 const results = await Promise.allSettled([
                     getDoc(directRef),
-                    !isBot ? getDoc(doc(db, "users", id)) : Promise.resolve(null),
+                    !isBot && !id.includes('_') ? getDoc(doc(db, "users", id)) : Promise.resolve(null),
                     getDoc(ghostChatRef)
                 ]);
 
@@ -64,14 +77,44 @@ const ChatPage = () => {
 
                 if (directSnap?.exists()) {
                     targetRef = directRef;
+                    // If directRef exists and it WAS a private chat but unsorted in URL, we might want to redirect? 
+                    // But for now, if the raw ID points to a real doc (e.g. valid group ID with underscore), use it.
                 } else if (ghostSnap?.exists()) {
                     targetRef = ghostChatRef;
                 } else if (isBot) {
+                    // ... same gemini logic ...
                     initialData = {
                         id: id, type: "gemini", participants: [currentUser.uid, id], isGhost: true,
                         participantInfo: {
                             [id]: { displayName: "Gemini AI", photoURL: "https://uxwing.com/wp-content/themes/uxwing/download/brands-and-social-media/google-gemini-icon.png" },
                             [currentUser.uid]: { displayName: currentUser.displayName, photoURL: currentUser.photoURL }
+                        }
+                    };
+                } else if (id.includes('_') || speculatedId.includes('_')) {
+                    // Parse participants from the CANONICAL ID
+                    const parts = speculatedId.split('_');
+                    const otherUid = parts.find(uid => uid !== currentUser.uid);
+
+                    // Try to fetch the other user's data to populate the UI
+                    let otherUserData = null;
+                    if (otherUid) {
+                        try {
+                            const snap = await getDoc(doc(db, "users", otherUid));
+                            if (snap.exists()) otherUserData = snap.data();
+                        } catch (e) {
+                            console.warn("Failed to fetch other user data", e);
+                        }
+                    }
+
+                    initialData = {
+                        id: speculatedId, // use the sorted ID
+                        type: "private",
+                        participants: parts, // Use parsed parts
+                        isGhost: true,
+                        participantInfo: {
+                            [currentUser.uid]: { displayName: currentUser.displayName, photoURL: currentUser.photoURL },
+                            ...(otherUid && otherUserData ? { [otherUid]: otherUserData } :
+                                (otherUid ? { [otherUid]: { displayName: "User", photoURL: null } } : {}))
                         }
                     };
                 } else if (userSnap?.exists()) {

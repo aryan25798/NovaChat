@@ -8,6 +8,7 @@ import {
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
 import { httpsCallable } from "firebase/functions";
 import { listenerManager } from "../utils/ListenerManager";
+import PQueue from 'p-queue';
 
 import { GEMINI_BOT_ID } from '../constants';
 
@@ -31,11 +32,12 @@ const deleteChatFn = httpsCallable(functions, 'deleteChat');
  * @param {function} onUnreadUpdate - Optional callback when unread messages are detected
  * @returns {function} unsubscribe function
  */
-export const subscribeToMessages = (chatId, currentUserId, callback, updateReadStatus = true, limitCount = 50) => {
+export const subscribeToMessages = (chatId, currentUserId, callback, updateReadStatus = true, limitCount = 20) => {
     if (!chatId) return () => { };
 
     const listenerKey = `messages-${chatId}`;
     let messageCache = new Map();
+    let lastEmittedJson = "";
 
     const q = query(
         collection(db, CHATS_COLLECTION, chatId, MESSAGES_COLLECTION),
@@ -44,8 +46,8 @@ export const subscribeToMessages = (chatId, currentUserId, callback, updateReadS
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-        let hasChanges = false;
 
+        // 1. Update Cache
         if (messageCache.size === 0 && snapshot.docs.length > 0) {
             snapshot.docs.forEach(doc => {
                 const data = doc.data({ serverTimestamps: 'estimate' });
@@ -56,9 +58,6 @@ export const subscribeToMessages = (chatId, currentUserId, callback, updateReadS
                     _doc: doc
                 });
             });
-            hasChanges = true;
-            // Immediate FIRST callback for snappiness
-            callback(Array.from(messageCache.values()));
         } else {
             snapshot.docChanges().forEach((change) => {
                 const doc = change.doc;
@@ -71,21 +70,29 @@ export const subscribeToMessages = (chatId, currentUserId, callback, updateReadS
                         status: doc.metadata.hasPendingWrites ? 'pending' : (data.read ? 'read' : (data.delivered ? 'delivered' : 'sent')),
                         _doc: doc
                     });
-                    hasChanges = true;
                 }
                 if (change.type === "removed") {
                     messageCache.delete(doc.id);
-                    hasChanges = true;
                 }
             });
         }
 
-        if (hasChanges || snapshot.docChanges().length === 0) {
-            callback(Array.from(messageCache.values()));
+        // 2. Emit ONLY if changed (Deep Compare)
+        const currentMessages = Array.from(messageCache.values());
+        // Simple optimization: only stringify relevant fields if performance needed, but for 20 msgs JSON is fine.
+        // We strip _doc to avoid circular structure in stringify if it exists (it's a complex object)
+        const safeForStringify = currentMessages.map(m => ({ ...m, _doc: null, timestamp: m.timestamp?.toString() }));
+        const currentJson = JSON.stringify(safeForStringify);
+
+        if (currentJson !== lastEmittedJson) {
+            callback(currentMessages);
+            lastEmittedJson = currentJson;
+        } else {
+            // console.log("[ChatService] Snapshot fired but no relevant changes. Ignoring.");
         }
 
+        // 3. Mark Read/Delivered (Debounced)
         if (currentUserId && updateReadStatus) {
-            // Only update read/delivered status for SERVER messages that we haven't read yet
             const serverDocs = snapshot.docs.filter(d =>
                 !d.metadata.hasPendingWrites &&
                 d.data().senderId !== currentUserId &&
@@ -221,6 +228,17 @@ export const markMessagesAsRead = async (chatId, userId, messageDocs) => {
     readDebounceTimer = setTimeout(flushReadBatch, FLUSH_DELAY);
 };
 
+export const resetChatUnreadCount = async (chatId, userId) => {
+    if (!chatId || !userId) return;
+    const chatRef = doc(db, CHATS_COLLECTION, chatId);
+    try {
+        await updateDoc(chatRef, { [`unreadCount.${userId}`]: 0 });
+    } catch (error) {
+        // console.error("Failed to reset unread count:", error);
+        // Ignore errors (e.g. permission or network) - it's a UI helper
+    }
+};
+
 export const markMessagesAsDelivered = (chatId, userId, messageDocs) => {
     if (!messageDocs || messageDocs.length === 0) return;
 
@@ -261,28 +279,35 @@ const checkRateLimit = () => {
     localStorage.setItem(RATE_LIMIT_KEY, JSON.stringify(timestamps));
 };
 
-export const sendMessage = async (chatId, sender, text, replyTo = null, manualMessageId = null, metadata = {}) => {
-    if (!text.trim()) return;
-    checkRateLimit();
+const messageQueue = new PQueue({ concurrency: 1 });
 
+/**
+ * Sends a text message
+ */
+export const sendMessage = async (chatId, currentUser, text, replyTo = null, optimisticId = null, metadata = null) => {
+    if (!chatId || !currentUser || !text) return;
+
+    console.log(`[ChatService] Enqueueing message: ${text.substring(0, 10)}... to ${chatId}`);
+    return messageQueue.add(() => sendMessageSequential(chatId, currentUser, text, replyTo, optimisticId, metadata));
+};
+
+async function sendMessageSequential(chatId, currentUser, text, replyTo, optimisticId, metadata) {
+    console.log("[ChatService] Processing message in queue...", { chatId, optimisticId });
     try {
-        let finalChatId = chatId;
-        const isGeminiChat = metadata.type === 'gemini' || chatId === GEMINI_BOT_ID || chatId.startsWith('gemini_');
-
-        const messagesRef = collection(db, "chats", finalChatId, "messages");
-        const messageId = manualMessageId || doc(messagesRef).id;
-        const messageRef = doc(db, "chats", finalChatId, "messages", messageId);
-        const chatRef = doc(db, "chats", finalChatId);
+        const messagesRef = collection(db, "chats", chatId, "messages");
+        const docRef = optimisticId ? doc(messagesRef, optimisticId) : doc(messagesRef);
 
         const messageData = {
+            id: docRef.id,
             text,
-            senderId: sender.uid,
-            senderName: sender.displayName || sender.email,
+            senderId: currentUser.uid,
+            senderName: currentUser.displayName || currentUser.email, // Denormalize for performance
+            senderPhoto: currentUser.photoURL || null,
             timestamp: serverTimestamp(),
-            read: isGeminiChat,
-            delivered: isGeminiChat,
+            status: 'sent', // Initially sent
             type: 'text',
-            textLower: text.toLowerCase(),
+            read: false,
+            delivered: false,
             replyTo: replyTo ? {
                 id: replyTo.id,
                 text: replyTo.text,
@@ -290,138 +315,180 @@ export const sendMessage = async (chatId, sender, text, replyTo = null, manualMe
             } : null
         };
 
-        const batch = writeBatch(db);
+        if (optimisticId) {
+            console.log("[ChatService] Writing optimistic document:", docRef.id);
+            await setDoc(docRef, messageData);
+        } else {
+            console.log("[ChatService] Adding new document");
+            await setDoc(docRef, messageData);
+        }
 
-        // 1. Create the message
-        // Lightning Signal (Instant)
-        lightningSync.sendInstantSignal(finalChatId, sender.uid, messageId, text);
-
-        batch.set(messageRef, messageData);
-
-        // 2. Update Chat Metadata (Atomic)
+        // 2. Update Last Message & Counters (Lazy Creation)
+        const chatRef = doc(db, "chats", chatId);
         const updates = {
-            lastMessage: { text, senderId: sender.uid, timestamp: new Date() },
+            lastMessage: {
+                text,
+                senderId: currentUser.uid,
+                timestamp: new Date(), // Client-side estim for immediate sort
+                read: false
+            },
             lastMessageTimestamp: serverTimestamp(),
         };
 
-        // If we have participants metadata, we can increment unread count atomically in the same batch
-        if (metadata.participants) {
-            metadata.participants.forEach(uid => {
-                if (uid !== sender.uid) {
-                    updates[`unreadCount.${uid}`] = increment(1);
-                }
-            });
+        const otherUid = metadata?.participants?.find(p => p !== currentUser.uid);
+        if (otherUid) {
+            updates[`unreadCount.${otherUid}`] = increment(1);
+            // REMOVED: Updating participants is restricted by Security Rules.
+            // participants are set on creation. To support "undelete", we need Admin SDK or rule changes.
         }
 
-        batch.update(chatRef, updates);
+        console.log("[ChatService] Updating chat metadata...");
 
-        // Commit the batch. This is robust and ensures all or nothing.
-        // It resolves as soon as the local write is successful.
-        await batch.commit();
+        try {
+            await updateDoc(chatRef, updates);
+        } catch (updateError) {
+            // Lazy Creation: If chat doesn't exist, create it now
+            if (updateError.code === 'not-found') {
+                console.log("[ChatService] Chat doc missing during update. Creating now...", chatId);
 
-        return messageId;
+                if (otherUid) {
+                    let otherUser = metadata?.participantInfo?.[otherUid]
+                        ? { uid: otherUid, ...metadata.participantInfo[otherUid] }
+                        : { uid: otherUid };
+
+                    // Fetch user if missing info
+                    if (!otherUser.displayName) {
+                        const userSnap = await getDoc(doc(db, "users", otherUid));
+                        if (userSnap.exists()) {
+                            otherUser = { uid: otherUid, ...userSnap.data() };
+                        } else {
+                            otherUser.displayName = "User";
+                        }
+                    }
+
+                    // Create the structure
+                    await ensureChatExists(currentUser, otherUser);
+
+                    // Retry the update
+                    await updateDoc(chatRef, updates);
+                }
+            } else if (updateError.code === 'permission-denied') {
+                console.warn("[ChatService] Metadata update blocked by rules. Message sent but chat list might not update.", updateError);
+                // Swallow error to allow message to show as sent
+            } else {
+                console.error("[ChatService] Metadata update failed:", updateError);
+                // Don't throw, just let the message succeed
+            }
+        }
+
+        console.log("[ChatService] Message cycle complete.");
+        return messageData.id;
 
     } catch (error) {
-        // If batch fails (e.g. chat doesn't exist yet), fallback to non-atomic for first message
-        if (error.code === 'not-found' || error.message?.includes('No document to update')) {
-            console.log("[ChatService] Chat doesn't exist, falling back to sequential create/send");
-            // ... non-blocking background creation logic from before ...
-            // (I'll keep the previous sequential logic as a fallback for first-time chats)
-            return await sendMessageSequential(chatId, sender, text, replyTo, manualMessageId, metadata);
-        }
         console.error("Error sending message:", error);
         throw error;
     }
-};
+}
 
-const sendMessageSequential = async (chatId, sender, text, replyTo, manualMessageId, metadata) => {
-    const isGeminiChat = metadata.type === 'gemini' || chatId === GEMINI_BOT_ID || chatId.startsWith('gemini_');
-    const messageData = {
-        text,
-        senderId: sender.uid,
-        senderName: sender.displayName || sender.email,
-        timestamp: serverTimestamp(),
-        read: isGeminiChat,
-        delivered: isGeminiChat,
-        type: 'text',
-        textLower: text.toLowerCase(),
-        replyTo: replyTo ? { id: replyTo.id, text: replyTo.text, senderName: replyTo.senderName } : null
+/**
+ * Ensures a chat exists with complete participant metadata.
+ * Self-healing: Updates metadata if missing.
+ */
+export const ensureChatExists = async (currentUser, otherUser) => {
+    const combinedId = [currentUser.uid, otherUser.uid].sort().join('_');
+    const chatRef = doc(db, CHATS_COLLECTION, combinedId);
+
+    console.log(`[ChatService] ensureChatExists start. CID: ${combinedId}`);
+
+    // Sanitize Inputs
+    const currentData = {
+        displayName: currentUser.displayName || "User",
+        photoURL: currentUser.photoURL || null,
+        email: currentUser.email || null
+    };
+    const otherData = {
+        displayName: otherUser.displayName || "User",
+        photoURL: otherUser.photoURL || null,
+        email: otherUser.email || null
     };
 
-    const messagesRef = collection(db, "chats", chatId, "messages");
-    const messageId = manualMessageId || doc(messagesRef).id;
-    const messageRef = doc(db, "chats", chatId, "messages", messageId);
-
-    // Initial message write (resolves instantly)
-    await setDoc(messageRef, messageData);
-
-    // Background chat creation/update
-    (async () => {
-        try {
-            const chatRef = doc(db, "chats", chatId);
-            let snap = await getDoc(chatRef);
-            if (!snap.exists()) {
-                // ... handle chat creation (same as previous implementation) ...
-                if (isGeminiChat) {
-                    const newChatData = {
-                        id: chatId,
-                        participants: [sender.uid, GEMINI_BOT_ID],
-                        participantInfo: {
-                            [sender.uid]: { displayName: sender.displayName, photoURL: sender.photoURL },
-                            [GEMINI_BOT_ID]: { displayName: "Gemini AI", photoURL: GEMINI_LOGO_URL, isGemini: true }
-                        },
-                        type: 'gemini',
-                        createdAt: serverTimestamp(),
-                        lastMessage: null,
-                        unreadCount: {},
-                        mutedBy: {},
-                        options: { isGeminiChat: true }
-                    };
-                    await setDoc(chatRef, newChatData);
-                } else {
-                    // Handle private chat creation... (simplified to avoid blocking)
-                    const parts = chatId.split('_');
-                    if (parts.length === 2) {
-                        const otherUid = parts.find(uid => uid !== sender.uid);
-                        const otherUserSnap = await getDoc(doc(db, "users", otherUid));
-                        const otherUserData = otherUserSnap.exists() ? otherUserSnap.data() : { displayName: "User" };
-                        const newChatData = {
-                            id: chatId,
-                            participants: [sender.uid, otherUid],
-                            participantInfo: {
-                                [sender.uid]: { displayName: sender.displayName, photoURL: sender.photoURL },
-                                [otherUid]: { displayName: otherUserData.displayName || "User", photoURL: otherUserData.photoURL }
-                            },
-                            type: 'private',
-                            createdAt: serverTimestamp(),
-                            lastMessage: null,
-                            unreadCount: {},
-                            mutedBy: {}
-                        };
-                        await setDoc(chatRef, newChatData);
-                    }
-                }
-                snap = await getDoc(chatRef); // Re-fetch after creation
-            }
-
-            if (snap.exists()) {
-                const data = snap.data();
-                const updates = {
-                    lastMessage: { text, senderId: sender.uid, timestamp: new Date() },
+    // 1. Try to update (Optimization: Optimistic repair)
+    try {
+        console.log("[ChatService] Attempting optimistic update...");
+        await updateDoc(chatRef, {
+            [`participantInfo.${otherUser.uid}`]: otherData,
+            [`participantInfo.${currentUser.uid}`]: currentData,
+            participants: [currentUser.uid, otherUser.uid] // Ensure participants array exists
+        });
+        console.log("[ChatService] Chat exists and updated.");
+        return combinedId;
+    } catch (error) {
+        // 2. If not found, create it
+        if (error.code === 'not-found') {
+            console.log("[ChatService] Chat not found, creating new...");
+            try {
+                await setDoc(chatRef, {
+                    participants: [currentUser.uid, otherUser.uid],
+                    participantInfo: {
+                        [currentUser.uid]: currentData,
+                        [otherUser.uid]: otherData
+                    },
+                    lastMessage: null,
                     lastMessageTimestamp: serverTimestamp(),
-                };
-                data.participants?.forEach(uid => {
-                    if (uid !== sender.uid) updates[`unreadCount.${uid}`] = increment(1);
+                    type: 'private',
+                    unreadCount: { [currentUser.uid]: 0, [otherUser.uid]: 0 },
+                    mutedBy: {},
+                    createdAt: serverTimestamp()
                 });
-                await updateDoc(chatRef, updates);
+                console.log("[ChatService] New chat created.");
+                return combinedId;
+            } catch (createError) {
+                console.error("Failed to create chat:", createError);
+                throw createError;
             }
-        } catch (e) {
-            console.warn("Background heavy sync failed:", e);
+        } else {
+            console.error("ensureChatExists update failed:", error);
+            throw error;
         }
-    })();
-
-    return messageId;
+    }
 };
+
+
+
+/**
+ * Repairs a chat document by fetching latest user details.
+ */
+export const repairChatMetadata = async (chatId, currentUserId) => {
+    try {
+        const chatRef = doc(db, CHATS_COLLECTION, chatId);
+        const chatSnap = await getDoc(chatRef);
+        if (!chatSnap.exists()) return;
+
+        const data = chatSnap.data();
+        if (data.type === 'group' || data.type === 'gemini') return;
+
+        const otherUserId = data.participants?.find(uid => uid !== currentUserId);
+        if (!otherUserId) return;
+
+        // Fetch latest user details
+        const userSnap = await getDoc(doc(db, "users", otherUserId));
+        if (userSnap.exists()) {
+            const userData = userSnap.data();
+            await updateDoc(chatRef, {
+                [`participantInfo.${otherUserId}`]: {
+                    displayName: userData.displayName || "User",
+                    photoURL: userData.photoURL || null,
+                    email: userData.email || null // Added email for search
+                }
+            });
+            console.log(`[ChatService] Repaired chat ${chatId} for user ${otherUserId}`);
+        }
+    } catch (e) {
+        console.error("Chat repair failed:", e);
+    }
+};
+
+
 
 export const sendMediaMessage = async (chatId, sender, fileData, replyTo = null) => {
     checkRateLimit();

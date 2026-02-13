@@ -10,21 +10,23 @@ import { collection, query, where, getDocs, limit, doc, updateDoc, arrayUnion, a
 export const searchUsers = async (searchTerm, currentUserId) => {
     const term = (searchTerm || "").toLowerCase().trim();
     const usersRef = collection(db, "users");
-    const MAX_RESULTS = 20;
+    // Increase limit slightly to allow for in-memory filtering of admins/self
+    const FETCH_LIMIT = 20;
 
     // If no search term, return recent users
     if (!term) {
         try {
+            // simplified query to avoid index issues with 'superAdmin'
             const q = query(
                 usersRef,
-                where("superAdmin", "==", false),
                 orderBy("displayName"),
-                limit(MAX_RESULTS)
+                limit(FETCH_LIMIT)
             );
             const snap = await getDocs(q);
             const users = [];
             snap.forEach(doc => {
                 const data = doc.data();
+                // Robust in-memory filtering
                 if (doc.id !== currentUserId && !data.isAdmin && data.superAdmin !== true) {
                     users.push({ id: doc.id, ...data });
                 }
@@ -36,29 +38,36 @@ export const searchUsers = async (searchTerm, currentUserId) => {
         }
     }
 
-    // HEURISTIC OPTIMIZATION:
-    // 1. If term contains '@', it's likely an email -> Only search email.
-    // 2. Otherwise, search 'searchableName' (prefix).
-    // 3. Drop legacy 'displayName' search to save resources.
-
     const queries = [];
+
+    // Strategy: Search strictly by email if '@' is present, otherwise search both name and email (if possible) or just name.
+    // We remove 'superAdmin' check from DB query to ensure we don't miss records lacking that field.
 
     if (term.includes('@')) {
         queries.push(query(
             usersRef,
-            where("superAdmin", "==", false),
             where('email', '>=', term),
             where('email', '<=', term + '\uf8ff'),
-            limit(MAX_RESULTS)
+            limit(FETCH_LIMIT)
         ));
     } else {
+        // Priority 1: Search by searchableName (case-insensitive prepared field)
         queries.push(query(
             usersRef,
-            where("superAdmin", "==", false),
             where('searchableName', '>=', term),
             where('searchableName', '<=', term + '\uf8ff'),
-            limit(MAX_RESULTS)
+            limit(FETCH_LIMIT)
         ));
+
+        // Priority 2: Also try searching by email prefix if it looks like a partial email (optional but helpful)
+        if (term.length > 2) {
+            queries.push(query(
+                usersRef,
+                where('email', '>=', term),
+                where('email', '<=', term + '\uf8ff'),
+                limit(FETCH_LIMIT)
+            ));
+        }
     }
 
     try {
@@ -68,6 +77,7 @@ export const searchUsers = async (searchTerm, currentUserId) => {
         snapshots.forEach(snap => {
             snap.forEach(doc => {
                 const data = doc.data();
+                // Strict In-Memory Filtering
                 if (doc.id !== currentUserId && data.superAdmin !== true && !data.isAdmin) {
                     userMap.set(doc.id, { id: doc.id, ...data });
                 }
@@ -75,8 +85,19 @@ export const searchUsers = async (searchTerm, currentUserId) => {
         });
 
         const combined = Array.from(userMap.values());
-        // STRICTURE LIMIT for 10k+ users: only return TOP 20
-        return combined.slice(0, MAX_RESULTS);
+
+        // Sort by name match relevance (starts with > contains)
+        combined.sort((a, b) => {
+            const nameA = (a.displayName || "").toLowerCase();
+            const nameB = (b.displayName || "").toLowerCase();
+            const startsA = nameA.startsWith(term);
+            const startsB = nameB.startsWith(term);
+            if (startsA && !startsB) return -1;
+            if (!startsA && startsB) return 1;
+            return nameA.localeCompare(nameB);
+        });
+
+        return combined.slice(0, 10); // Return top 10
 
     } catch (error) {
         console.error("Error searching users:", error);
@@ -155,10 +176,10 @@ export const getPagedUsers = async (lastDoc = null, pageSize = 15, currentUserId
     try {
         let q = query(
             collection(db, "users"),
-            where("superAdmin", "==", false),
-            where("isAdmin", "==", false), // Move more filtering to server
+            // where("superAdmin", "==", false), // REMOVED: In-memory filtering is safer for mixed data
+            // where("isAdmin", "==", false), // REMOVED: Move more filtering to client to avoid index explosions
             orderBy("displayName"),
-            limit(pageSize + 5) // Fetch slightly more to account for self-filtering
+            limit(pageSize + 10) // Fetch slightly more to account for self/admin filtering
         );
 
         if (lastDoc) {

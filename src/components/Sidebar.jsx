@@ -143,6 +143,8 @@ const Sidebar = React.memo(() => {
                         <FiSearch className="h-4.5 w-4.5" />
                     </span>
                     <Input
+                        name="search-chats"
+                        id="search-chats"
                         placeholder="Search or start new chat"
                         className="pl-11 h-10 bg-surface border border-transparent focus:border-primary/30 placeholder:text-text-2/60 text-[14px] shadow-sm transition-all"
                         value={searchTerm}

@@ -107,7 +107,7 @@ export default function MessageInput({
                             <label className="relative cursor-pointer">
                                 <div className="rounded-full text-text-2 hover:text-primary transition-colors min-w-[38px] min-h-[38px] w-10 h-10 md:w-10 md:h-10 flex items-center justify-center hover:bg-surface-elevated">
                                     <FaPaperclip className="text-lg md:text-lg" />
-                                    <input type="file" hidden onChange={handleFileUpload} />
+                                    <input type="file" name="file-upload" id="file-upload" hidden onChange={handleFileUpload} />
                                 </div>
                             </label>
                         </div>
@@ -131,6 +131,8 @@ export default function MessageInput({
                             <Input
                                 ref={inputRef}
                                 type="text"
+                                name="message"
+                                id="message-input"
                                 placeholder="Type a message"
                                 value={newMessage}
                                 onChange={handleInputChange}

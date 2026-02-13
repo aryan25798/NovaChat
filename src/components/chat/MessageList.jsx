@@ -46,9 +46,8 @@ export function MessageList({
         const showTail = !nextMsg || nextMsg.senderId !== msg.senderId;
 
         return (
-            <div key={msg.id} className="px-4 md:px-[8%] lg:px-[12%] py-0.5">
+            <div className="px-4 md:px-[8%] lg:px-[12%] py-0.5">
                 <Message
-                    key={msg.id}
                     message={msg}
                     chat={chat}
                     isOwn={msg.senderId === currentUser.uid}
@@ -76,8 +75,10 @@ export function MessageList({
         );
     }
 
+
+
     return (
-        <div style={{ flex: "1 1 auto", minHeight: "400px", height: '100%', width: '100%' }} className="relative bg-transparent overflow-hidden">
+        <div className="flex-1 w-full h-full relative bg-transparent overflow-hidden min-h-0">
             {messages.length === 0 ? (
                 <div className="flex items-center justify-center h-full text-zinc-500">
                     No messages yet. Say hi!
@@ -87,21 +88,21 @@ export function MessageList({
                     ref={virtuosoRef}
                     style={{ height: "100%", width: "100%" }}
                     data={messages}
-                    totalCount={messages.length} // Explicitly provide count
-                    initialItemCount={Math.min(messages.length, 20)} // Help with initial measurement
-                    computeItemKey={msg => msg.id}
+                    // totalCount={messages.length} // Let Virtuoso handle it
+                    // initialItemCount={Math.min(messages.length, 20)} 
+                    computeItemKey={msg => msg.id || `msg-${Math.random()}`} // Safe fallback
                     context={contextValue}
                     itemContent={itemContent}
                     initialTopMostItemIndex={messages.length > 0 ? messages.length - 1 : 0}
                     followOutput={(isAtBottom) => isAtBottom ? "auto" : false}
                     alignToBottom={true}
-                    defaultItemHeight={72}
+                    defaultItemHeight={72} // Estimate
                     increaseViewportBy={800}
                     atBottomThreshold={100}
                     overscan={200}
                     components={{
-                        Footer: () => <div className="h-4 w-full invisible" aria-hidden="true" />,
-                        Header: () => <div className="h-4 w-full invisible" aria-hidden="true" />
+                        Footer: () => <div className="h-4 w-full invisible" />,
+                        Header: () => <div className="h-4 w-full invisible" />
                     }}
                 />
             )}

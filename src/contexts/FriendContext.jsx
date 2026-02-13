@@ -35,9 +35,26 @@ export function FriendProvider({ children }) {
         }
 
         setLoading(true);
-        const unsubFriends = subscribeToFriends(currentUser.uid, setFriends);
-        const unsubIncoming = subscribeToIncomingRequests(currentUser.uid, setIncomingRequests);
-        const unsubOutgoing = subscribeToOutgoingRequests(currentUser.uid, setOutgoingRequests);
+        const unsubFriends = subscribeToFriends(currentUser.uid, (data) => {
+            setFriends(prev => {
+                if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
+                // console.log("[FriendContext] Friends updated:", data);
+                return data;
+            });
+        });
+        const unsubIncoming = subscribeToIncomingRequests(currentUser.uid, (data) => {
+            setIncomingRequests(prev => {
+                if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
+                console.log("[FriendContext] Incoming Requests:", data);
+                return data;
+            });
+        });
+        const unsubOutgoing = subscribeToOutgoingRequests(currentUser.uid, (data) => {
+            setOutgoingRequests(prev => {
+                if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
+                return data;
+            });
+        });
 
         setLoading(false);
 

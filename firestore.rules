@@ -130,10 +130,14 @@ service cloud.firestore {
       allow create: if isSignedIn() && isNotBanned();
       
       allow update: if (isSignedIn() && (
-        (request.auth.uid in resource.data.participants) || isAdmin() || isGod()
-      )) && isNotBanned() && 
-      // Stricter Update: Non-admins cannot modify participants
-      (isAdmin() || isGod() || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['participants']));
+         (request.auth.uid in resource.data.participants) ||
+         isParticipant(chatId) || isAdmin() || isGod()
+      )) && (
+        // RATE LIMIT: Prevent updating lastMessageTimestamp faster than 500ms to stop spam
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastMessageTimestamp'])) ||
+        (resource.data.lastMessageTimestamp == null) ||
+        (request.time > resource.data.lastMessageTimestamp + duration.value(500, 'ms'))
+      );
       
       // Admin can delete chats
       allow delete: if isAdmin();

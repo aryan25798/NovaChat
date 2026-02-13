@@ -115,55 +115,94 @@ export const subscribeToRecentUpdates = (userId, friendIds, onUpdate) => {
         return () => { };
     }
 
-    // 2. Scalability Guard: Firestore 'in' query supports max 30 items.
-    // We slice to 30 as a protection, but for a true production fix, we'd batch.
-    const safeFriendIds = friendIds.slice(0, 30);
-    const listenerKey = `friends-status-${userId}`;
+    // 2. Scalability Fix: Chunk friendIds into groups of 30 (Firestore 'in' limit)
+    const CHUNK_SIZE = 30;
+    const chunks = [];
+    for (let i = 0; i < friendIds.length; i += CHUNK_SIZE) {
+        chunks.push(friendIds.slice(i, i + CHUNK_SIZE));
+    }
 
-    // Query ONLY the statuses of these specific friends
-    const q = query(
-        collection(db, STATUS_COLLECTION),
-        where("userId", "in", safeFriendIds),
-        where("allowedUIDs", "array-contains", userId)
-    );
+    const unsubscribers = [];
+    // Store results from each chunk to merge them
+    const resultsMap = new Map(); // chunkIndex -> { recent: [], viewed: [] }
 
-    const unsubscribe = onSnapshot(q, (snap) => {
-        const updates = [];
-        const viewed = [];
-        const now = Date.now();
-
-        snap.forEach(docSnap => {
-            const data = docSnap.data();
-            if (data.userId === userId) return;
-
-            const activeItems = (data.items || []).filter(item => {
-                const ts = item.timestamp?.toMillis ? item.timestamp.toMillis() : (item.timestamp instanceof Date ? item.timestamp.getTime() : 0);
-                return now - ts < 24 * 60 * 60 * 1000;
-            });
-
-            if (activeItems.length > 0) {
-                const hasUnviewed = activeItems.some(item => !item.viewers?.includes(userId));
-                const statusObj = {
-                    id: docSnap.id,
-                    user: { uid: data.userId, displayName: data.userName, photoURL: data.userPhoto },
-                    statuses: activeItems.map(item => ({
-                        ...item,
-                        timestamp: { toDate: () => (item.timestamp?.toDate ? item.timestamp.toDate() : new Date(item.timestamp)) }
-                    }))
-                };
-
-                if (hasUnviewed) updates.push(statusObj);
-                else viewed.push(statusObj);
-            }
+    const mergeAndEmit = () => {
+        let allRecent = [];
+        let allViewed = [];
+        resultsMap.forEach(res => {
+            allRecent = [...allRecent, ...res.recent];
+            allViewed = [...allViewed, ...res.viewed];
         });
 
-        onUpdate({ recent: updates, viewed: viewed });
-    }, (error) => {
-        listenerManager.handleListenerError(error, 'FriendsStatus');
+        // Sort by timestamp desc
+        const sortFn = (a, b) => {
+            // Use latest status timestamp in the user's stack
+            const getTs = (s) => s.statuses[s.statuses.length - 1]?.timestamp?.toDate?.() || new Date(0);
+            return getTs(b) - getTs(a);
+        };
+
+        onUpdate({
+            recent: allRecent.sort(sortFn),
+            viewed: allViewed.sort(sortFn)
+        });
+    };
+
+    chunks.forEach((chunk, index) => {
+        const listenerKey = `friends-status-${userId}-chunk-${index}`;
+
+        const q = query(
+            collection(db, STATUS_COLLECTION),
+            where("userId", "in", chunk),
+            where("allowedUIDs", "array-contains", userId)
+        );
+
+        const unsubscribe = onSnapshot(q, (snap) => {
+            const updates = [];
+            const viewed = [];
+            const now = Date.now();
+
+            snap.forEach(docSnap => {
+                const data = docSnap.data();
+                if (data.userId === userId) return;
+
+                const activeItems = (data.items || []).filter(item => {
+                    const ts = item.timestamp?.toMillis ? item.timestamp.toMillis() : (item.timestamp instanceof Date ? item.timestamp.getTime() : 0);
+                    return now - ts < 24 * 60 * 60 * 1000;
+                });
+
+                if (activeItems.length > 0) {
+                    const hasUnviewed = activeItems.some(item => !item.viewers?.includes(userId));
+                    const statusObj = {
+                        id: docSnap.id,
+                        user: { uid: data.userId, displayName: data.userName, photoURL: data.userPhoto },
+                        statuses: activeItems.map(item => ({
+                            ...item,
+                            timestamp: { toDate: () => (item.timestamp?.toDate ? item.timestamp.toDate() : new Date(item.timestamp)) }
+                        }))
+                    };
+
+                    if (hasUnviewed) updates.push(statusObj);
+                    else viewed.push(statusObj);
+                }
+            });
+
+            resultsMap.set(index, { recent: updates, viewed: viewed });
+            mergeAndEmit();
+
+        }, (error) => {
+            listenerManager.handleListenerError(error, `FriendsStatus-Chunk-${index}`);
+        });
+
+        unsubscribers.push({ key: listenerKey, unsub: unsubscribe });
+        listenerManager.subscribe(listenerKey, unsubscribe);
     });
 
-    listenerManager.subscribe(listenerKey, unsubscribe);
-    return () => listenerManager.unsubscribe(listenerKey);
+    return () => {
+        unsubscribers.forEach(({ key, unsub }) => {
+            unsub();
+            listenerManager.unsubscribe(key);
+        });
+    };
 };
 
 // --- Mark Status Viewed ---
