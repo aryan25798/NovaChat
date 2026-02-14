@@ -131,7 +131,7 @@ export default defineConfig(({ mode }) => {
       })
     ],
     define: {
-      // Force explicit injection for the main bundle (works around some CI environment issues)
+      // Force explicit injection for critical variables
       'import.meta.env.VITE_FIREBASE_API_KEY': JSON.stringify(env.VITE_FIREBASE_API_KEY || ""),
       'import.meta.env.VITE_FIREBASE_AUTH_DOMAIN': JSON.stringify(env.VITE_FIREBASE_AUTH_DOMAIN || ""),
       'import.meta.env.VITE_FIREBASE_PROJECT_ID': JSON.stringify(env.VITE_FIREBASE_PROJECT_ID || ""),
@@ -139,17 +139,9 @@ export default defineConfig(({ mode }) => {
       'import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID': JSON.stringify(env.VITE_FIREBASE_MESSAGING_SENDER_ID || ""),
       'import.meta.env.VITE_FIREBASE_APP_ID': JSON.stringify(env.VITE_FIREBASE_APP_ID || ""),
       'import.meta.env.VITE_FIREBASE_DATABASE_URL': JSON.stringify(env.VITE_FIREBASE_DATABASE_URL || ""),
+      'import.meta.env.VITE_FIREBASE_VAPID_KEY': JSON.stringify(env.VITE_FIREBASE_VAPID_KEY || ""),
       'import.meta.env.VITE_GEMINI_API_KEY': JSON.stringify(env.VITE_GEMINI_API_KEY || ""),
       'import.meta.env.VITE_GOOGLE_MAPS_API_KEY': JSON.stringify(env.VITE_GOOGLE_MAPS_API_KEY || ""),
-
-      // Explicit placeholders for the Service Worker bundle
-      '__SW_VITE_API_KEY__': JSON.stringify(env.VITE_FIREBASE_API_KEY || ""),
-      '__SW_VITE_AUTH_DOMAIN__': JSON.stringify(env.VITE_FIREBASE_AUTH_DOMAIN || ""),
-      '__SW_VITE_PROJECT_ID__': JSON.stringify(env.VITE_FIREBASE_PROJECT_ID || ""),
-      '__SW_VITE_STORAGE_BUCKET__': JSON.stringify(env.VITE_FIREBASE_STORAGE_BUCKET || ""),
-      '__SW_VITE_MESSAGING_SENDER_ID__': JSON.stringify(env.VITE_FIREBASE_MESSAGING_SENDER_ID || ""),
-      '__SW_VITE_APP_ID__': JSON.stringify(env.VITE_FIREBASE_APP_ID || ""),
-      '__SW_VITE_DATABASE_URL__': JSON.stringify(env.VITE_FIREBASE_DATABASE_URL || ""),
     },
     build: {
       target: 'esnext',
@@ -169,16 +161,14 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       host: true,
       headers: {
-        'Cross-Origin-Opener-Policy': 'unsafe-none',
-        'Cross-Origin-Embedder-Policy': 'unsafe-none',
+        'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
       },
     },
     preview: {
       port: 4173,
       host: true,
       headers: {
-        'Cross-Origin-Opener-Policy': 'unsafe-none',
-        'Cross-Origin-Embedder-Policy': 'unsafe-none',
+        'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
       },
     }
   };

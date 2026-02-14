@@ -27,11 +27,9 @@ export default function StatusViewer({ initialUser, allStatuses, onClose }) {
         if (currentUserData.userId === currentUser.uid) return;
 
         markStatusAsViewed(
-            currentUserData.id,
-            itemIndex,
-            currentUser.uid,
-            currentUserData.items,
-            currentItem.viewers
+            currentUserData.userId, // The document ID is the userId
+            currentItem.id,
+            currentUser.uid
         );
 
     }, [userIndex, itemIndex, currentUser.uid, currentUserData, currentItem]);

@@ -19,73 +19,56 @@ class SoundService {
             this.audioCtx.resume();
         }
 
-        const oscillator = this.audioCtx.createOscillator();
-        const gainNode = this.audioCtx.createGain();
+        const playTone = () => {
+            const oscillator = this.audioCtx.createOscillator();
+            const gainNode = this.audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(this.audioCtx.destination);
+            const now = this.audioCtx.currentTime;
 
-        oscillator.connect(gainNode);
-        gainNode.connect(this.audioCtx.destination);
-
-        const now = this.audioCtx.currentTime;
-
-        if (type === 'ringtone') {
-            // Incoming Call Pattern (High-Low)
-            oscillator.type = 'sine';
-            oscillator.frequency.setValueAtTime(880, now); // A5
-            oscillator.frequency.setValueAtTime(1100, now + 0.4); // C#6
-            oscillator.frequency.setValueAtTime(880, now + 0.8);
-
-            gainNode.gain.setValueAtTime(0.5, now);
-            gainNode.gain.linearRampToValueAtTime(0, now + 1.5);
-
-            oscillator.start(now);
-            if (loop) {
-                // Approximate loop by re-triggering? 
-                // Web Audio loop is complex without AudioBuffer. 
-                // For simple tone, we just play once or use setInterval in a real app.
-                // Here we'll just play a long tone for simplicity if looped
-                oscillator.frequency.setValueAtTime(600, now);
-                gainNode.gain.setValueAtTime(0.3, now);
-                oscillator.stop(now + 4);
-            } else {
+            if (type === 'ringtone') {
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(880, now);
+                oscillator.frequency.exponentialRampToValueAtTime(1100, now + 0.4);
+                gainNode.gain.setValueAtTime(0, now);
+                gainNode.gain.linearRampToValueAtTime(0.3, now + 0.1);
+                gainNode.gain.linearRampToValueAtTime(0, now + 1.5);
+                oscillator.start(now);
                 oscillator.stop(now + 1.5);
+            } else if (type === 'dialing') {
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(440, now);
+                oscillator.frequency.add(480, now); // Dial tone is dual-frequency, simplification here
+                gainNode.gain.setValueAtTime(0.1, now);
+                oscillator.start(now);
+                oscillator.stop(now + 1.5);
+            } else if (type === 'end') {
+                oscillator.type = 'triangle';
+                oscillator.frequency.setValueAtTime(400, now);
+                oscillator.frequency.linearRampToValueAtTime(100, now + 0.3);
+                gainNode.gain.setValueAtTime(0.3, now);
+                gainNode.gain.linearRampToValueAtTime(0, now + 0.3);
+                oscillator.start(now);
+                oscillator.stop(now + 0.3);
             }
 
-        } else if (type === 'dialing') {
-            // Outgoing Call (Standard Dial Tone)
-            oscillator.type = 'sine';
-            oscillator.frequency.setValueAtTime(440, now); // A4
-            oscillator.frequency.setValueAtTime(480, now + 0.1);
-
-            gainNode.gain.setValueAtTime(0.1, now);
-            oscillator.start(now);
-            if (loop) {
-                oscillator.stop(now + 2); // Play for 2s then caller usually handles repetition
-            } else {
-                oscillator.stop(now + 2);
-            }
-
-        } else if (type === 'end') {
-            // Call Ended (Descending)
-            oscillator.type = 'triangle';
-            oscillator.frequency.setValueAtTime(400, now);
-            oscillator.frequency.linearRampToValueAtTime(100, now + 0.3);
-
-            gainNode.gain.setValueAtTime(0.3, now);
-            gainNode.gain.linearRampToValueAtTime(0, now + 0.3);
-
-            oscillator.start(now);
-            oscillator.stop(now + 0.3);
-        }
-
-        this.activeOscillators.push({ oscillator, gainNode });
-
-        // Cleanup when done
-        oscillator.onended = () => {
-            this.activeOscillators = this.activeOscillators.filter(o => o.oscillator !== oscillator);
+            this.activeOscillators.push({ oscillator, gainNode });
+            oscillator.onended = () => {
+                this.activeOscillators = this.activeOscillators.filter(o => o.oscillator !== oscillator);
+            };
         };
+
+        playTone();
+        if (loop) {
+            this.loopInterval = setInterval(playTone, type === 'ringtone' ? 2000 : 3000);
+        }
     }
 
     stop() {
+        if (this.loopInterval) {
+            clearInterval(this.loopInterval);
+            this.loopInterval = null;
+        }
         if (this.activeOscillators) {
             this.activeOscillators.forEach(({ oscillator, gainNode }) => {
                 try {

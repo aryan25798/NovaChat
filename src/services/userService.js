@@ -106,27 +106,23 @@ export const searchUsers = async (searchTerm, currentUserId) => {
 };
 
 /**
- * Blocks a user.
- * @param {string} currentUserId 
- * @param {string} targetUserId 
+ * Blocks a user using Cloud Function for atomic cleanup.
  */
 export const blockUser = async (currentUserId, targetUserId) => {
-    const userRef = doc(db, "users", currentUserId);
-    await updateDoc(userRef, {
-        blockedUsers: arrayUnion(targetUserId)
-    });
+    const { getFunctions, httpsCallable } = await import('firebase/functions');
+    const functions = getFunctions();
+    const blockFunc = httpsCallable(functions, 'blockUser');
+    return blockFunc({ targetUserId });
 };
 
 /**
- * Unblocks a user.
- * @param {string} currentUserId 
- * @param {string} targetUserId 
+ * Unblocks a user using Cloud Function.
  */
 export const unblockUser = async (currentUserId, targetUserId) => {
-    const userRef = doc(db, "users", currentUserId);
-    await updateDoc(userRef, {
-        blockedUsers: arrayRemove(targetUserId)
-    });
+    const { getFunctions, httpsCallable } = await import('firebase/functions');
+    const functions = getFunctions();
+    const unblockFunc = httpsCallable(functions, 'unblockUser');
+    return unblockFunc({ targetUserId });
 };
 /**
  * Fetches multiple user profiles by ID in batches.

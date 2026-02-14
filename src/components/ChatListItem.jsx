@@ -34,12 +34,18 @@ const ChatListItem = memo(({ chat, currentUserId }) => {
     }
 
     const isActive = id === chat.id; // Match against chat ID for the list
-    const lastMessageDate = chat.lastMessageTimestamp
-        ? (chat.lastMessageTimestamp.toDate ? chat.lastMessageTimestamp.toDate() : new Date(chat.lastMessageTimestamp.seconds * 1000))
-        : null;
+    const lastMessageDate = React.useMemo(() => {
+        const t = chat.lastMessageTimestamp;
+        if (!t) return null;
+        if (t instanceof Date) return t;
+        if (typeof t === 'number') return new Date(t);
+        if (typeof t.toDate === 'function') return t.toDate();
+        if (t.seconds) return new Date(t.seconds * 1000);
+        return null; // Fallback
+    }, [chat.lastMessageTimestamp]);
 
     return (
-        <motion.div layout initial={false} transition={{ type: 'spring', stiffness: 500, damping: 50, mass: 1 }}>
+        <motion.div initial={false} transition={{ type: 'spring', stiffness: 500, damping: 50, mass: 1 }}>
             <Link
                 to={`/c/${chat.id}`}
                 className={cn(

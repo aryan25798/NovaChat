@@ -37,8 +37,6 @@ exports.acceptFriendRequest = friendTriggers.acceptFriendRequest;
 exports.rejectFriendRequest = friendTriggers.rejectFriendRequest;
 exports.cancelFriendRequest = friendTriggers.cancelFriendRequest;
 exports.removeFriend = friendTriggers.removeFriend;
-exports.blockUser = friendTriggers.blockUser;
-exports.unblockUser = friendTriggers.unblockUser;
 
 // --- STATUS SYSTEM ---
 exports.onStatusWritten = statusTriggers.onStatusWritten;
@@ -60,9 +58,9 @@ exports.onCallCreated = callTriggers.onCallCreated;
 // --- AI & SYSTEM ---
 exports.generateAIResponse = generateAIResponse;
 exports.deleteExpiredStatuses = systemTriggers.deleteExpiredStatuses;
-exports.adminResetAllPresence = systemTriggers.adminResetAllPresence;
-// exports.debugResetApp = systemTriggers.debugResetApp; // DISABLED FOR PRODUCTION
 
+exports.adminResetAllPresence = systemTriggers.adminResetAllPresence;
+exports.debugResetApp = systemTriggers.debugResetApp;
 
 // 5. Retain Global Admin/Announcement Logic (Keep simple items here)
 exports.sendGlobalAnnouncement = onCall(async (request) => {

@@ -35,33 +35,54 @@ export function FriendProvider({ children }) {
         }
 
         setLoading(true);
+        let friendsLoaded = false;
+        let incomingLoaded = false;
+        let outgoingLoaded = false;
+
+        const checkAllLoaded = () => {
+            if (friendsLoaded && incomingLoaded && outgoingLoaded) {
+                setLoading(false);
+            }
+        };
+
         const unsubFriends = subscribeToFriends(currentUser.uid, (data) => {
             setFriends(prev => {
                 if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
-                // console.log("[FriendContext] Friends updated:", data);
                 return data;
             });
+            friendsLoaded = true;
+            checkAllLoaded();
         });
         const unsubIncoming = subscribeToIncomingRequests(currentUser.uid, (data) => {
             setIncomingRequests(prev => {
                 if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
-                console.log("[FriendContext] Incoming Requests:", data);
                 return data;
             });
+            incomingLoaded = true;
+            checkAllLoaded();
         });
         const unsubOutgoing = subscribeToOutgoingRequests(currentUser.uid, (data) => {
             setOutgoingRequests(prev => {
                 if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
                 return data;
             });
+            outgoingLoaded = true;
+            checkAllLoaded();
         });
 
-        setLoading(false);
+        // Safety timeout to clear loading if Firestore is slow/fails
+        const timeout = setTimeout(() => {
+            if (!friendsLoaded || !incomingLoaded || !outgoingLoaded) {
+                console.warn("[FriendContext] Safety timeout reached, clearing loading state.");
+                setLoading(false);
+            }
+        }, 5000);
 
         return () => {
             unsubFriends();
             unsubIncoming();
             unsubOutgoing();
+            clearTimeout(timeout);
         };
     }, [currentUser?.uid]);
 

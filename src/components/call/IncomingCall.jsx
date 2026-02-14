@@ -5,6 +5,20 @@ import { motion, AnimatePresence } from 'framer-motion';
 export default function IncomingCall({ callState, onAnswer, onReject }) {
     const { otherUser } = callState;
 
+    React.useEffect(() => {
+        // Vibrate for incoming calls on supported devices
+        if (navigator.vibrate) {
+            navigator.vibrate([1000, 500, 1000, 500, 1000]);
+            const interval = setInterval(() => {
+                navigator.vibrate([1000, 500, 1000, 500, 1000]);
+            }, 6000);
+            return () => {
+                clearInterval(interval);
+                navigator.vibrate(0);
+            };
+        }
+    }, []);
+
     return (
         <motion.div
             className="incoming-call-v7"

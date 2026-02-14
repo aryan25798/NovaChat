@@ -27,6 +27,12 @@ const DeliveryStatusListener = () => {
 
             if (chatsWithUnread.length === 0) return;
 
+            // PERFORMANCE: Skip marking as delivered if the tab is hidden
+            if (document.visibilityState !== 'visible') {
+                // console.log("[DeliveryListener] Tab hidden, skipping update loop.");
+                return;
+            }
+
             // Smart Diff: Only process chats that have a newer message than last checked
             const chatsToProcess = chatsWithUnread.filter(chat => {
                 const lastTimestamp = lastCheckedTimestamps.current[chat.id];
@@ -61,21 +67,24 @@ const DeliveryStatusListener = () => {
 
                     if (snapshot.empty) continue;
 
-                    const batch = writeBatch(db);
-                    let updateCount = 0;
-
-                    snapshot.docs.forEach(docSnap => {
-                        batch.update(docSnap.ref, { delivered: true });
-                        updateCount++;
-                    });
-
-                    if (updateCount > 0) {
-                        await batch.commit();
-                        console.log(`[DeliveryListener] Marked ${updateCount} messages as delivered in chat ${chat.id}`);
+                    // Group writes into batches of 500 (Firestore limit)
+                    const chunks = [];
+                    for (let i = 0; i < snapshot.docs.length; i += 500) {
+                        chunks.push(snapshot.docs.slice(i, i + 500));
                     }
 
+                    for (const chunk of chunks) {
+                        const batch = writeBatch(db);
+                        chunk.forEach(docSnap => {
+                            batch.update(docSnap.ref, { delivered: true });
+                        });
+                        await batch.commit();
+                    }
+
+                    // console.log(`[DeliveryListener] Marked ${snapshot.docs.length} messages as delivered in chat ${chat.id}`);
+
                     // Tiny delay to avoid hitting Firebase write-heavy rate limits
-                    await new Promise(r => setTimeout(r, 50));
+                    await new Promise(r => setTimeout(r, 100));
 
                 } catch (error) {
                     console.error(`[DeliveryListener] Error in chat ${chat.id}:`, error);

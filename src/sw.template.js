@@ -78,9 +78,9 @@ workbox.routing.registerRoute(
 
 // 3. Firebase Messaging Service Worker
 // Import scripts from CDN as Firebase JS SDK isn't fully tree-shakable/bundled easily in SW without issues sometimes.
-importScripts('https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js');
-importScripts('https://www.gstatic.com/firebasejs/9.22.0/firebase-messaging-compat.js');
-importScripts('https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js');
 
 // Initialize the Firebase app in the service worker
 const firebaseConfig = {

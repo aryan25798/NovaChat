@@ -8,6 +8,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import UploadProgress from "../components/chat/UploadProgress";
 
+import OfflineIndicator from "../components/OfflineIndicator";
+
 const MainLayout = () => {
     const location = useLocation();
     const isMobile = useMediaQuery("(max-width: 768px)");
@@ -24,7 +26,8 @@ const MainLayout = () => {
     const showContent = !isMobile || !isRoot;
 
     return (
-        <div className="flex h-[100dvh] w-full overflow-hidden bg-background text-text-1 font-sans antialiased selection:bg-primary/20">
+        <div className="flex h-[100dvh] w-full overflow-hidden bg-background text-text-1 font-sans antialiased selection:bg-primary/20 relative">
+            <OfflineIndicator />
             {/* Nav Rail - Desktop & Tablet - Hidden on Mobile */}
             {!isMobile && <NavRail />}
 

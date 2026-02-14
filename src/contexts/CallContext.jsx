@@ -78,6 +78,7 @@ export function CallProvider({ children }) {
     const pc = useRef(null);
     const stream = useRef(null);
     const listeners = useRef([]);
+    const iceBuffer = useRef([]); // Buffer for candidates received before remoteDescription
 
     // Cleanup helper
     const clearListeners = () => {
@@ -131,6 +132,18 @@ export function CallProvider({ children }) {
         };
     }, [callState?.status, callState?.isIncoming]);
 
+    // 1.8 Window Cleanup
+    useEffect(() => {
+        const handleBeforeUnload = () => {
+            if (callState) {
+                // Best effort cleanup
+                endCall(true);
+            }
+        };
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    }, [callState]);
+
     // 2. PeerConnection & Media Setup
     const initPeerConnection = async (callId, isCaller) => {
         // Cleanup existing stream
@@ -142,10 +155,19 @@ export function CallProvider({ children }) {
         // Get media
         let localStream;
         try {
-            localStream = await navigator.mediaDevices.getUserMedia({
-                video: true,
-                audio: true
-            });
+            const constraints = {
+                video: {
+                    facingMode: 'user', // Preference for front camera
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                },
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
+            };
+            localStream = await navigator.mediaDevices.getUserMedia(constraints);
         } catch (err) {
             console.error("Media permission error:", err);
             let errorMsg = "Could not access camera/microphone. Please check permissions.";
@@ -196,12 +218,30 @@ export function CallProvider({ children }) {
         return peer;
     };
 
+    const processIceBuffer = (peer) => {
+        if (!peer || !peer.remoteDescription) return;
+        console.log(`[CallContext] Processing ${iceBuffer.current.length} buffered ICE candidates`);
+        iceBuffer.current.forEach(candidate => {
+            peer.addIceCandidate(new RTCIceCandidate(candidate)).catch(e =>
+                console.warn("[CallContext] Buffered ICE error:", e)
+            );
+        });
+        iceBuffer.current = [];
+    };
+
     // 3. Caller Side
     const startCall = async (otherUser, type = 'video', chatId = null) => {
+        if (callState) {
+            console.warn("[CallContext] Attempted to start call while already in a call state");
+            return;
+        }
+        console.log("[CallContext] startCall called for:", otherUser?.uid, "Type:", type);
         try {
             soundService.play('dialing', true); // Play Dialing Sound
+            console.log("[CallContext] Dialing sound started");
 
             const callId = await createCallDoc(currentUser, otherUser, type, chatId);
+            console.log("[CallContext] Call doc created:", callId);
 
             // Set initial state so UI shows outgoing call screen
             setCallState({
@@ -225,7 +265,7 @@ export function CallProvider({ children }) {
             await setLocalDescription(callId, offer, 'offer');
 
             // Listen for Answer and Remote Candidates
-            const unsubCall = subscribeToCall(callId, (data) => {
+            const unsubCall = subscribeToCall(callId, async (data) => {
                 if (data?.status === 'ringing' && callState?.status !== 'ringing') {
                     setCallState(prev => prev ? { ...prev, status: 'ringing' } : null);
                 }
@@ -233,8 +273,9 @@ export function CallProvider({ children }) {
                 if (data?.answer && !peer.currentRemoteDescription) {
                     soundService.stop(); // Stop dialing
                     const rtcDesc = new RTCSessionDescription(data.answer);
-                    peer.setRemoteDescription(rtcDesc);
+                    await peer.setRemoteDescription(rtcDesc);
                     setCallState(prev => prev ? { ...prev, status: 'connected', startTime: Date.now() } : null);
+                    processIceBuffer(peer);
                 }
 
                 if (data?.status === 'ended' || data?.status === 'rejected') {
@@ -243,7 +284,11 @@ export function CallProvider({ children }) {
             });
 
             const unsubCandidates = subscribeToCandidates(callId, 'caller', (candidateData) => {
-                peer.addIceCandidate(new RTCIceCandidate(candidateData));
+                if (peer.remoteDescription) {
+                    peer.addIceCandidate(new RTCIceCandidate(candidateData)).catch(e => console.warn("ICE Error:", e));
+                } else {
+                    iceBuffer.current.push(candidateData);
+                }
             });
 
             listeners.current = [unsubCall, unsubCandidates];
@@ -257,8 +302,8 @@ export function CallProvider({ children }) {
     // 4. Callee Side
     const answerCall = async () => {
         try {
+            if (!callState || callState.status === 'connected') return;
             soundService.stop(); // Stop Ringtone
-            if (!callState) return;
 
             const callId = callState.id;
             const peer = await initPeerConnection(callId, false);
@@ -268,6 +313,7 @@ export function CallProvider({ children }) {
 
             // Set Remote Description (Offer)
             await peer.setRemoteDescription(new RTCSessionDescription(callData.offer));
+            processIceBuffer(peer);
 
             // Create Answer
             const answer = await peer.createAnswer();
@@ -281,7 +327,11 @@ export function CallProvider({ children }) {
 
             // Listen for Candidates and End
             const unsubCandidates = subscribeToCandidates(callId, 'callee', (candidateData) => {
-                peer.addIceCandidate(new RTCIceCandidate(candidateData));
+                if (peer.remoteDescription) {
+                    peer.addIceCandidate(new RTCIceCandidate(candidateData)).catch(e => console.warn("ICE Error:", e));
+                } else {
+                    iceBuffer.current.push(candidateData);
+                }
             });
 
             const unsubCall = subscribeToCall(callId, (data) => {
@@ -297,6 +347,7 @@ export function CallProvider({ children }) {
     };
 
     const endCall = async (notifyRemote = true) => {
+        iceBuffer.current = []; // Clear buffer
         const currentCallId = callState?.id;
         const currentChatId = callState?.chatId;
         const callStatus = callState?.status;

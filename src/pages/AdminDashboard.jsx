@@ -9,75 +9,49 @@ import AdminOverview from '../components/admin/AdminOverview';
 import ModerationQueue from '../components/admin/ModerationQueue';
 import Announcements from '../components/admin/Announcements'; // Import New Component
 import { db, auth, functions } from '../firebase';
-import { collection, query, orderBy, limit, getDocs, where, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, orderBy, limit, getDocs, where, doc, updateDoc, startAt, endAt } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { format } from 'date-fns';
 import { LogOut, LayoutDashboard, Users, Map, Eye, ShieldAlert, Megaphone, Menu, X, Search } from 'lucide-react';
 import { Avatar } from '../components/ui/Avatar';
 
+// Helper for debouncing
+function useDebounce(value, delay) {
+    const [debouncedValue, setDebouncedValue] = useState(value);
+    useEffect(() => {
+        const handler = setTimeout(() => {
+            setDebouncedValue(value);
+        }, delay);
+        return () => {
+            clearTimeout(handler);
+        };
+    }, [value, delay]);
+    return debouncedValue;
+}
+
 // Sub-component for chat selection in Spy Mode (Refactored for User-Centric Intelligence)
-const ChatSelector = ({ onSelectChat, onSwitchToRegistry, activeChatId }) => {
+const ChatSelector = ({ onSelectChat, onSwitchToRegistry, activeChatId, participants, setParticipants }) => {
     const [groupedUsers, setGroupedUsers] = useState([]);
-    const [participants, setParticipants] = useState({});
     const [loading, setLoading] = useState(true);
+    const [searchLoading, setSearchLoading] = useState(false);
     const [error, setError] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
+    const debouncedSearchTerm = useDebounce(searchTerm, 600);
     const [chatLimit, setChatLimit] = useState(50);
     const [hasMoreChats, setHasMoreChats] = useState(true);
     const [expandedUser, setExpandedUser] = useState(null);
 
+    // Initial Load (Recent Activity)
     const loadIntel = async () => {
         setLoading(true);
         setError(null);
         try {
             // 1. Fetch recent active chats
-            const q = query(collection(db, 'chats'), orderBy('lastMessage.timestamp', 'desc'), limit(chatLimit));
+            const q = query(collection(db, 'chats'), orderBy('lastMessageTimestamp', 'desc'), limit(chatLimit));
             const snap = await getDocs(q);
             const chatList = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-            // 2. Identify all unique participants (excluding current admin)
-            const uids = [...new Set(chatList.flatMap(c => c.participants || []))];
-            const pMap = {};
-
-            // 3. Batched Profile Fetch
-            for (let i = 0; i < uids.length; i += 30) {
-                const batch = uids.slice(i, i + 30);
-                const uQuery = query(collection(db, 'users'), where('__name__', 'in', batch));
-                const uSnap = await getDocs(uQuery);
-                uSnap.docs.forEach(doc => {
-                    pMap[doc.id] = doc.data();
-                });
-            }
-            setParticipants(pMap);
-
-            // 4. Intelligence Grouping: Group chats under Users
-            const userGroups = {};
-            chatList.forEach(chat => {
-                // Find participants in this chat (excluding the admin and filtering invalid UIDs)
-                const realParticipants = chat.participants?.filter(uid => uid && uid !== auth.currentUser?.uid) || [];
-
-                realParticipants.forEach(uid => {
-                    if (!userGroups[uid]) {
-                        userGroups[uid] = {
-                            profile: pMap[uid] || { uid, displayName: 'Anonymous' },
-                            chats: [],
-                            latestActivity: chat.lastMessage?.timestamp
-                        };
-                    }
-                    userGroups[uid].chats.push(chat);
-                    // Keep track of the absolute latest activity for this user
-                    if (chat.lastMessage?.timestamp > (userGroups[uid].latestActivity || 0)) {
-                        userGroups[uid].latestActivity = chat.lastMessage.timestamp;
-                    }
-                });
-            });
-
-            // Convert to sorted array
-            const sortedUsers = Object.values(userGroups).sort((a, b) =>
-                (b.latestActivity?.toMillis?.() || 0) - (a.latestActivity?.toMillis?.() || 0)
-            );
-
-            setGroupedUsers(sortedUsers);
+            await processChatsAndGroup(chatList);
             setHasMoreChats(snap.docs.length >= chatLimit);
         } catch (err) {
             console.error("Spy Intel Load Error:", err);
@@ -87,16 +61,108 @@ const ChatSelector = ({ onSelectChat, onSwitchToRegistry, activeChatId }) => {
         }
     };
 
+    // Shared processor for chat list -> grouped UI
+    const processChatsAndGroup = async (chatList) => {
+        const uids = [...new Set(chatList.flatMap(c => c.participants || []))];
+        const pMap = { ...participants }; // Keep existing cache
+
+        // Fetch missing profiles
+        const missingUids = uids.filter(uid => !pMap[uid]);
+        if (missingUids.length > 0) {
+            for (let i = 0; i < missingUids.length; i += 10) {
+                const batch = missingUids.slice(i, i + 10);
+                const uQuery = query(collection(db, 'users'), where('__name__', 'in', batch));
+                const uSnap = await getDocs(uQuery);
+                uSnap.docs.forEach(doc => {
+                    pMap[doc.id] = doc.data();
+                });
+            }
+        }
+        setParticipants(pMap);
+
+        // Group chats under Users
+        const userGroups = {};
+        chatList.forEach(chat => {
+            const realParticipants = chat.participants?.filter(uid => uid && uid !== auth.currentUser?.uid) || [];
+            realParticipants.forEach(uid => {
+                if (!userGroups[uid]) {
+                    userGroups[uid] = {
+                        profile: pMap[uid] || { uid, displayName: 'Anonymous' },
+                        chats: [],
+                        latestActivity: chat.lastMessage?.timestamp
+                    };
+                }
+                userGroups[uid].chats.push(chat);
+                // Keep track of the absolute latest activity for this user
+                if (chat.lastMessage?.timestamp > (userGroups[uid].latestActivity || 0)) {
+                    userGroups[uid].latestActivity = chat.lastMessage.timestamp;
+                }
+            });
+        });
+
+        const sortedUsers = Object.values(userGroups).sort((a, b) =>
+            (b.latestActivity?.toMillis?.() || 0) - (a.latestActivity?.toMillis?.() || 0)
+        );
+        setGroupedUsers(sortedUsers);
+    };
+
+    // Search Logic
+    useEffect(() => {
+        if (!debouncedSearchTerm) {
+            if (groupedUsers.length === 0) loadIntel(); // Reload default if cleared
+            return;
+        }
+
+        const runSearch = async () => {
+            setSearchLoading(true);
+            try {
+                // 1. Search Users by DisplayName (Prefix)
+                // Note: Firestore requires specific index for this, or simple >= + <= logic
+                const usersRef = collection(db, 'users');
+                const end = debouncedSearchTerm + '\uf8ff';
+                const uQuery = query(
+                    usersRef,
+                    where('displayName', '>=', debouncedSearchTerm),
+                    where('displayName', '<=', end),
+                    limit(5)
+                );
+                const userSnap = await getDocs(uQuery);
+
+                if (userSnap.empty) {
+                    setGroupedUsers([]);
+                    setSearchLoading(false);
+                    return;
+                }
+
+                const foundUids = userSnap.docs.map(d => d.id);
+
+                // 2. Find Chats for these users
+                // array-contains-any is capped at 10, which matches our user limit
+                const cQuery = query(
+                    collection(db, 'chats'),
+                    where('participants', 'array-contains-any', foundUids),
+                    orderBy('lastMessageTimestamp', 'desc'),
+                    limit(20)
+                );
+                const chatSnap = await getDocs(cQuery);
+                const chatList = chatSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+                await processChatsAndGroup(chatList);
+            } catch (err) {
+                console.error("Search failed:", err);
+                // Fallback to name match in existing loaded data if server index fails
+            } finally {
+                setSearchLoading(false);
+            }
+        };
+
+        runSearch();
+    }, [debouncedSearchTerm]);
+
+    // Initial Load
     useEffect(() => { loadIntel(); }, [chatLimit]);
 
     const loadMoreIntel = () => setChatLimit(prev => prev + 50);
-
-    const filteredUsers = groupedUsers.filter(group => {
-        const nameMatch = group.profile.displayName?.toLowerCase().includes(searchTerm.toLowerCase());
-        const emailMatch = group.profile.email?.toLowerCase().includes(searchTerm.toLowerCase());
-        const chatMatch = group.chats.some(c => c.id.toLowerCase().includes(searchTerm.toLowerCase()));
-        return nameMatch || emailMatch || chatMatch;
-    });
 
     return (
         <div className="h-full bg-white dark:bg-[#1f2937] border-r border-gray-200 dark:border-gray-700 flex flex-col shadow-sm">
@@ -104,16 +170,22 @@ const ChatSelector = ({ onSelectChat, onSwitchToRegistry, activeChatId }) => {
                 <div className="flex justify-between items-center mb-4">
                     <div>
                         <h3 className="text-gray-900 dark:text-white font-bold text-sm tracking-tight uppercase">Intelligence Feed</h3>
-                        <p className="text-[10px] text-gray-500 font-bold uppercase tracking-tighter opacity-60">Grouped by active users</p>
+                        <p className="text-[10px] text-gray-500 font-bold uppercase tracking-tighter opacity-60">
+                            {searchTerm ? 'Search Results' : 'Grouped by active users'}
+                        </p>
                     </div>
-                    <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
+                    {searchLoading ? (
+                        <div className="w-2 h-2 rounded-full bg-yellow-500 animate-ping" />
+                    ) : (
+                        <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
+                    )}
                 </div>
 
                 <div className="relative">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
                     <input
                         type="text"
-                        placeholder="Search users or chat ID..."
+                        placeholder="Search users (Server-Side)..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
                         className="w-full pl-9 pr-4 py-2 bg-white dark:bg-[#1f2937] border border-gray-200 dark:border-gray-800 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500 transition-all shadow-sm"
@@ -122,9 +194,9 @@ const ChatSelector = ({ onSelectChat, onSwitchToRegistry, activeChatId }) => {
             </div>
 
             <div className="flex-1 overflow-y-auto custom-scrollbar">
-                {loading ? (
+                {loading || searchLoading ? (
                     <div className="p-4 space-y-4">
-                        {[1, 2, 3, 4, 5].map(i => (
+                        {[1, 2, 3].map(i => (
                             <div key={i} className="space-y-2">
                                 <div className="h-14 bg-gray-100 dark:bg-gray-800 animate-pulse rounded-xl" />
                                 <div className="h-4 w-2/3 ml-4 bg-gray-50 dark:bg-gray-800/50 animate-pulse rounded" />
@@ -140,9 +212,13 @@ const ChatSelector = ({ onSelectChat, onSwitchToRegistry, activeChatId }) => {
                         </div>
                         <button key="sync-btn" onClick={onSwitchToRegistry} className="px-4 py-2 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm">Sync Permissions</button>
                     </div>
+                ) : groupedUsers.length === 0 ? (
+                    <div className="p-8 text-center text-gray-400 text-xs">
+                        No targets found.
+                    </div>
                 ) : (
                     <div key="intel-list-container">
-                        {filteredUsers.map((group, index) => (
+                        {groupedUsers.map((group, index) => (
                             <div key={`user-group-${group.profile.uid || index}`} className="border-b border-gray-100 dark:border-gray-800">
                                 {/* User Accordion Trigger */}
                                 <div
@@ -212,7 +288,7 @@ const ChatSelector = ({ onSelectChat, onSwitchToRegistry, activeChatId }) => {
                     </div>
                 )}
 
-                {hasMoreChats && !loading && (
+                {hasMoreChats && !searchTerm && !loading && (
                     <div key="load-more-intel" className="p-4 border-t border-gray-100 dark:border-gray-800 bg-gray-50/30 dark:bg-gray-900/10">
                         <button
                             onClick={loadMoreIntel}
@@ -233,6 +309,7 @@ const AdminDashboard = () => {
     const activeTab = searchParams.get('tab') || 'overview';
     const spyChatId = searchParams.get('chat');
     const [selectedUserDossier, setSelectedUserDossier] = useState(null);
+    const [participants, setParticipants] = useState({}); // Global profile cache for Admin
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const navigate = useNavigate();
     const { logout } = useAuth();
@@ -260,8 +337,9 @@ const AdminDashboard = () => {
     const handleBan = async (uid, currentStatus) => {
         if (!window.confirm(`Are you sure you want to ${currentStatus ? 'Unban' : 'Ban'} this user?`)) return;
         try {
-            const userRef = doc(db, 'users', uid);
-            await updateDoc(userRef, { isBanned: !currentStatus });
+            const banFn = httpsCallable(functions, 'banUser');
+            await banFn({ targetUid: uid, isBanned: !currentStatus });
+
             if (selectedUserDossier && selectedUserDossier.id === uid) {
                 setSelectedUserDossier(prev => ({ ...prev, isBanned: !currentStatus }));
             }
@@ -427,6 +505,8 @@ const AdminDashboard = () => {
                                             onSelectChat={setSpyChatId}
                                             onSwitchToRegistry={() => setActiveTab('registry')}
                                             activeChatId={spyChatId}
+                                            participants={participants}
+                                            setParticipants={setParticipants}
                                         />
                                     </div>
                                     <div className={`${spyChatId ? 'flex' : 'hidden lg:flex'} flex-1 relative bg-gray-50 dark:bg-[#0b0f1a] h-full overflow-hidden flex-col`}>
@@ -435,6 +515,7 @@ const AdminDashboard = () => {
                                                 chatId={spyChatId}
                                                 onClose={() => setSpyChatId(null)}
                                                 onOpenDossier={setSelectedUserDossier}
+                                                sharedParticipants={participants}
                                             />
                                         ) : (
                                             <div className="h-full flex items-center justify-center text-gray-400 flex-col space-y-6">

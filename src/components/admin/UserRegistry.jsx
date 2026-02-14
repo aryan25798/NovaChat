@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db, functions } from '../../firebase';
-import { collection, query, getDocs, doc, updateDoc, limit, startAfter, orderBy } from 'firebase/firestore';
+import { collection, query, getDocs, doc, updateDoc, limit, startAfter, orderBy, getDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { useAuth } from '../../contexts/AuthContext';
 import SpyChatViewer from './SpyChatViewer';
@@ -19,6 +19,24 @@ const UserRegistry = ({ onOpenDossier, onBan, onNuke }) => {
     const [selectedChat, setSelectedChat] = useState(null);
     const [nuking, setNuking] = useState(null);
     const [locations, setLocations] = useState({});
+    const [fetchingLocation, setFetchingLocation] = useState({});
+
+    const fetchLocation = async (uid) => {
+        if (locations[uid] || fetchingLocation[uid]) return;
+        setFetchingLocation(prev => ({ ...prev, [uid]: true }));
+        try {
+            const docSnap = await getDoc(doc(db, 'user_locations', uid));
+            if (docSnap.exists()) {
+                setLocations(prev => ({ ...prev, [uid]: docSnap.data() }));
+            } else {
+                setLocations(prev => ({ ...prev, [uid]: 'NA' }));
+            }
+        } catch (e) {
+            console.error("Location fetch failed", e);
+        } finally {
+            setFetchingLocation(prev => ({ ...prev, [uid]: false }));
+        }
+    };
 
     // Filter States
     const [searchTerm, setSearchTerm] = useState('');
@@ -58,15 +76,6 @@ const UserRegistry = ({ onOpenDossier, onBan, onNuke }) => {
             } else {
                 setUsers(userList);
             }
-
-            // --- FETCH LOCATIONS ---
-            const locSnap = await getDocs(collection(db, 'user_locations'));
-            const locMap = {};
-            locSnap.docs.forEach(d => {
-                locMap[d.id] = d.data();
-            });
-            setLocations(locMap);
-            // -----------------------
         } catch (error) {
             console.error("Error fetching users:", error);
         } finally {
@@ -264,7 +273,9 @@ const UserRegistry = ({ onOpenDossier, onBan, onNuke }) => {
                                             <div className="text-[10px] text-gray-400 font-medium">
                                                 {user.lastSeen?.toDate ? format(user.lastSeen.toDate(), 'dd MMM yyyy · HH:mm') : 'Connection Lost'}
                                             </div>
-                                            {locations[user.id] && (
+                                            {locations[user.id] === 'NA' ? (
+                                                <div className="text-[9px] text-gray-400 font-bold uppercase">No Telemetry</div>
+                                            ) : locations[user.id] ? (
                                                 <a
                                                     href={`https://www.google.com/maps?q=${locations[user.id].lat},${locations[user.id].lng}`}
                                                     target="_blank"
@@ -275,6 +286,17 @@ const UserRegistry = ({ onOpenDossier, onBan, onNuke }) => {
                                                     <MapPin size={10} />
                                                     Pin: {locations[user.id].lat.toFixed(4)}, {locations[user.id].lng.toFixed(4)}
                                                 </a>
+                                            ) : (
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        fetchLocation(user.id);
+                                                    }}
+                                                    className="text-[9px] font-black text-indigo-600 dark:text-indigo-400 hover:underline uppercase tracking-tighter"
+                                                    disabled={fetchingLocation[user.id]}
+                                                >
+                                                    {fetchingLocation[user.id] ? 'Linking...' : 'Recover Loc'}
+                                                </button>
                                             )}
                                         </div>
                                     </td>

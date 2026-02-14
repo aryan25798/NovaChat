@@ -1,56 +1,21 @@
-import { db } from "../firebase";
+import { db, functions } from "../firebase";
 import { doc, updateDoc, arrayRemove, deleteDoc, writeBatch, collection, getDocs, getDoc, serverTimestamp } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 
 /**
  * Exits a group. If the last user leaves, the group is deleted.
+ * USES CLOUD FUNCTION for atomic and recursive deletion security.
  * @param {string} chatId 
  * @param {string} userId 
  */
 export const exitGroup = async (chatId, userId) => {
-    const chatRef = doc(db, "chats", chatId);
-    const chatSnap = await getDoc(chatRef);
-
-    if (!chatSnap.exists()) throw new Error("Chat not found");
-
-    const chatData = chatSnap.data();
-    const updatedParticipants = chatData.participants.filter(p => p !== userId);
-
-    // If no participants left, delete the group
-    if (updatedParticipants.length === 0) {
-        const batch = writeBatch(db);
-        const messagesRef = collection(db, "chats", chatId, "messages");
-        const messagesSnap = await getDocs(messagesRef);
-        messagesSnap.forEach(msg => batch.delete(msg.ref));
-        batch.delete(chatRef);
-        await batch.commit();
-        return;
+    try {
+        const leaveGroupFn = httpsCallable(functions, 'leaveGroup');
+        await leaveGroupFn({ chatId });
+    } catch (error) {
+        console.error("Failed to exit group:", error);
+        throw error;
     }
-
-    // If user was admin, we might need to reassign, but for now just remove them.
-    // Ideally, if no admins left, promote the oldest member? 
-    // WhatsApp doesn't automatically promote, but let's keep it simple: just remove from role.
-
-    // We update participants and chatRole
-    const updatedRole = { ...chatData.chatRole };
-    delete updatedRole[userId];
-
-    // If the leaving user was the *only* admin, we should promote someone else randomly or oldest
-    const remainingAdmins = Object.keys(updatedRole).filter(uid => updatedRole[uid] === 'admin');
-    if (remainingAdmins.length === 0 && updatedParticipants.length > 0) {
-        // Promote the first remaining participant to admin
-        updatedRole[updatedParticipants[0]] = 'admin';
-    }
-
-    await updateDoc(chatRef, {
-        participants: arrayRemove(userId),
-        chatRole: updatedRole,
-        lastMessage: {
-            text: `${chatData.participantInfo?.[userId]?.displayName || 'A user'} left the group`,
-            timestamp: new Date(),
-            type: 'system'
-        },
-        lastMessageTimestamp: serverTimestamp()
-    });
 };
 
 /**

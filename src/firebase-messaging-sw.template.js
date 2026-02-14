@@ -23,8 +23,8 @@ messaging.onBackgroundMessage((payload) => {
     const notificationTitle = payload.notification.title;
     const notificationOptions = {
         body: payload.notification.body,
-        icon: '/whatsapp-icon.png',
-        badge: '/whatsapp-icon.png',
+        icon: '/nova-icon.png',
+        badge: '/nova-icon.png',
         tag: payload.notification.tag || 'general',
         data: payload.data || {}
     };

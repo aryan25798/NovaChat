@@ -81,6 +81,7 @@ const MessageBubble = ({ message, isOwn, onMediaClick }) => {
                             className="w-full max-h-[350px] object-cover rounded-lg transition-opacity hover:opacity-95"
                             onError={() => setImgError(true)}
                             loading="lazy"
+                            decoding="async"
                         />
                     ) : (
                         <div className="w-full h-[150px] flex flex-col items-center justify-center text-gray-500 gap-2">

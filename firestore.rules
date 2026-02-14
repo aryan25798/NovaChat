@@ -30,38 +30,19 @@ service cloud.firestore {
     }
 
     // Check if user is a participant of a specific chat
-    // OPTIMIZED: Prioritize ID string check for performance
+    // OPTIMIZED: Prioritize ID string check for performance. 
     function isParticipant(cid) {
       return isSignedIn() && (
-        (cid.matches('.*' + request.auth.uid + '.*')) ||
-        (exists(/databases/$(database)/documents/chats/$(cid)) && 
-         request.auth.uid in get(/databases/$(database)/documents/chats/$(cid)).data.participants)
+        (cid.matches('^' + request.auth.uid + '_.*') || cid.matches('.*_' + request.auth.uid + '$')) ||
+        (resource != null && request.auth.uid in resource.data.participants) ||
+        get(/databases/$(database)/documents/chats/$(cid)).data.participants.hasAny([request.auth.uid])
       );
     }
 
-    // Check if user is friends with the target user (for Status privacy)
-    function isFriend(targetUserId) {
-      // PERFORMANCE OPTIMIZATION: Try resource.data first if checking the current target doc
-      let targetUser = (request.path[4] == 'users' && request.path[5] == targetUserId) ? resource.data : get(/databases/$(database)/documents/users/$(targetUserId)).data;
-      return isSignedIn() && 
-        targetUserId != request.auth.uid &&
-        request.auth.uid in targetUser.friends;
-    }
-
-    // NEW: Check if the requester is blocked by the target user OR has blocked the target user
+    // Optimized Block Check: Avoid get() if target is null or self
     function isNotBlocked(targetUserId) {
-      // PERFORMANCE OPTIMIZATION: Try resource.data first if checking the current target doc
-      let targetUser = (request.path[4] == 'users' && request.path[5] == targetUserId) ? resource.data : get(/databases/$(database)/documents/users/$(targetUserId)).data;
-      let currentUser = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-      return !(request.auth.uid in targetUser.get('blockedUsers', [])) && 
-             !(targetUserId in currentUser.get('blockedUsers', []));
-    }
-
-    // NEW: Hide Super Admins from non-admins
-    function canSeeUser(userId) {
-      // OPTIMIZATION: Use resource.data if we are currently evaluating a user document read
-      let targetData = (request.path[4] == 'users' && request.path[5] == userId) ? resource.data : get(/databases/$(database)/documents/users/$(userId)).data;
-      return !targetData.get('superAdmin', false) || isAdmin();
+      return targetUserId == null || targetUserId == request.auth.uid || 
+        !(targetUserId in get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('blockedUsers', []));
     }
 
     // 1. Users Collection - SECURED
@@ -103,6 +84,12 @@ service cloud.firestore {
         // DISABLED: Client-side friend list modification is unsafe. Use Cloud Functions.
         // || (isSignedIn() && isNotBanned() && 
         //     request.resource.data.diff(resource.data).affectedKeys().hasOnly(['friends']));
+    }
+
+    // 1b. User Feed Subcollection - SECURED
+    match /users/{userId}/feed/{docId} {
+      allow read: if isOwner(userId);
+      allow write: if false; // Only manageable via Cloud Functions
     }
 
     // 2. Recursive Messages Access (For Admin CollectionGroup Queries)
@@ -259,6 +246,11 @@ service cloud.firestore {
        
        // Only admins can create/update/delete announcements
        allow create, update, delete: if isAdmin();
+    }
+    // 9. Audit Logs (Admin Only)
+    match /audit_logs/{logId} {
+       allow read: if isAdmin();
+       allow write: if false; // Only manageable via Cloud Functions
     }
   }
 }

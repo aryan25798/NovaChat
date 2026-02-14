@@ -42,20 +42,39 @@ const ChatPage = () => {
 
             // 1. If we have state, use it immediately
             if (location.state?.chatData) {
-                setChat(location.state.chatData);
+                const data = location.state.chatData;
+                setChat(data);
                 setLoading(false);
+                if (!data.isGhost) {
+                    // Start listener immediately for real-time updates without resolution
+                    subscribeToChat(doc(db, "chats", data.id));
+                    return;
+                }
             }
             // 2. OR Speculate if it's a direct URL hit
             else if (id.length === 28 || id.includes('_')) {
                 setChat({
                     id: speculatedId, // use strict canonical ID
                     isGhost: true,
-                    participants: isBot ? [currentUser.uid, id] : speculatedId.split('_'),
+                    participants: isBot ? [currentUser.uid, id] : (speculatedId.includes('_') ? speculatedId.split('_') : [currentUser.uid, speculatedId]),
                     type: isBot ? "gemini" : "private"
                 });
                 setLoading(false);
             } else {
                 setLoading(true);
+            }
+
+            // Define listener logic as a reusable function
+            function subscribeToChat(targetRef) {
+                const listenerKey = `chat-${targetRef.id}`;
+                unsubscribe = onSnapshot(targetRef, async (docSnap) => {
+                    if (isCancelled || !docSnap.exists()) return;
+                    const data = docSnap.data();
+                    setChat({ id: docSnap.id, ...data, isGhost: false });
+                }, (err) => {
+                    if (!isCancelled) listenerManager.handleListenerError(err, 'ChatPage');
+                });
+                listenerManager.subscribe(listenerKey, unsubscribe);
             }
 
             try {
@@ -139,15 +158,7 @@ const ChatPage = () => {
                 }
 
                 if (targetRef && !isCancelled) {
-                    const listenerKey = `chat-${targetRef.id}`;
-                    unsubscribe = onSnapshot(targetRef, async (docSnap) => {
-                        if (isCancelled || !docSnap.exists()) return;
-                        const data = docSnap.data();
-                        setChat({ id: docSnap.id, ...data, isGhost: false });
-                    }, (err) => {
-                        if (!isCancelled) listenerManager.handleListenerError(err, 'ChatPage');
-                    });
-                    listenerManager.subscribe(listenerKey, unsubscribe);
+                    subscribeToChat(targetRef);
                 }
             } catch (error) {
                 console.error("Chat Resolution Error:", error);

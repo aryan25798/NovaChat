@@ -1,17 +1,7 @@
-import { db, storage } from "../firebase";
-import {
-    collection,
-    doc,
-    getDoc,
-    setDoc,
-    updateDoc,
-    arrayUnion,
-    serverTimestamp,
-    query,
-    where,
-    onSnapshot
-} from "firebase/firestore";
-import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
+import { db, storage, auth } from '../firebase';
+import { collection, addDoc, serverTimestamp, query, where, getDocs, doc, setDoc, getDoc, updateDoc, arrayUnion, deleteDoc, orderBy, limit, onSnapshot } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import imageCompression from 'browser-image-compression';
 import { v4 as uuidv4 } from "uuid";
 import { listenerManager } from "../utils/ListenerManager";
 
@@ -31,12 +21,21 @@ export const postStatus = async (user, type, content, caption = "", background =
 
         // If content is a File, handle upload (Legacy/Fallback mode)
         if (type !== 'text' && content instanceof File) {
-            const storageRef = ref(storage, `status/${user.uid}/${Date.now()}_${content.name}`);
-            const uploadTask = uploadBytesResumable(storageRef, content);
+            let fileToUpload = content;
 
-            await new Promise((resolve, reject) => {
-                uploadTask.on('state_changed', null, reject, resolve);
-            });
+            // If it's an image, attempt compression
+            if (type === 'image') {
+                try {
+                    const options = { maxSizeMB: 1, maxWidthOrHeight: 1920, useWebWorker: true };
+                    fileToUpload = await imageCompression(content, options);
+                } catch (e) {
+                    console.warn("Status image compression failed:", e);
+                    // If compression fails, proceed with the original file
+                }
+            }
+
+            const storageRef = ref(storage, `status/${user.uid}/${Date.now()}_${fileToUpload.name}`);
+            await uploadBytes(storageRef, fileToUpload); // Use uploadBytes for simpler upload
             contentUrl = await getDownloadURL(storageRef);
         }
 
@@ -59,9 +58,24 @@ export const postStatus = async (user, type, content, caption = "", background =
         const userSnap = await getDoc(doc(db, "users", user.uid));
         const currentFriends = userSnap.exists() ? (userSnap.data().friends || []) : [];
 
+        // WRITE-TIME CLEANUP (TTL Simulation)
+        // Filter out items older than 24 hours to prevent document bloat
+        const now = Date.now();
+        const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+        let existingItems = [];
+        if (statusDoc.exists()) {
+            existingItems = (statusDoc.data().items || []).filter(item => {
+                const ts = item.timestamp?.toMillis ? item.timestamp.toMillis() : (item.timestamp instanceof Date ? item.timestamp.getTime() : 0);
+                return now - ts < ONE_DAY_MS;
+            });
+        }
+
+        const updatedItems = [...existingItems, newItem];
+
         if (statusDoc.exists()) {
             await updateDoc(statusRef, {
-                items: arrayUnion(newItem),
+                items: updatedItems, // semantic replacement instead of arrayUnion
                 userPhoto: user.photoURL,
                 userName: user.displayName,
                 lastUpdated: serverTimestamp(),
@@ -107,125 +121,98 @@ export const subscribeToMyStatus = (userId, onUpdate) => {
     return () => listenerManager.unsubscribe(listenerKey);
 };
 
-// --- Subscribe to Contact Updates ---
-export const subscribeToRecentUpdates = (userId, friendIds, onUpdate) => {
-    // 1. Scalability Guard: If no friends, return empty immediately.
-    if (!friendIds || friendIds.length === 0) {
-        onUpdate({ recent: [], viewed: [] });
-        return () => { };
-    }
+// --- EFFICIENCY UPGRADE: Single-Listener Feed + Sync ---
+// Replaces the old O(N) listener loop.
 
-    // 2. Scalability Fix: Chunk friendIds into groups of 30 (Firestore 'in' limit)
-    const CHUNK_SIZE = 30;
-    const chunks = [];
-    for (let i = 0; i < friendIds.length; i += CHUNK_SIZE) {
-        chunks.push(friendIds.slice(i, i + CHUNK_SIZE));
-    }
+import { functions } from "../firebase";
+import { httpsCallable } from "firebase/functions";
 
-    const unsubscribers = [];
-    // Store results from each chunk to merge them
-    const resultsMap = new Map(); // chunkIndex -> { recent: [], viewed: [] }
+/**
+ * 1. Listen to the "Feed Signal" document.
+ * This document contains lightweight timestamps of friends who updated their status.
+ * Path: users/{uid}/feed/status_signals
+ */
+export const subscribeToStatusFeed = (userId, onSignal) => {
+    const listenerKey = `status-feed-${userId}`;
+    const feedRef = doc(db, "users", userId, "feed", "status_signals");
 
-    const mergeAndEmit = () => {
-        let allRecent = [];
-        let allViewed = [];
-        resultsMap.forEach(res => {
-            allRecent = [...allRecent, ...res.recent];
-            allViewed = [...allViewed, ...res.viewed];
-        });
-
-        // Sort by timestamp desc
-        const sortFn = (a, b) => {
-            // Use latest status timestamp in the user's stack
-            const getTs = (s) => s.statuses[s.statuses.length - 1]?.timestamp?.toDate?.() || new Date(0);
-            return getTs(b) - getTs(a);
-        };
-
-        onUpdate({
-            recent: allRecent.sort(sortFn),
-            viewed: allViewed.sort(sortFn)
-        });
-    };
-
-    chunks.forEach((chunk, index) => {
-        const listenerKey = `friends-status-${userId}-chunk-${index}`;
-
-        const q = query(
-            collection(db, STATUS_COLLECTION),
-            where("userId", "in", chunk),
-            where("allowedUIDs", "array-contains", userId)
-        );
-
-        const unsubscribe = onSnapshot(q, (snap) => {
-            const updates = [];
-            const viewed = [];
-            const now = Date.now();
-
-            snap.forEach(docSnap => {
-                const data = docSnap.data();
-                if (data.userId === userId) return;
-
-                const activeItems = (data.items || []).filter(item => {
-                    const ts = item.timestamp?.toMillis ? item.timestamp.toMillis() : (item.timestamp instanceof Date ? item.timestamp.getTime() : 0);
-                    return now - ts < 24 * 60 * 60 * 1000;
-                });
-
-                if (activeItems.length > 0) {
-                    const hasUnviewed = activeItems.some(item => !item.viewers?.includes(userId));
-                    const statusObj = {
-                        id: docSnap.id,
-                        user: { uid: data.userId, displayName: data.userName, photoURL: data.userPhoto },
-                        statuses: activeItems.map(item => ({
-                            ...item,
-                            timestamp: { toDate: () => (item.timestamp?.toDate ? item.timestamp.toDate() : new Date(item.timestamp)) }
-                        }))
-                    };
-
-                    if (hasUnviewed) updates.push(statusObj);
-                    else viewed.push(statusObj);
-                }
-            });
-
-            resultsMap.set(index, { recent: updates, viewed: viewed });
-            mergeAndEmit();
-
-        }, (error) => {
-            listenerManager.handleListenerError(error, `FriendsStatus-Chunk-${index}`);
-        });
-
-        unsubscribers.push({ key: listenerKey, unsub: unsubscribe });
-        listenerManager.subscribe(listenerKey, unsubscribe);
+    const unsubscribe = onSnapshot(feedRef, (docSnap) => {
+        if (docSnap.exists()) {
+            // Signals: { [friendId]: { timestamp, userName, count, latestId } }
+            onSignal(docSnap.data());
+        } else {
+            onSignal({});
+        }
+    }, (error) => {
+        // Silent fail or retry
+        console.warn("Status feed listener error", error);
     });
 
-    return () => {
-        unsubscribers.forEach(({ key, unsub }) => {
-            unsub();
-            listenerManager.unsubscribe(key);
-        });
-    };
+    listenerManager.subscribe(listenerKey, unsubscribe);
+    return () => listenerManager.unsubscribe(listenerKey);
 };
 
+export const syncStatuses = async (knownState = {}) => {
+    const isFcmBlocked = typeof sessionStorage !== 'undefined' && sessionStorage.getItem('nova_fcm_backoff_active') === 'true';
+    if (isFcmBlocked) {
+        console.warn("Status sync: Skipping sync (Backoff Active due to previous throttling)");
+        return { updates: [] };
+    }
+
+    try {
+        const syncFn = httpsCallable(functions, 'syncStatusFeed');
+        const result = await syncFn({ knownState });
+        return result.data; // { updates: [ ... ], hasMore: bool }
+    } catch (error) {
+        const errStr = error.toString();
+        if (errStr.includes('401') || errStr.includes('429')) {
+            console.warn("Status sync: FCM/Auth Throttling detected. Activating Backoff.");
+            if (typeof sessionStorage !== 'undefined') {
+                sessionStorage.setItem('nova_fcm_backoff_active', 'true');
+            }
+        }
+        console.error("Sync Statuses Failed", error);
+        return { updates: [] };
+    }
+};
+
+// Deprecated: Old O(N) Loop (Kept for reference if rollback needed, but commented out in spirit)
+// export const subscribeToRecentUpdates = ... (Deleted)
+
 // --- Mark Status Viewed ---
-export const markStatusAsViewed = async (statusDocId, itemIndex, userId, currentItems, currentViewersOfItem) => {
-    // 🛡️ Guard: Early exit if already viewed
-    if (currentViewersOfItem?.includes(userId)) return;
+import { runTransaction } from 'firebase/firestore';
+
+export const markStatusAsViewed = async (statusDocId, itemId, currentUserId) => {
+    if (!statusDocId || !itemId || !currentUserId) return;
 
     try {
         const statusRef = doc(db, STATUS_COLLECTION, statusDocId);
 
-        // OPTIMIZATION: Instead of full array replacement from client state,
-        // we could potentially use a transaction for high-traffic apps.
-        // For current scope, we ensure the update is localized.
-        const newItems = [...currentItems];
-        if (newItems[itemIndex]) {
-            if (!newItems[itemIndex].viewers) newItems[itemIndex].viewers = [];
-            if (!newItems[itemIndex].viewers.includes(userId)) {
-                newItems[itemIndex].viewers.push(userId);
-                await updateDoc(statusRef, { items: newItems });
-            }
-        }
+        await runTransaction(db, async (transaction) => {
+            const statusDoc = await transaction.get(statusRef);
+            if (!statusDoc.exists()) return;
+
+            const data = statusDoc.data();
+            const items = data.items || [];
+
+            // Find the item by its unique ID (instead of index for safety)
+            const itemIndex = items.findIndex(item => item.id === itemId);
+            if (itemIndex === -1) return;
+
+            const item = items[itemIndex];
+            if (!item.viewers) item.viewers = [];
+
+            // If already viewed, do nothing
+            if (item.viewers.includes(currentUserId)) return;
+
+            // Update local array clone
+            item.viewers.push(currentUserId);
+
+            // Write back the whole array (Transactions guarantee the read hasn't changed)
+            transaction.update(statusRef, { items });
+        });
     } catch (err) {
-        console.error("Error marking status as viewed:", err);
+        console.error("Error marking status as viewed (transaction):", err);
     }
 };
 

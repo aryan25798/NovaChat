@@ -1,14 +1,12 @@
-import React, { useState, useEffect } from "react";
-import { FaRegSmile, FaPaperclip, FaMicrophone, FaPaperPlane, FaTimes, FaMagic } from "react-icons/fa";
+import React, { useState, useEffect, useRef } from "react";
+import { FaRegSmile, FaPaperclip, FaMicrophone, FaPaperPlane, FaTimes } from "react-icons/fa";
 import { motion, AnimatePresence } from "framer-motion";
 import { Input } from "../ui/Input";
 import { Button } from "../ui/Button";
 import { getSmartReplies } from "../../services/AIAgentService";
+import { lightningSync } from "../../services/LightningService";
 
-export default function MessageInput({
-    newMessage,
-    setNewMessage,
-    handleInputChange,
+export function MessageInput({
     handleSendMessage,
     handleFileUpload,
     replyTo,
@@ -16,20 +14,22 @@ export default function MessageInput({
     inputRef,
     chat,
     otherUser,
-    messages
+    messages,
+    currentUser
 }) {
+    const [text, setText] = useState("");
     const [suggestions, setSuggestions] = useState([]);
     const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+    const [isSending, setIsSending] = useState(false);
+    const typingTimeoutRef = useRef(null);
 
     useEffect(() => {
         const fetchSuggestions = async () => {
             if (!messages || messages.length === 0) return;
-            // Only fetch if the last message is from the other user
             const lastMessage = messages[messages.length - 1];
             if (lastMessage.senderId === otherUser.uid && lastMessage.type === 'text') {
                 setIsLoadingSuggestions(true);
                 try {
-                    // Send last 5 messages for context to optimize speed
                     const replies = await getSmartReplies(messages.slice(-5));
                     setSuggestions(replies);
                 } catch (e) {
@@ -47,8 +47,50 @@ export default function MessageInput({
     }, [messages.length, otherUser.uid]);
 
     const handleSuggestionClick = (suggestion) => {
-        setNewMessage(suggestion);
+        setText(suggestion);
         setSuggestions([]);
+        inputRef.current?.focus();
+    };
+
+    const onInputChange = (e) => {
+        const val = e.target.value;
+        setText(val);
+
+        if (!chat?.id || !currentUser?.uid) return;
+
+        // Typing indicator
+        lightningSync.setTyping(chat.id, currentUser.uid, true);
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = setTimeout(() => {
+            lightningSync.setTyping(chat.id, currentUser.uid, false);
+        }, 3000);
+    };
+
+    const onSubmit = async (e) => {
+        if (e) e.preventDefault();
+        const textToSend = text.trim();
+        if (!textToSend && !replyTo) return;
+
+        setIsSending(true);
+        const savedText = text;
+        const savedReply = replyTo;
+
+        setText(""); // Clear immediately
+
+        try {
+            await handleSendMessage(textToSend, savedReply);
+            setSuggestions([]);
+            // Ensure typing is cleared
+            if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+            lightningSync.setTyping(chat.id, currentUser.uid, false);
+        } catch (err) {
+            // Restore on failure
+            setText(savedText);
+            setReplyTo(savedReply);
+            alert(`Failed to send: ${err.message || 'Check connection'}`);
+        } finally {
+            setIsSending(false);
+        }
     };
 
     return (
@@ -84,7 +126,6 @@ export default function MessageInput({
             </AnimatePresence>
 
             {/* Input Toolbar */}
-            {/* Input Toolbar */}
             <div className="min-h-[56px] md:min-h-[80px] glass px-1.5 md:px-4 py-1.5 md:py-3 flex items-end gap-1 md:gap-3 border-t border-border/30 relative transition-all">
                 {chat.status === 'pending' ? (
                     <motion.div
@@ -112,7 +153,7 @@ export default function MessageInput({
                             </label>
                         </div>
 
-                        <form className="flex-1 flex flex-col gap-1 relative mb-0.5" onSubmit={handleSendMessage}>
+                        <form className="flex-1 flex flex-col gap-1 relative mb-0.5" onSubmit={onSubmit}>
                             {replyTo && (
                                 <motion.div
                                     initial={{ opacity: 0, y: 10 }}
@@ -134,23 +175,25 @@ export default function MessageInput({
                                 name="message"
                                 id="message-input"
                                 placeholder="Type a message"
-                                value={newMessage}
-                                onChange={handleInputChange}
+                                value={text}
+                                onChange={onInputChange}
+                                autoComplete="off"
                                 className="bg-surface/50 border-transparent focus:border-primary/20 focus:bg-surface h-9 md:h-11 shadow-sm rounded-xl px-2.5 md:px-4 py-1.5 text-[14px] md:text-[15px] placeholder:text-text-2/60 transition-all duration-300"
                             />
                         </form>
 
                         <div className="flex items-center mb-0.5 shrink-0 ml-0.5">
-                            {newMessage.trim() === "" ? (
+                            {text.trim() === "" ? (
                                 <Button variant="ghost" size="icon" className="rounded-full text-text-2 hover:text-primary transition-colors min-w-[38px] min-h-[38px] w-10 h-10 md:w-10 md:h-10 flex items-center justify-center">
                                     <FaMicrophone className="text-lg md:text-xl" />
                                 </Button>
                             ) : (
                                 <Button
-                                    onClick={handleSendMessage}
-                                    className="rounded-full min-w-[38px] min-h-[38px] w-10 h-10 md:w-11 md:h-11 p-0 shadow-premium hover:shadow-premium-hover active:scale-95 transition-all flex items-center justify-center"
+                                    onClick={onSubmit}
+                                    disabled={isSending}
+                                    className="rounded-full min-w-[38px] min-h-[38px] w-10 h-10 md:w-11 md:h-11 p-0 shadow-premium hover:shadow-premium-hover active:scale-95 transition-all flex items-center justify-center disabled:opacity-50"
                                 >
-                                    <FaPaperPlane className="text-base md:text-lg" />
+                                    <FaPaperPlane className={`text-base md:text-lg ${isSending ? 'animate-pulse' : ''}`} />
                                 </Button>
                             )}
                         </div>
@@ -160,3 +203,6 @@ export default function MessageInput({
         </div>
     );
 }
+
+export const MemoizedMessageInput = React.memo(MessageInput);
+export default MemoizedMessageInput;

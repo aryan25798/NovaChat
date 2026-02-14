@@ -29,7 +29,6 @@ import { preCacheMedia } from "../utils/mediaCache";
 export default function ChatWindow({ chat, setChat }) {
     const [messages, setMessages] = useState([]); // Real-time messages (latest chunk)
     const [historyMessages, setHistoryMessages] = useState([]); // Manually fetched older messages
-    const [newMessage, setNewMessage] = useState("");
     const [typingUsers, setTypingUsers] = useState({});
     const [showContactInfo, setShowContactInfo] = useState(false);
     const [replyTo, setReplyTo] = useState(null);
@@ -87,26 +86,9 @@ export default function ChatWindow({ chat, setChat }) {
         navigate('/');
     }, [setChat, navigate]);
 
-    const handleInputChange = useCallback((e) => {
-        setNewMessage(e.target.value);
-        if (!chat?.id || !currentUser?.uid) return;
-        lightningSync.setTyping(chat.id, currentUser.uid, true);
-        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-        typingTimeoutRef.current = setTimeout(() => {
-            lightningSync.setTyping(chat.id, currentUser.uid, false);
-        }, 3000);
-    }, [chat?.id, currentUser?.uid]);
+    const handleSendMessageInternal = useCallback(async (textToSend, replyContext) => {
+        if (!textToSend && !replyContext) return;
 
-    const handleSendMessage = useCallback(async (e) => {
-        if (e) e.preventDefault();
-        const textToSend = newMessage.trim();
-        if (!textToSend && !replyTo) return;
-
-        // Clear input and reply status immediately
-        setNewMessage("");
-        setReplyTo(null);
-
-        // Optimistic UI Update: RESTORED via pendingQueue for absolute speed
         const messageId = doc(collection(db, "chats", chat.id, "messages")).id;
         const optimisticMsg = {
             id: messageId,
@@ -116,34 +98,26 @@ export default function ChatWindow({ chat, setChat }) {
             timestamp: new Date(),
             status: 'pending',
             type: 'text',
-            replyTo: replyTo,
+            replyTo: replyContext,
             isOptimistic: true
         };
 
-        // Instant local update (Queued)
         setPendingQueue(prev => [...prev, optimisticMsg]);
 
         try {
-            // console.log(`[ChatWindow] Ultra-Lightning send: ${messageId}`); // Squelch debug log
-
             const metadata = {
                 type: chat.type,
                 participants: chat.participants
             };
 
-            await sendMessage(chat.id, currentUser, textToSend, replyTo, messageId, metadata);
-
-            // Mark as 'sent' instantly in the local queue so the clock turns to a tick
-            setPendingQueue(prev => prev.map(m => m.id === messageId ? { ...m, status: 'sent' } : m));
-
-            // The main listener will eventually prune this when the real message ID arrives from Firestore
+            await sendMessage(chat.id, currentUser, textToSend, replyContext, messageId, metadata);
+            setReplyTo(null);
         } catch (err) {
             console.error("[ChatWindow] Send failed:", err);
-            setNewMessage(textToSend);
             setPendingQueue(prev => prev.filter(m => m.id !== messageId));
-            alert(`Failed to send: ${err.message || 'Unknown error'}`);
+            throw err;
         }
-    }, [newMessage, replyTo, chat, currentUser]);
+    }, [chat, currentUser]);
 
     const { startUpload } = useFileUpload();
 
@@ -151,20 +125,49 @@ export default function ChatWindow({ chat, setChat }) {
         const file = e.target.files[0];
         if (!file) return;
 
+        let fileToUpload = file;
+
+        // Compression for Images
+        if (file.type.startsWith('image/')) {
+            try {
+                const options = {
+                    maxSizeMB: 1,
+                    maxWidthOrHeight: 1920,
+                    useWebWorker: true
+                };
+                fileToUpload = await imageCompression(file, options);
+                console.log(`Computed: ${(file.size / 1024 / 1024).toFixed(2)}MB -> ${(fileToUpload.size / 1024 / 1024).toFixed(2)}MB`);
+            } catch (err) {
+                console.warn("Image compression failed, using original.", err);
+            }
+        }
+
         try {
-            const { uploadTask } = await startUpload(file, `uploads/${chat.id}/${Date.now()}_${file.name}`);
+            const { uploadTask } = await startUpload(fileToUpload, `uploads/${chat.id}/${Date.now()}_${fileToUpload.name}`);
 
             uploadTask.on('state_changed',
                 null,
                 (error) => console.error("Upload error:", error),
                 async () => {
-                    const url = await getDownloadURL(uploadTask.snapshot.ref);
-                    await sendMediaMessage(chat.id, currentUser, {
-                        url,
-                        fileType: file.type,
-                        fileName: file.name,
-                        fileSize: file.size
-                    });
+                    try {
+                        const url = await getDownloadURL(uploadTask.snapshot.ref);
+                        // [RESILIENCE] Verify chat still exists before finishing media message
+                        const chatRef = doc(db, "chats", chat.id);
+                        const chatSnap = await getDoc(chatRef);
+                        if (!chatSnap.exists()) {
+                            throw new Error("Chat was deleted during upload.");
+                        }
+
+                        await sendMediaMessage(chat.id, currentUser, {
+                            url,
+                            fileType: file.type,
+                            fileName: file.name,
+                            fileSize: file.size
+                        });
+                    } catch (resyncErr) {
+                        console.error("[ChatWindow] Failed to finalize media message:", resyncErr);
+                        alert("Media uploaded but failed to send as message. Please try sending again.");
+                    }
                 }
             );
         } catch (error) {
@@ -191,13 +194,15 @@ export default function ChatWindow({ chat, setChat }) {
         await addReaction(chat.id, msgId, emoji, currentUser.uid);
     }, [chat?.id, currentUser?.uid]);
 
-    // Cleanup & Ghost Transition
+    // Unified Loading & Ghost Transition
     useEffect(() => {
         if (!chat?.id || !currentUser?.uid) return;
-        if (loading && chat.isGhost) {
+
+        // Only set loading to false for ghosts; real chats are handled by message listener
+        if (chat.isGhost && loading) {
             setLoading(false);
         }
-    }, [chat?.id, chat?.isGhost]);
+    }, [chat?.id, chat?.isGhost, loading]);
 
     // Reset when chat changes
     useEffect(() => {
@@ -236,10 +241,22 @@ export default function ChatWindow({ chat, setChat }) {
             setTypingUsers(typingObj);
         });
 
+        // 4. Instant Signal Subscription (For ultra-fast incoming messages)
+        const unsubSignals = lightningSync.subscribeToSignals(chat.id, (payload) => {
+            if (payload && payload.senderId !== currentUser.uid) {
+                // If the message isn't in our list yet, we can't show the full UI 
+                // but for simple text chats we could inject a ghost msg. 
+                // For now, this signal mainly ensures onSnapshot fires faster or 
+                // we can trigger an immediate fetch if needed.
+                // In this architecture, it mostly verifies connectivity.
+            }
+        });
+
         return () => {
             unsubscribe();
             unsubStatus();
             unsubTyping();
+            unsubSignals();
             lightningSync.cleanup(chat.id);
         };
     }, [chat?.id, currentUser?.uid]);
@@ -331,45 +348,45 @@ export default function ChatWindow({ chat, setChat }) {
     }, [messages, historyMessages]);
 
     const filteredMessages = useMemo(() => {
-        const clearedAt = chat?.clearedAt?.[currentUser.uid]?.toDate?.() || new Date(0);
-
-        const uniqueMessages = new Map();
-        if (serverResults?.length > 0) serverResults.forEach(m => uniqueMessages.set(m.id, m));
-        historyMessages.forEach(m => uniqueMessages.set(m.id, m));
-        messages.forEach(m => uniqueMessages.set(m.id, m));
-        pendingQueue.forEach(m => uniqueMessages.set(m.id, m));
-
-        const allMessages = Array.from(uniqueMessages.values()).map(m => {
-            if (rtdbStatus[m.id]) return { ...m, status: rtdbStatus[m.id] };
-            return m;
-        });
-
+        const clearedAt = chat?.clearedAt?.[currentUser.uid]?.toMillis?.() || (chat?.clearedAt?.[currentUser.uid] instanceof Date ? chat.clearedAt[currentUser.uid].getTime() : 0);
         const lowerQuery = searchQuery?.toLowerCase();
-        const filtered = allMessages.filter(m => {
-            const msgTime = m.timestamp?.toDate?.() || new Date(m.timestamp || 0);
-            if (msgTime <= clearedAt) return false;
-            if (m.hiddenBy?.includes(currentUser.uid)) return false;
+
+        // One-pass insertion into a Map for deduplication
+        const uniqueMap = new Map();
+
+        const getMillis = (t) => {
+            if (!t) return 0;
+            if (typeof t.toMillis === 'function') return t.toMillis();
+            if (t instanceof Date) return t.getTime();
+            if (t.seconds) return t.seconds * 1000;
+            return 0;
+        };
+
+        const processMsg = (m) => {
+            const msgMillis = getMillis(m.timestamp);
+            if (msgMillis <= clearedAt) return;
+            if (m.hiddenBy?.includes(currentUser.uid)) return;
             if (lowerQuery) {
                 const searchText = m.textLower || m.text?.toLowerCase() || "";
-                return searchText.includes(lowerQuery);
+                if (!searchText.includes(lowerQuery)) return;
             }
-            return true;
-        });
+            // Always prefer newer/real data over optimistic in case of ID collisions
+            uniqueMap.set(m.id, m);
+        };
 
-        return filtered.sort((a, b) => {
-            const getMillis = (t) => {
-                if (!t) return 0;
-                if (typeof t.toMillis === 'function') return t.toMillis();
-                if (t instanceof Date) return t.getTime();
-                if (t.seconds) return t.seconds * 1000;
-                return 0;
-            };
+        if (serverResults?.length > 0) serverResults.forEach(processMsg);
+        historyMessages.forEach(processMsg);
+        messages.forEach(processMsg);
+        pendingQueue.forEach(processMsg);
+
+        // Sort just once at the end
+        return Array.from(uniqueMap.values()).sort((a, b) => {
             const tA = getMillis(a.timestamp);
             const tB = getMillis(b.timestamp);
-            if (Math.abs(tA - tB) < 100) return a.id.localeCompare(b.id);
-            return tA - tB;
+            if (tA !== tB) return tA - tB;
+            return a.id.localeCompare(b.id);
         });
-    }, [messages, historyMessages, searchQuery, serverResults, chat, currentUser.uid, pendingQueue, rtdbStatus]);
+    }, [messages, historyMessages, searchQuery, serverResults, chat, currentUser.uid, pendingQueue]);
 
     const mediaMessages = useMemo(() => {
         return filteredMessages.filter(m => {
@@ -406,8 +423,12 @@ export default function ChatWindow({ chat, setChat }) {
         return 'image';
     };
 
-    const { getFriendStatus } = useFriend();
-    const friendStatus = otherUser.uid ? getFriendStatus(otherUser.uid) : 'none';
+    const { getFriendStatus, loading: friendsLoading } = useFriend();
+    const friendStatus = useMemo(() => {
+        if (!otherUser?.uid || friendsLoading) return 'friend'; // Default to assuming friend during quick loads to prevent flicker
+        return getFriendStatus(otherUser.uid);
+    }, [otherUser?.uid, getFriendStatus, friendsLoading]);
+
     const canMessage = otherUser.isGroup || friendStatus === 'friend' || otherUser.isGemini;
 
     const handleShowInfo = useCallback(() => setShowContactInfo(true), []);
@@ -537,6 +558,7 @@ export default function ChatWindow({ chat, setChat }) {
                     messagesEndRef={messagesEndRef}
                     loading={loading}
                     onMediaClick={handleMediaClick}
+                    rtdbStatus={rtdbStatus}
                 />
             </div>
 
@@ -551,10 +573,7 @@ export default function ChatWindow({ chat, setChat }) {
                 </div>
             ) : (
                 <MessageInput
-                    newMessage={newMessage}
-                    setNewMessage={setNewMessage}
-                    handleInputChange={handleInputChange}
-                    handleSendMessage={handleSendMessage}
+                    handleSendMessage={handleSendMessageInternal}
                     handleFileUpload={handleFileUpload}
                     replyTo={replyTo}
                     setReplyTo={setReplyTo}
@@ -562,6 +581,7 @@ export default function ChatWindow({ chat, setChat }) {
                     chat={chat}
                     otherUser={otherUser}
                     messages={filteredMessages}
+                    currentUser={currentUser}
                 />
             )}
 

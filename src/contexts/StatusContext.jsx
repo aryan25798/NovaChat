@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react";
 import { useAuth } from "./AuthContext";
 import { useFriend } from "./FriendContext";
-import { subscribeToMyStatus, subscribeToRecentUpdates, postStatus } from "../services/statusService";
+import { subscribeToMyStatus, subscribeToStatusFeed, syncStatuses, postStatus } from "../services/statusService";
 
 const StatusContext = createContext();
 
@@ -41,20 +41,79 @@ export function StatusProvider({ children }) {
         return unsubscribe;
     }, [currentUser]);
 
-    // 2. Subscribe to Friends' Statuses
-    useEffect(() => {
-        if (!currentUser || !friends) return;
+    // 2. Subscribe to Friends' Status Feed (Efficient Single Listener)
+    const statusesRef = React.useRef(statuses);
 
-        // friends is an array of UIDs from FriendContext
-        const unsubscribe = subscribeToRecentUpdates(currentUser.uid, friends, (data) => {
-            // data matches { recent: [...], viewed: [...] }
-            // For now, StatusPage combines them or handles them separately. 
-            // The original logic expected a single list for 'Recent updates'.
-            setStatuses([...data.recent, ...data.viewed]);
+    // Keep ref in sync for the callback
+    useEffect(() => {
+        statusesRef.current = statuses;
+    }, [statuses]);
+
+    const lastSyncTimeRef = React.useRef(0);
+    const syncTimeoutRef = React.useRef(null);
+
+    useEffect(() => {
+        if (!currentUser) return;
+
+        const performSync = async () => {
+            // Throttling: Don't sync more than once every 30 seconds (Scale optimized)
+            const now = Date.now();
+            if (now - lastSyncTimeRef.current < 30000) {
+                // If a sync is requested during cooldown, schedule it for later if not already scheduled
+                if (!syncTimeoutRef.current) {
+                    syncTimeoutRef.current = setTimeout(() => {
+                        syncTimeoutRef.current = null;
+                        performSync();
+                    }, 30000 - (now - lastSyncTimeRef.current));
+                }
+                return;
+            }
+
+            lastSyncTimeRef.current = now;
+            if (syncTimeoutRef.current) {
+                clearTimeout(syncTimeoutRef.current);
+                syncTimeoutRef.current = null;
+            }
+
+            try {
+                const knownState = {};
+                statusesRef.current.forEach(s => {
+                    const ts = s.lastUpdated?.toMillis ? s.lastUpdated.toMillis() : (new Date(s.lastUpdated || 0).getTime());
+                    knownState[s.userId] = ts;
+                });
+
+                const syncResult = await syncStatuses(knownState);
+                const updates = syncResult?.updates || [];
+
+                if (updates.length > 0) {
+                    setStatuses(prev => {
+                        const newMap = new Map(prev.map(s => [s.userId, s]));
+                        updates.forEach(u => newMap.set(u.userId, u));
+                        return Array.from(newMap.values()).sort((a, b) => {
+                            const getTs = (s) => s.lastUpdated?.toMillis ? s.lastUpdated.toMillis() : new Date(s.lastUpdated || 0).getTime();
+                            return getTs(b) - getTs(a);
+                        });
+                    });
+                }
+            } catch (e) {
+                console.debug("Sync yielded error (suppressed by UI):", e.message);
+            }
+        };
+
+        // A. Initial Sync
+        performSync();
+
+        // B. Listen to Feed Signals
+        const unsubscribe = subscribeToStatusFeed(currentUser.uid, (signalMap) => {
+            // Signal received! Trigger throttled sync.
+            performSync();
         });
 
-        return unsubscribe;
-    }, [currentUser, friends]);
+        return () => {
+            unsubscribe();
+            if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+        };
+    }, [currentUser?.uid]);
 
     const addStatus = useCallback(async (type, content, background = null) => {
         if (!currentUser) return;

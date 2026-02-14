@@ -9,61 +9,114 @@ import {
     where,
     writeBatch,
     orderBy,
-    getDoc
+    getDoc,
+    startAfter,
+    limit
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { listenerManager } from '../utils/ListenerManager';
 
 // --- Statistics & Real-time Monitoring ---
 
-export const subscribeToDashboardStats = (callback) => {
-    // We'll return an object with unsubscribe functions to allow individual cleanup if needed, 
-    // or a single function that calls all of them.
+// --- Pagination Helpers ---
+const DEFAULT_LIMIT = 50;
 
-    // For simplicity, we can fetch these in the component, or abstract here. 
-    // Given the real-time nature, passing callbacks for each stream is cleaner.
+/**
+ * Generic Paginated Fetcher
+ * @param {string} collectionName 
+ * @param {object} lastDoc - The last document from the previous fetch (for cursor)
+ * @param {number} limitCount 
+ * @returns {Promise<{data: Array, lastDoc: object}>}
+ */
+const fetchPaginatedData = async (collectionName, lastDoc = null, limitCount = DEFAULT_LIMIT) => {
+    try {
+        let q = query(
+            collection(db, collectionName),
+            orderBy('createdAt', 'desc'), // Ensure you have this index or use a field that exists on all docs
+            limit(limitCount)
+        );
 
-    // However, to keep the service pattern consistent, let's export individual subscribers
-    return;
+        if (lastDoc) {
+            q = query(
+                collection(db, collectionName),
+                orderBy('createdAt', 'desc'),
+                startAfter(lastDoc),
+                limit(limitCount)
+            );
+        }
+
+        const snapshot = await getDocs(q);
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const newLastDoc = snapshot.docs[snapshot.docs.length - 1];
+
+        return { data, lastDoc: newLastDoc };
+    } catch (error) {
+        console.error(`Error fetching ${collectionName}:`, error);
+        throw error;
+    }
 };
 
-export const subscribeToUsers = (callback) => {
-    const listenerKey = 'admin-users';
-    const unsubscribe = onSnapshot(collection(db, "users"), (snap) => {
-        const users = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        callback(users);
-    }, (error) => {
-        listenerManager.handleListenerError(error, 'AdminUsers');
-    });
+export const fetchUsers = async (lastDoc = null) => {
+    // Users might not have 'createdAt' indexed reliably in all legacy docs, 
+    // so we might default to 'uid' or 'email' if needed, but 'createdAt' is best for "newest users".
+    // For now, let's assume 'createdAt' exists or fallback to a simpler query if needed.
+    // Actually, 'users' usually orders by joined date.
 
-    listenerManager.subscribe(listenerKey, unsubscribe);
-    return () => listenerManager.unsubscribe(listenerKey);
+    try {
+        let constraints = [orderBy('createdAt', 'desc'), limit(DEFAULT_LIMIT)];
+        if (lastDoc) constraints.push(startAfter(lastDoc));
+
+        const q = query(collection(db, "users"), ...constraints);
+        const snapshot = await getDocs(q);
+        return {
+            users: snapshot.docs.map(d => ({ id: d.id, ...d.data() })),
+            lastDoc: snapshot.docs[snapshot.docs.length - 1]
+        };
+    } catch (e) {
+        // Fallback: If 'createdAt' is missing on some docs, Firestore might throw.
+        // Try ordering by 'uid' as a stable fallback.
+        console.warn("Fetch users by createdAt failed, falling back to basic list", e);
+        const q = query(collection(db, "users"), limit(DEFAULT_LIMIT));
+        const snapshot = await getDocs(q);
+        return {
+            users: snapshot.docs.map(d => ({ id: d.id, ...d.data() })),
+            lastDoc: snapshot.docs[snapshot.docs.length - 1]
+        };
+    }
 };
 
-export const subscribeToChats = (callback) => {
-    const listenerKey = 'admin-chats';
-    const unsubscribe = onSnapshot(collection(db, "chats"), (snap) => {
-        const chats = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        callback(chats);
-    }, (error) => {
-        listenerManager.handleListenerError(error, 'AdminChats');
-    });
+export const fetchChats = async (lastDoc = null) => {
+    try {
+        let constraints = [orderBy('lastMessageTimestamp', 'desc'), limit(DEFAULT_LIMIT)];
+        if (lastDoc) constraints.push(startAfter(lastDoc));
 
-    listenerManager.subscribe(listenerKey, unsubscribe);
-    return () => listenerManager.unsubscribe(listenerKey);
+        const q = query(collection(db, "chats"), ...constraints);
+        const snapshot = await getDocs(q);
+        return {
+            chats: snapshot.docs.map(d => ({ id: d.id, ...d.data() })),
+            lastDoc: snapshot.docs[snapshot.docs.length - 1]
+        };
+    } catch (error) {
+        console.error("Error fetching chats:", error);
+        return { chats: [], lastDoc: null };
+    }
 };
 
-export const subscribeToStatuses = (callback) => {
-    const listenerKey = 'admin-statuses';
-    const unsubscribe = onSnapshot(collection(db, "statuses"), (snap) => {
-        const statuses = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        callback(statuses);
-    }, (error) => {
-        listenerManager.handleListenerError(error, 'AdminStatuses');
-    });
+export const fetchStatuses = async (lastDoc = null) => {
+    try {
+        let constraints = [orderBy('timestamp', 'desc'), limit(DEFAULT_LIMIT)];
+        if (lastDoc) constraints.push(startAfter(lastDoc));
 
-    listenerManager.subscribe(listenerKey, unsubscribe);
-    return () => listenerManager.unsubscribe(listenerKey);
+        const q = query(collection(db, "statuses"), ...constraints);
+        const snapshot = await getDocs(q);
+        return {
+            statuses: snapshot.docs.map(d => ({ id: d.id, ...d.data() })),
+            lastDoc: snapshot.docs[snapshot.docs.length - 1]
+        };
+    } catch (error) {
+        console.error("Error fetching statuses:", error);
+        return { statuses: [], lastDoc: null };
+    }
 };
 
 // --- User Management ---

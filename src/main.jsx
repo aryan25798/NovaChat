@@ -11,14 +11,29 @@ import { ThemeProvider } from './contexts/ThemeContext'
 
 
 
-// --- Service Worker Migration & Purge Logic ---
+import { registerSW } from 'virtual:pwa-register';
+
+// Register PWA Service Worker
+const updateSW = registerSW({
+  onNeedRefresh() {
+    console.log('New content available, please refresh.');
+  },
+  onOfflineReady() {
+    console.log('App ready to work offline.');
+  },
+});
+
+// --- Service Worker Migration & Purge Logic (Legacy) ---
 if ('serviceWorker' in navigator) {
-  const MIGRATION_KEY = 'nova_sw_migrated_v4';
+  const MIGRATION_KEY = 'nova_sw_migrated_v5'; // Bumped version
   if (!localStorage.getItem(MIGRATION_KEY)) {
     navigator.serviceWorker.getRegistrations().then((registrations) => {
       for (const registration of registrations) {
-        registration.unregister();
-        console.log('Stale Service Worker unregistered.');
+        // Only unregister if it's NOT our current sw.js or if it's from a legacy path
+        if (registration.active?.scriptURL.includes('firebase-messaging-sw')) {
+          registration.unregister();
+          console.log('Legacy FCM Service Worker unregistered.');
+        }
       }
       localStorage.setItem(MIGRATION_KEY, 'true');
     });

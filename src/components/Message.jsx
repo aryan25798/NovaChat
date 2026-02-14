@@ -11,10 +11,14 @@ import MessageBubble from './chat/MessageBubble';
 
 const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "👏"];
 
-const Message = memo(({ message, chat, isOwn, onDelete, onReply, onReact, onMediaClick, showBlueTicks, showTail }) => {
+const Message = memo(({ message, chat, isOwn, onDelete, onReply, onReact, onMediaClick, showBlueTicks, showTail, currentStatus }) => {
     const [showMenu, setShowMenu] = useState(false);
     const { currentUser } = useAuth();
 
+    // Derive effective status
+    const effectiveStatus = currentStatus || message.status;
+    const isRead = effectiveStatus === 'read' || message.read;
+    const isDelivered = effectiveStatus === 'delivered' || message.delivered;
 
     const formatTime = (timestamp) => {
         if (!timestamp) return "";
@@ -209,9 +213,9 @@ const Message = memo(({ message, chat, isOwn, onDelete, onReply, onReact, onMedi
                             {isOwn && (
                                 <span className={cn(
                                     "text-[15px] transition-colors duration-300 -mt-0.5",
-                                    message.read ? "text-[#53bdeb]" : "text-black/30 dark:text-white/30"
+                                    isRead ? "text-[#53bdeb]" : "text-black/30 dark:text-white/30"
                                 )}>
-                                    {message.status === 'pending' ? <FaClock className="text-[10px]" /> : (message.read ? <FaCheckDouble /> : (message.delivered ? <FaCheckDouble /> : <FaCheck />))}
+                                    {effectiveStatus === 'pending' ? <FaClock className="text-[10px]" /> : (isRead ? <FaCheckDouble /> : (isDelivered ? <FaCheckDouble /> : <FaCheck />))}
                                 </span>
                             )}
                         </div>

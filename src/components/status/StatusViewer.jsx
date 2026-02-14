@@ -31,10 +31,8 @@ const StatusViewer = ({ statusGroup, onClose, allStatuses = [] }) => {
         if (currentGroup.user.uid !== currentUser.uid) {
             markStatusAsViewed(
                 currentGroup.id || currentGroup.user.uid,
-                currentIndex,
-                currentUser.uid,
-                currentGroup.statuses,
-                currentStatus.viewers
+                currentStatus.id,
+                currentUser.uid
             );
         }
     }, [currentIndex, currentGroup, currentUser]);
@@ -43,29 +41,26 @@ const StatusViewer = ({ statusGroup, onClose, allStatuses = [] }) => {
     const [duration, setDuration] = useState(5000);
 
     // Timer Logic
+    // Timer Logic - CSS Animation Handler
     useEffect(() => {
-        if (!currentStatus || isPaused) return;
+        if (!currentStatus) return;
 
-        setProgress(0);
         let currentDuration = 5000;
         if (currentStatus.type === 'video') {
-            currentDuration = videoRef.current?.duration ? videoRef.current.duration * 1000 : 30000;
+            // Default or wait for onLoadedMetadata
+            currentDuration = videoRef.current?.duration ? videoRef.current.duration * 1000 : 5000;
         }
         setDuration(currentDuration);
 
-        const interval = 50;
-        const timer = setInterval(() => {
-            setProgress((prev) => {
-                if (prev >= 100) {
-                    handleNext();
-                    return 0;
-                }
-                return prev + (100 / (currentDuration / interval));
-            });
-        }, interval);
+        // Reset progress animation when index changes
+        setProgress(0);
+        // Force reflow/reset logic is handled by keying the progress bar in render
+    }, [currentIndex, currentGroup, currentStatus.type]);
 
-        return () => clearInterval(timer);
-    }, [currentIndex, currentGroup, isPaused, currentStatus.type]);
+    // Auto-advance is now handled by onAnimationEnd of the progress bar
+    const handleAnimationEnd = () => {
+        handleNext();
+    };
 
     const handleNext = () => {
         if (currentIndex < currentGroup.statuses.length - 1) {
@@ -168,13 +163,22 @@ const StatusViewer = ({ statusGroup, onClose, allStatuses = [] }) => {
                         <IoClose className="w-6 h-6" />
                     </button>
 
-                    {/* Progress Bar Container */}
+                    {/* Progress Bar Container - CSS Animation */}
                     <div className="absolute top-2 w-full max-w-2xl px-2 flex gap-1 z-40">
                         {currentGroup.statuses.map((_, idx) => (
                             <div key={idx} className="h-0.5 flex-1 bg-white/30 rounded-full overflow-hidden">
                                 <div
-                                    className={`h-full bg-white transition-all duration-75 ease-linear ${idx < currentIndex ? 'w-full' : idx === currentIndex ? '' : 'w-0'}`}
-                                    style={{ width: idx === currentIndex ? `${progress}%` : undefined }}
+                                    className={`h-full bg-white origin-left ${idx === currentIndex ? 'animate-progress' : idx < currentIndex ? 'w-full' : 'w-0'}`}
+                                    style={{
+                                        width: idx < currentIndex ? '100%' : idx > currentIndex ? '0%' : '100%',
+                                        animationDuration: idx === currentIndex ? `${duration}ms` : '0ms',
+                                        animationPlayState: isPaused ? 'paused' : 'running',
+                                        transform: idx === currentIndex ? 'scaleX(0)' : 'none', // Initial state for animation
+                                        // We use a custom keyframe defined in global CSS or inline style for scaleX from 0 to 1?
+                                        // Actually simplest is 'width' transition if we didn't want animation.
+                                        // For CSS animation: 'width' 0->100%
+                                    }}
+                                    onAnimationEnd={idx === currentIndex ? handleAnimationEnd : undefined}
                                 />
                             </div>
                         ))}

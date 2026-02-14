@@ -5,14 +5,14 @@ import { httpsCallable } from 'firebase/functions';
 import { format } from 'date-fns';
 import { FaTrash, FaEyeSlash, FaSearch, FaUserShield, FaExternalLinkAlt, FaFileAlt, FaDownload } from 'react-icons/fa';
 import { Search, ShieldAlert, User, MoreHorizontal, Info, X } from 'lucide-react';
-import { subscribeToTypingStatus } from '../../services/typingService';
+import { lightningSync } from '../../services/LightningService';
 import { VideoPlayer } from '../ui/VideoPlayer';
 import { downloadMedia } from '../../utils/downloadHelper';
 
-const SpyChatViewer = ({ chatId, onClose, onOpenDossier }) => {
+const SpyChatViewer = ({ chatId, onClose, onOpenDossier, sharedParticipants = {} }) => {
     const [messages, setMessages] = useState([]);
     const [chatData, setChatData] = useState(null);
-    const [participants, setParticipants] = useState({});
+    const [participants, setParticipants] = useState(sharedParticipants);
     const [error, setError] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [typingUsers, setTypingUsers] = useState({});
@@ -32,18 +32,22 @@ const SpyChatViewer = ({ chatId, onClose, onOpenDossier }) => {
                     const data = chatSnap.data();
                     setChatData(data);
 
-                    const pMap = {};
-                    // INDUSTRY GRADE: Parallel fetching for scalability
+                    const pMap = { ...sharedParticipants };
                     const pList = data.participants || [];
-                    await Promise.all(pList.map(async (uid) => {
-                        const uSnap = await getDoc(doc(db, 'users', uid));
-                        if (uSnap.exists()) {
-                            pMap[uid] = uSnap.data();
-                        } else {
-                            // Robust Fallback
-                            pMap[uid] = { uid, displayName: 'External/Deleted' };
-                        }
-                    }));
+
+                    // Only fetch profiles not in the shared cache
+                    const missingProfiles = pList.filter(uid => !pMap[uid]);
+
+                    if (missingProfiles.length > 0) {
+                        await Promise.all(missingProfiles.map(async (uid) => {
+                            const uSnap = await getDoc(doc(db, 'users', uid));
+                            if (uSnap.exists()) {
+                                pMap[uid] = uSnap.data();
+                            } else {
+                                pMap[uid] = { uid, displayName: 'External/Deleted' };
+                            }
+                        }));
+                    }
                     setParticipants(pMap);
                 }
             } catch (err) {
@@ -74,7 +78,9 @@ const SpyChatViewer = ({ chatId, onClose, onOpenDossier }) => {
             if (err.code === 'permission-denied') setError('PERMISSION_DENIED');
         });
 
-        const unsubscribeTyping = subscribeToTypingStatus(chatId, null, (typingData) => {
+        const unsubscribeTyping = lightningSync.subscribeToTyping(chatId, (uids) => {
+            const typingData = {};
+            uids.forEach(uid => { typingData[uid] = true; });
             setTypingUsers(typingData);
         });
 

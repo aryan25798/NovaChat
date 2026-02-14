@@ -34,22 +34,12 @@ const env = loadEnv();
 // Fallback to process.env if deployed where env vars are injected
 const getVar = (key) => process.env[key] || env[key] || "";
 
-const templatePath = path.resolve(__dirname, '../src/firebase-messaging-sw.template.js');
-const outputPath = path.resolve(__dirname, '../public/firebase-messaging-sw.js');
-
-const template = fs.readFileSync(templatePath, 'utf-8');
-
-const content = template
-    .replace('__VITE_FIREBASE_API_KEY__', getVar('VITE_FIREBASE_API_KEY'))
-    .replace('__VITE_FIREBASE_AUTH_DOMAIN__', getVar('VITE_FIREBASE_AUTH_DOMAIN'))
-    .replace('__VITE_FIREBASE_PROJECT_ID__', getVar('VITE_FIREBASE_PROJECT_ID'))
-    .replace('__VITE_FIREBASE_STORAGE_BUCKET__', getVar('VITE_FIREBASE_STORAGE_BUCKET'))
-    .replace('__VITE_FIREBASE_MESSAGING_SENDER_ID__', getVar('VITE_FIREBASE_MESSAGING_SENDER_ID'))
-    .replace('__VITE_FIREBASE_APP_ID__', getVar('VITE_FIREBASE_APP_ID'))
-    .replace('__VITE_FIREBASE_DATABASE_URL__', getVar('VITE_FIREBASE_DATABASE_URL'));
-
-fs.writeFileSync(outputPath, content);
-console.log('✅ Generated public/firebase-messaging-sw.js');
+/* Standardize on a single Service Worker (sw.js) managed by VitePWA */
+const fcmOutputPath = path.resolve(__dirname, '../public/firebase-messaging-sw.js');
+if (fs.existsSync(fcmOutputPath)) {
+    fs.unlinkSync(fcmOutputPath);
+    console.log('🗑️ Deleted legacy public/firebase-messaging-sw.js');
+}
 
 // Also generate src/sw.js from src/sw.template.js
 const mainSwTemplatePath = path.resolve(__dirname, '../src/sw.template.js');
@@ -64,7 +54,8 @@ if (fs.existsSync(mainSwTemplatePath)) {
         .replace('__VITE_FIREBASE_STORAGE_BUCKET__', getVar('VITE_FIREBASE_STORAGE_BUCKET'))
         .replace('__VITE_FIREBASE_MESSAGING_SENDER_ID__', getVar('VITE_FIREBASE_MESSAGING_SENDER_ID'))
         .replace('__VITE_FIREBASE_APP_ID__', getVar('VITE_FIREBASE_APP_ID'))
-        .replace('__VITE_FIREBASE_DATABASE_URL__', getVar('VITE_FIREBASE_DATABASE_URL'));
+        .replace('__VITE_FIREBASE_DATABASE_URL__', getVar('VITE_FIREBASE_DATABASE_URL'))
+        .replace('__VITE_FIREBASE_VAPID_KEY__', getVar('VITE_FIREBASE_VAPID_KEY'));
 
     fs.writeFileSync(mainSwOutputPath, mainSwContent);
     console.log('✅ Generated src/sw.js with environment variables.');

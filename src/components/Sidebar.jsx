@@ -9,12 +9,11 @@ import { BiCommentDetail } from "react-icons/bi";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
 import CreateGroupModal from "./CreateGroupModal";
-import { logoutUser } from "../services/authService";
 import { createGeminiChat } from "../services/chatService";
 import { cn } from "../lib/utils";
 
 const Sidebar = React.memo(() => {
-    const { currentUser } = useAuth();
+    const { currentUser, logout } = useAuth();
     const { theme, toggleTheme } = useTheme();
     const [showMenu, setShowMenu] = useState(false);
     const [showGroupModal, setShowGroupModal] = useState(false);
@@ -23,7 +22,7 @@ const Sidebar = React.memo(() => {
 
     const handleLogout = async () => {
         try {
-            await logoutUser(currentUser.uid);
+            await logout();
         } catch (error) {
             console.error("Failed to log out", error);
         }

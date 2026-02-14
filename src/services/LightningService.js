@@ -15,10 +15,20 @@ class LightningSyncService {
         if (!chatId || !userId || chatId.startsWith('gemini_')) return;
         try {
             const typingRef = ref(rtdb, `chats/${chatId}/typing/${userId}`);
-            set(typingRef, isTyping ? serverTimestamp() : null).catch(e => {
-                // Ignore 403s on typing as they aren't critical
-                if (e.code !== 'PERMISSION_DENIED') console.warn("[RTDB Typing] Error:", e);
-            });
+
+            if (isTyping) {
+                set(typingRef, serverTimestamp()).catch(e => {
+                    if (e.code !== 'PERMISSION_DENIED') console.warn("[RTDB Typing] Error:", e);
+                });
+                // Ensure indicator is cleared if user disconnects
+                import("firebase/database").then(({ onDisconnect }) => {
+                    onDisconnect(typingRef).set(null);
+                });
+            } else {
+                set(typingRef, null).catch(e => {
+                    if (e.code !== 'PERMISSION_DENIED') console.warn("[RTDB Typing] Error:", e);
+                });
+            }
         } catch (e) {
             console.warn("[RTDB Typing] Catch:", e);
         }

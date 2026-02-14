@@ -6,24 +6,38 @@
                 ".write": "auth != null && auth.uid == $userId"
             }
         },
+        "user_chats": {
+            "$userId": {
+                ".read": "auth != null && auth.uid == $userId",
+                "$chatId": {
+                    "lastUpdated": {
+                        ".write": "auth != null && auth.uid == $userId",
+                        ".validate": "newData.isNumber()"
+                    }
+                }
+            }
+        },
         "chats": {
             "$chatId": {
-                ".read": "auth != null",
+                ".read": "auth != null && (auth.token.isAdmin === true || auth.token.superAdmin === true || root.child('user_chats').child(auth.uid).child($chatId).exists())",
+                "meta": {
+                    ".write": "auth != null && (auth.token.isAdmin === true || auth.token.superAdmin === true || root.child('user_chats').child(auth.uid).child($chatId).exists())"
+                },
                 "typing": {
                     "$userId": {
-                        ".write": "auth != null && auth.uid == $userId",
+                        ".write": "auth != null && (auth.uid == $userId || auth.token.isAdmin === true || auth.token.superAdmin === true)",
                         ".validate": "newData.isNumber() || newData.val() == null"
                     }
                 },
                 "signals": {
                     "$messageId": {
-                        ".write": "auth != null",
+                        ".write": "auth != null && (auth.token.isAdmin === true || auth.token.superAdmin === true || root.child('user_chats').child(auth.uid).child($chatId).exists())",
                         ".validate": "newData.hasChildren(['senderId', 'timestamp'])"
                     }
                 },
                 "status": {
                     "$messageId": {
-                        ".write": "auth != null"
+                        ".write": "auth != null && (auth.token.isAdmin === true || auth.token.superAdmin === true || root.child('user_chats').child(auth.uid).child($chatId).exists())"
                     }
                 }
             }

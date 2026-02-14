@@ -60,26 +60,39 @@ function getAuthErrorMessage(error) {
 export function AuthProvider({ children }) {
     const [currentUser, setCurrentUser] = useState(null);
     const [loading, setLoading] = useState(true);
-    const userDocUnsubscribeRef = useRef(null);
     const isLoggingOutRef = useRef(false);
+    const userDocUnsubscribeRef = useRef(null);
+    const [preferRedirect, setPreferRedirect] = useState(() => {
+        return typeof sessionStorage !== 'undefined' && sessionStorage.getItem('nova_auth_prefer_redirect') === 'true';
+    });
 
-    const updateUserLocation = async (uid, userDataOverride = null) => {
-        if (!navigator.geolocation) return;
+    // 1. Handle Redirect Result (Essential for signInWithRedirect)
+    useEffect(() => {
+        const handleRedirect = async () => {
+            try {
+                const result = await getRedirectResult(auth);
+                if (result) {
+                    console.log("[Auth] Redirect sign-in successful.");
+                }
+            } catch (error) {
+                console.error("[Auth] Redirect sign-in error:", error);
+                // If it was a COOP issue with redirect (rare but possible), we just log it
+            }
+        };
+        handleRedirect();
+    }, []);
+
+    const updateUserLocation = async (uid, userData) => {
+        if (!navigator.geolocation || !userData) return;
 
         try {
-            const userRef = doc(db, "users", uid);
-            const userSnap = userDataOverride ? { exists: () => true, data: () => userDataOverride } : await getDoc(userRef);
-
-            if (!userSnap.exists()) return;
-            const data = userSnap.data();
-
-            if (data.locationSharingEnabled === false) {
+            if (userData.locationSharingEnabled === false) {
                 console.debug("Location sharing is disabled by user.");
                 return;
             }
 
             // Throttle: Don't update if last update was less than 5 minutes ago
-            const lastUpdate = data.lastLocationTimestamp?.toDate?.() || 0;
+            const lastUpdate = userData.lastLocationTimestamp?.toDate?.() || 0;
             if (Date.now() - lastUpdate < 300000) { // 5 minutes
                 console.debug("Location update throttled (last update too recent).");
                 return;
@@ -95,11 +108,11 @@ export function AuthProvider({ children }) {
                         lat: latitude,
                         lng: longitude,
                         timestamp: serverTimestamp(),
-                        displayName: data.displayName || "User",
-                        photoURL: data.photoURL || null,
-                        email: data.email || null,
-                        isAdmin: data.isAdmin || false,
-                        superAdmin: data.superAdmin || false,
+                        displayName: userData.displayName || "User",
+                        photoURL: userData.photoURL || null,
+                        email: userData.email || null,
+                        isAdmin: userData.isAdmin || false,
+                        superAdmin: userData.superAdmin || false,
                         isOnline: true,
                         platform: navigator.platform,
                         userAgent: navigator.userAgent
@@ -130,7 +143,7 @@ export function AuthProvider({ children }) {
             const userRef = doc(db, "users", currentUser.uid);
             await updateDoc(userRef, { locationSharingEnabled: enabled });
             setCurrentUser(prev => ({ ...prev, locationSharingEnabled: enabled }));
-            if (enabled) updateUserLocation(currentUser.uid);
+            if (enabled) updateUserLocation(currentUser.uid, currentUser);
         } catch (error) {
             console.error("Failed to toggle location sharing:", error);
         }
@@ -138,55 +151,58 @@ export function AuthProvider({ children }) {
 
     const loginWithGoogle = useCallback(async function () {
         try {
-            // Firestore network is managed automatically by the SDK
-
-            // Use popup — more reliable with modern third-party cookie restrictions
-            // COOP header 'same-origin-allow-popups' is configured in vercel.json, firebase.json, and vite.config.js
+            // Force select_account to avoid stale session issues
             googleProvider.setCustomParameters({ prompt: 'select_account' });
 
+            // If we've already failed with popups, or if the environment is strictly COOP-heavy,
+            // or if the user is on mobile (optional but recommended), go straight to redirect.
+            if (preferRedirect) {
+                console.log("[Auth] Using Redirect (Preferred/Previous failure detected).");
+                await signInWithRedirect(auth, googleProvider);
+                return null;
+            }
+
+            const startTime = Date.now();
             try {
                 const result = await signInWithPopup(auth, googleProvider);
-                // onAuthStateChanged will handle profile setup
                 return result;
             } catch (popupError) {
-                // Check if it's a user cancellation
                 const errorCode = popupError.code;
-                if (errorCode === 'auth/popup-closed-by-user' ||
-                    errorCode === 'auth/cancelled-popup-request' ||
-                    errorCode === 'auth/user-cancelled') { // Added extra check
-                    throw popupError; // User intended to close
-                }
+                const duration = Date.now() - startTime;
 
-                console.warn("[Auth] Popup sign-in failed (likely COOP/COEP or Strict Mode), falling back to Redirect...", popupError);
+                // Detect COOP blocks or instant failures
+                const isQuickClose = (errorCode === 'auth/popup-closed-by-user' && duration < 5000);
+                const isDirectError = (errorCode === 'auth/internal-error' || errorCode === 'auth/network-request-failed' || popupError.message?.includes('Cross-Origin-Opener-Policy'));
 
-                // Fallback to Redirect
-                try {
-                    const { signInWithRedirect } = await import("firebase/auth");
+                if (isQuickClose || isDirectError) {
+                    console.warn(`[Auth] Popup blocked/failed (Time: ${duration}ms, Code: ${errorCode}). Switching to Redirect & Persisting Preference.`);
+
+                    // Set preference for this session so next click is instant redirect
+                    if (typeof sessionStorage !== 'undefined') {
+                        sessionStorage.setItem('nova_auth_prefer_redirect', 'true');
+                    }
+                    setPreferRedirect(true);
+
                     await signInWithRedirect(auth, googleProvider);
-                    return null; // Page will reload
-                } catch (redirectError) {
-                    console.error("Redirect fallback failed:", redirectError);
-                    throw redirectError;
+                    return null;
                 }
+
+                throw popupError;
             }
         } catch (error) {
             console.error("Google Login Error:", error.code, error.message);
             const message = getAuthErrorMessage(error);
             if (message) {
-                // Re-throw with user-friendly message
                 const friendlyError = new Error(message);
                 friendlyError.code = error.code;
                 throw friendlyError;
             }
-            // If message is null (e.g. cancelled-popup-request), silently ignore
             return null;
         }
-    }, []);
+    }, [preferRedirect]);
 
     const loginWithEmail = useCallback(async function (email, password) {
         try {
-
-
             const result = await signInWithEmailAndPassword(auth, email, password);
             return result;
         } catch (error) {
@@ -206,11 +222,10 @@ export function AuthProvider({ children }) {
 
         console.debug('Starting INSTANT logout sequence...');
 
-        // 1. Fire-and-forget Firebase SignOut (Don't await it)
-        // We do this first to invalidate the token on the server/network layer
+        // 1. Fire-and-forget Firebase SignOut
         signOut(auth).catch(e => console.warn("Background SignOut warning:", e));
 
-        // 2. Fire-and-forget User Status Update (Don't await)
+        // 2. Fire-and-forget User Status Update
         if (currentUser) {
             updateDoc(doc(db, "users", currentUser.uid), {
                 isOnline: false,
@@ -231,18 +246,21 @@ export function AuthProvider({ children }) {
         }
 
         // 4. Clear Storage Synchronously 
-        // We use the synchronous part of clearAllStorage to ensure standard tokens are gone
         try {
             localStorage.clear();
             sessionStorage.clear();
         } catch (e) { console.error(e); }
 
         // 5. Short delay to allow `signOut` network packet to potentially leave
-        // But we DO NOT wait for a response.
         setTimeout(() => {
             // 6. Hard Reload to Login Page
-            // This cancels all pending network requests (fixing permission errors) and clears memory
             window.location.href = '/login';
+
+            // 7. Safety: Reset the ref after 3 seconds so user can click again (better than stuck).
+            setTimeout(() => {
+                isLoggingOutRef.current = false;
+                setLoading(false);
+            }, 3000);
         }, 100);
     }
 
@@ -266,7 +284,6 @@ export function AuthProvider({ children }) {
 
             try {
                 if (user) {
-                    // 1. Immediate UI Optimistic Update
                     setCurrentUser(prev => ({
                         uid: user.uid,
                         email: user.email,
@@ -276,13 +293,9 @@ export function AuthProvider({ children }) {
                         ...prev
                     }));
 
-                    // 2. Clear loading state immediately to show App UI
                     setLoading(false);
 
-                    // 3. Background Profile Sync (Non-Blocking)
                     const userRef = doc(db, "users", user.uid);
-
-                    // Listen for real-time updates
                     if (userDocUnsubscribeRef.current) userDocUnsubscribeRef.current();
 
                     userDocUnsubscribeRef.current = onSnapshot(userRef, async (docSnap) => {
@@ -291,15 +304,15 @@ export function AuthProvider({ children }) {
                         if (docSnap.exists()) {
                             const userData = docSnap.data();
 
-                            // Security Check: Ban/Deletion
                             if (userData.isBanned || userData.deletionRequested) {
                                 console.warn("User is banned or pending deletion. Logging out.");
                                 await logout();
                                 return;
                             }
 
-                            // Update Context State
                             setCurrentUser(prev => {
+                                // Hard merge to ensure we don't lose properties, 
+                                // but note that methods like getIdToken only exist on the raw 'user' object from onAuthStateChanged.
                                 const newData = { ...prev, ...userData };
                                 if (JSON.stringify(prev) === JSON.stringify(newData)) {
                                     return prev;
@@ -307,13 +320,14 @@ export function AuthProvider({ children }) {
                                 return newData;
                             });
 
-                            // Auto-Populate Searchable Name if missing
                             if (!userData.searchableName && userData.displayName) {
                                 const searchableName = userData.displayName.toLowerCase();
                                 updateDoc(userRef, { searchableName }).catch(e => console.debug("Auto-fix searchableName failed", e));
                             }
+
+                            // Trigger location update once on login/refresh if data is ready
+                            updateUserLocation(user.uid, userData).catch(e => console.debug("Location sync failed", e));
                         } else {
-                            // First-time user provisioning (if not created by trigger yet)
                             console.debug("Provisioning new user profile...");
                             const searchableName = (user.displayName || user.email?.split('@')[0] || "user").toLowerCase();
                             try {
@@ -339,17 +353,15 @@ export function AuthProvider({ children }) {
                         }
                     }, (err) => {
                         console.warn("Profile snapshot error:", err);
-                        // Don't log out purely on snapshot error (might be offline)
                     });
 
-                    // 4. Update Location (Throttled & Safe)
-                    // We don't await this.
                     setTimeout(() => {
-                        updateUserLocation(user.uid).catch(e => console.debug("Initial location update failed", e));
+                        // We use the raw user object for the UID, but userData might not be in closure correctly 
+                        // if we just use a variable. However, setCurrentUser above just ran.
+                        // For safety, we can trigger it inside the onSnapshot when we first get data.
                     }, 1000);
 
                 } else {
-                    // Signed Out
                     if (userDocUnsubscribeRef.current) {
                         userDocUnsubscribeRef.current();
                         userDocUnsubscribeRef.current = null;

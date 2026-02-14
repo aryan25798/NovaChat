@@ -54,16 +54,24 @@ export function PresenceProvider({ children }) {
         const connectedRef = ref(rtdb, '.info/connected');
         const listenerKey = `presence-${currentUser.uid}`;
 
-        // HEARTBEAT LOGIC: Update Firestore location timestamp every 5 minutes
-        // This ensures the "Freshness Filter" on the map doesn't hide active users.
-        // OPTIMIZATION: Skip when tab is hidden to reduce Firestore writes
-        const heartbeatInterval = setInterval(() => {
+        // HEARTBEAT LOGIC: Update Firestore location timestamp every 20 minutes (Cost Optimization)
+        // This ensures the "Freshness Filter" on the map doesn't hide recently active users
+        // while minimizing Firestore write costs at scale.
+        const heartbeat = () => {
             if (auth.currentUser && document.visibilityState === 'visible') {
                 updateDoc(doc(db, "user_locations", currentUser.uid), {
                     timestamp: firestoreServerTimestamp()
                 }).catch(e => console.debug("Heartbeat fail:", e));
             }
-        }, 300000); // 5 minutes (reduced from 3 min for cost savings)
+        };
+        const heartbeatInterval = setInterval(heartbeat, 1200000); // 20 minutes (Up from 10m)
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible') {
+                heartbeat(); // Instant sync on return
+            }
+        };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
 
         const unsubscribe = onValue(connectedRef, async (snapshot) => {
             if (snapshot.val() === false) {
@@ -89,6 +97,7 @@ export function PresenceProvider({ children }) {
 
         return () => {
             clearInterval(heartbeatInterval);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
             listenerManager.unsubscribe(listenerKey);
             // We set offline manually on unmount for immediate feedback, but only if still authenticated
             if (auth.currentUser) {
@@ -96,11 +105,13 @@ export function PresenceProvider({ children }) {
                     console.debug("Presence cleanup suppressed (already signed out)");
                 });
 
-                // --- SYNC TO user_locations for Admin Map ---
+                // --- SYNC TO user_locations for Admin Map (THROTTLED) ---
+                // We only do this if really needed. At 10k scale, consider moving to Cloud Functions
+                // triggered by RTDB disconnects to save client-side complexity and potential write-storms.
                 updateDoc(userStatusFirestoreRef, { isOnline: false }).catch(e => console.debug("Map sync fail:", e));
                 updateDoc(doc(db, "user_locations", currentUser.uid), {
                     isOnline: false,
-                    timestamp: firestoreServerTimestamp()
+                    // We don't update timestamp on disconnect to preserve "last seen" location accuracy
                 }).catch(e => console.debug("Location sync fail:", e));
                 // ---------------------------------------------
             }

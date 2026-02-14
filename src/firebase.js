@@ -35,12 +35,12 @@ setPersistence(auth, browserLocalPersistence);
 export const googleProvider = new GoogleAuthProvider();
 
 // Initialize Firestore with persistence settings
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, clearIndexedDbPersistence, memoryLocalCache } from "firebase/firestore";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, clearIndexedDbPersistence } from "firebase/firestore";
 
 export const db = initializeFirestore(app, {
-    // SWITCH TO MEMORY CACHE TO FIX HANG
-    // persistentLocalCache is causing deadlocks in this dev environment.
-    localCache: memoryLocalCache()
+    localCache: persistentLocalCache({
+        tabManager: persistentMultipleTabManager()
+    })
 });
 
 /**

@@ -66,7 +66,6 @@ export default function ProfileSettings({ onClose }) {
     const handleLogout = async () => {
         try {
             await logout();
-            window.location.reload();
         } catch (err) {
             console.error("Failed to logout", err);
         }

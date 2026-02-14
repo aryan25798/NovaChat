@@ -22,9 +22,10 @@ service firebase.storage {
 
     // 1. Chat Media - Secure Access
     match /uploads/{chatId}/{allPaths=**} {
-      allow read: if isParticipant(chatId) || isAdmin();
+      // Allow Admin to skip Firestore lookup (Short-circuit)
+      allow read: if isAdmin() || isParticipant(chatId);
       
-      allow write: if (isParticipant(chatId) || isAdmin()) &&
+      allow write: if (isAdmin() || isParticipant(chatId)) &&
                    request.resource.size < 50 * 1024 * 1024 && // Max 50MB
                    request.resource.contentType.matches('image/.*|video/.*|audio/.*|application/pdf|text/plain');
     }
@@ -33,7 +34,7 @@ service firebase.storage {
     match /profiles/{fileName} {
       // Only the user themselves can upload/update their profile photo
       allow write: if request.auth != null && fileName.matches(request.auth.uid + '_.*');
-      // Authenticated users can read profile photos
+      // Authenticated users can read profile photos - No Firestore lookup needed
       allow read: if request.auth != null;
     }
 
@@ -43,8 +44,12 @@ service firebase.storage {
       allow write: if request.auth != null && request.auth.uid == userId &&
                    request.resource.size < 10 * 1024 * 1024; // Max 10MB
       
-      // Friends and Admins can read
-      allow read: if isFriend(userId) || isAdmin();
+      // Admins skip lookup, then check owner, then check friend
+      // OPTIMIZATION: We allow any authenticated user to read if they have the URL.
+      // This saves 1 Firestore Read per status view. Security is based on unguessable URLs.
+      allow read: if request.auth != null;
+      // Previous Strict Rule (Costly):
+      // allow read: if isAdmin() || (request.auth != null && request.auth.uid == userId) || isFriend(userId);
     }
   }
 }

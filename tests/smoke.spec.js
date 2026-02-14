@@ -4,7 +4,7 @@ test('verify app title and manifest', async ({ page }) => {
     await page.goto('http://localhost:5173/');
 
     // Check title
-    await expect(page).toHaveTitle(/WhatsClone AI/);
+    await expect(page).toHaveTitle(/NovaChat/);
 
     // Check manifest link
     const manifestLink = await page.locator('link[rel="manifest"]');
