@@ -231,4 +231,3 @@ export const replyToStatus = async (currentUser, statusUser, statusItem, text) =
         throw error;
     }
 };
-```
