@@ -4,6 +4,9 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import imageCompression from 'browser-image-compression';
 import { v4 as uuidv4 } from "uuid";
 import { listenerManager } from "../utils/ListenerManager";
+import { functions } from "../firebase";
+import { httpsCallable } from "firebase/functions";
+import { sendMessage } from "./chatService";
 
 const STATUS_COLLECTION = "statuses";
 
@@ -34,7 +37,7 @@ export const postStatus = async (user, type, content, caption = "", background =
                 }
             }
 
-            const storageRef = ref(storage, `status/${user.uid}/${Date.now()}_${fileToUpload.name}`);
+            const storageRef = ref(storage, `status / ${user.uid}/${Date.now()}_${fileToUpload.name}`);
             await uploadBytes(storageRef, fileToUpload); // Use uploadBytes for simpler upload
             contentUrl = await getDownloadURL(storageRef);
         }
@@ -46,7 +49,7 @@ export const postStatus = async (user, type, content, caption = "", background =
             caption: caption || "",
             background: type === 'text' ? background : null,
             timestamp: new Date(),
-            viewers: []
+            // viewers: [] // REMOVED: Viewers are now in subcollection
         };
 
         const statusRef = doc(db, STATUS_COLLECTION, user.uid);
@@ -124,9 +127,6 @@ export const subscribeToMyStatus = (userId, onUpdate) => {
 // --- EFFICIENCY UPGRADE: Single-Listener Feed + Sync ---
 // Replaces the old O(N) listener loop.
 
-import { functions } from "../firebase";
-import { httpsCallable } from "firebase/functions";
-
 /**
  * 1. Listen to the "Feed Signal" document.
  * This document contains lightweight timestamps of friends who updated their status.
@@ -179,46 +179,29 @@ export const syncStatuses = async (knownState = {}) => {
 // Deprecated: Old O(N) Loop (Kept for reference if rollback needed, but commented out in spirit)
 // export const subscribeToRecentUpdates = ... (Deleted)
 
-// --- Mark Status Viewed ---
-import { runTransaction } from 'firebase/firestore';
-
+// --- Mark Status Viewed (Scalable Subcollection) ---
 export const markStatusAsViewed = async (statusDocId, itemId, currentUserId) => {
     if (!statusDocId || !itemId || !currentUserId) return;
 
     try {
-        const statusRef = doc(db, STATUS_COLLECTION, statusDocId);
+        // SCALABLE FIX: Write to subcollection 'views' instead of updating the main doc array.
+        // Path: statuses/{statusDocId}/views/{itemId}_{viewerId}
+        // This avoids the 1MB document limit and reduces write contention.
+        const viewId = `${itemId}_${currentUserId}`;
+        const viewRef = doc(db, STATUS_COLLECTION, statusDocId, "views", viewId);
 
-        await runTransaction(db, async (transaction) => {
-            const statusDoc = await transaction.get(statusRef);
-            if (!statusDoc.exists()) return;
-
-            const data = statusDoc.data();
-            const items = data.items || [];
-
-            // Find the item by its unique ID (instead of index for safety)
-            const itemIndex = items.findIndex(item => item.id === itemId);
-            if (itemIndex === -1) return;
-
-            const item = items[itemIndex];
-            if (!item.viewers) item.viewers = [];
-
-            // If already viewed, do nothing
-            if (item.viewers.includes(currentUserId)) return;
-
-            // Update local array clone
-            item.viewers.push(currentUserId);
-
-            // Write back the whole array (Transactions guarantee the read hasn't changed)
-            transaction.update(statusRef, { items });
+        await setDoc(viewRef, {
+            itemId: itemId,
+            viewerId: currentUserId,
+            timestamp: serverTimestamp()
         });
+
     } catch (err) {
-        console.error("Error marking status as viewed (transaction):", err);
+        console.error("Error marking status as viewed:", err);
     }
 };
 
 // --- Reply to Status ---
-import { sendMessage } from "./chatService";
-
 export const replyToStatus = async (currentUser, statusUser, statusItem, text) => {
     try {
         // Create a "reply" context object
@@ -229,25 +212,23 @@ export const replyToStatus = async (currentUser, statusUser, statusItem, text) =
             senderName: statusUser.displayName,
             type: statusItem.type,
             mediaUrl: statusItem.type !== 'text' ? statusItem.content : null,
-            isStatusReply: true // Marker to handle UI differently if needed
+            isStatusReply: true
         };
 
-        // We need a chat ID between current user and status user.
-        // For simplicity, we'll let sendMessage handle or find the chat, 
-        // BUT sendMessage usually requires a `chatId`. 
-        // We might need to find or create the chat first. 
-        // Let's import `createPrivateChat` from chatListService if needed, 
-        // OR assuming we can pass a special flag.
+        // Note: Actual message sending logic needs Chat ID. 
+        // This function assumes the UI or caller handles the chat lookup or uses `sendMessage` with a fresh chat.
+        // Since we don't have `sendMessage` imported fully with context, this is a placeholder stub
+        // that matches the original file's intent (which also had a comment about needing Chat ID).
 
-        // Actually, we should probably fetch the Chat ID first.
-        // Let's use a helper or modify this to assume we can get it.
-        // For now, let's try to find the chat.
+        // In a real implementation:
+        // const chatId = await chatListService.getOrCreateChat(currentUser.uid, statusUser.uid);
+        // await chatService.sendMessage(chatId, text, currentUser, replyContext);
 
-        // BETTER: The UI calling this should probably provide the Chat ID if known, 
-        // but StatusViewer doesn't know Chat ID.
-        // We'll search for the chat.
+        console.log("Reply to status (Stub):", text, replyContext);
+
     } catch (error) {
         console.error("Error replying to status:", error);
         throw error;
     }
 };
+```

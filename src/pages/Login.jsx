@@ -15,12 +15,9 @@ export default function Login() {
     const [status, setStatus] = useState({ error: "" });
 
     React.useEffect(() => {
-        if (currentUser) {
-            if (currentUser.isAdmin || currentUser.superAdmin) {
-                navigate("/admin");
-            } else {
-                navigate("/");
-            }
+        if (currentUser && currentUser.claimsSettled) {
+            // "Industry Shell" handles all role-based routing from "/"
+            navigate("/", { replace: true });
         }
     }, [currentUser, navigate]);
 

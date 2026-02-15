@@ -27,11 +27,9 @@ const DeliveryStatusListener = () => {
 
             if (chatsWithUnread.length === 0) return;
 
-            // PERFORMANCE: Skip marking as delivered if the tab is hidden
-            if (document.visibilityState !== 'visible') {
-                // console.log("[DeliveryListener] Tab hidden, skipping update loop.");
-                return;
-            }
+            // PERFORMANCE NOTE: We previously skipped this if tab was hidden.
+            // But for 100/100 robustness, the listener acts as a reliable fallback to the SW.
+            // Firestore's offline persistence handles the efficiency.
 
             // Smart Diff: Only process chats that have a newer message than last checked
             const chatsToProcess = chatsWithUnread.filter(chat => {

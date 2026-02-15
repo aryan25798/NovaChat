@@ -41,6 +41,13 @@
                     }
                 }
             }
+        },
+        "calls": {
+            "$callId": {
+                ".read": "auth != null && (data.child('callerId').val() === auth.uid || data.child('receiverId').val() === auth.uid || auth.token.isAdmin === true)",
+                ".write": "auth != null",
+                ".validate": "(!data.exists() && newData.child('callerId').val() === auth.uid) || (data.child('callerId').val() === auth.uid || data.child('receiverId').val() === auth.uid)"
+            }
         }
     }
 }

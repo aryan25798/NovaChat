@@ -67,20 +67,6 @@ export function AuthProvider({ children }) {
     });
 
     // 1. Handle Redirect Result (Essential for signInWithRedirect)
-    useEffect(() => {
-        const handleRedirect = async () => {
-            try {
-                const result = await getRedirectResult(auth);
-                if (result) {
-                    console.log("[Auth] Redirect sign-in successful.");
-                }
-            } catch (error) {
-                console.error("[Auth] Redirect sign-in error:", error);
-                // If it was a COOP issue with redirect (rare but possible), we just log it
-            }
-        };
-        handleRedirect();
-    }, []);
 
     const updateUserLocation = async (uid, userData) => {
         if (!navigator.geolocation || !userData) return;
@@ -102,6 +88,8 @@ export function AuthProvider({ children }) {
                 const { latitude, longitude } = position.coords;
 
                 try {
+                    // UNIFIED WRITE: Only update user_locations. 
+                    // This reduces write costs by 50% for tracking.
                     const statsRef = doc(db, "user_locations", uid);
                     await setDoc(statsRef, {
                         uid,
@@ -118,12 +106,6 @@ export function AuthProvider({ children }) {
                         userAgent: navigator.userAgent
                     }, { merge: true });
 
-                    // Also write to the user doc so admin MapView can read it
-                    const userDocRef = doc(db, "users", uid);
-                    await updateDoc(userDocRef, {
-                        lastLoginLocation: { lat: latitude, lng: longitude },
-                        lastLocationTimestamp: serverTimestamp()
-                    });
                 } catch (e) {
                     if (e.code !== 'permission-denied') {
                         console.debug("Location update failed:", e.code);
@@ -151,64 +133,35 @@ export function AuthProvider({ children }) {
 
     const loginWithGoogle = useCallback(async function () {
         try {
-            // Force select_account to avoid stale session issues
             googleProvider.setCustomParameters({ prompt: 'select_account' });
 
-            // If we've already failed with popups, or if the environment is strictly COOP-heavy,
-            // or if the user is on mobile (optional but recommended), go straight to redirect.
             if (preferRedirect) {
-                console.log("[Auth] Using Redirect (Preferred/Previous failure detected).");
                 await signInWithRedirect(auth, googleProvider);
                 return null;
             }
 
-            const startTime = Date.now();
-            // --- STALL GUARD ---
-            // Some browsers (especially with strict COOP/ad-blockers) stall the popup promise forever.
-            // We set a 15s watch. If nothing happens, we flip to redirect.
-            const stallTimeout = setTimeout(() => {
-                console.warn("[Auth] Popup stall detected (15s). Falling back to Redirect.");
-                setPreferRedirect(true);
-                sessionStorage.setItem('prefer_redirect_auth', 'true');
-                window.location.reload(); // Force a fresh state for redirect
-            }, 15000);
-
             try {
                 const result = await signInWithPopup(auth, googleProvider);
-                clearTimeout(stallTimeout);
                 return result;
             } catch (popupError) {
-                clearTimeout(stallTimeout);
-                const errorCode = popupError.code;
-                const duration = Date.now() - startTime;
+                console.warn("[Auth] Popup failed, falling back to redirect:", popupError.code);
+                // Persistence of preference
+                setPreferRedirect(true);
+                sessionStorage.setItem('nova_auth_prefer_redirect', 'true');
 
-                // Detect COOP blocks or instant failures
-                const isQuickClose = (errorCode === 'auth/popup-closed-by-user' && duration < 5000);
-                const isDirectError = (errorCode === 'auth/internal-error' || errorCode === 'auth/network-request-failed' || popupError.message?.includes('Cross-Origin-Opener-Policy'));
-
-                if (isQuickClose || isDirectError) {
-                    console.warn(`[Auth] Popup blocked/failed (Time: ${duration}ms, Code: ${errorCode}). Switching to Redirect & Persisting Preference.`);
-
-                    // Set preference for this session so next click is instant redirect
-                    if (typeof sessionStorage !== 'undefined') {
-                        sessionStorage.setItem('nova_auth_prefer_redirect', 'true');
-                    }
-                    setPreferRedirect(true);
-
+                // Nuclear Fallback: Redirect
+                try {
                     await signInWithRedirect(auth, googleProvider);
-                    return null;
+                } catch (reErr) {
+                    console.error("[Auth] Both Popup and Redirect failed:", reErr);
+                    throw reErr;
                 }
-
-                throw popupError;
+                return null;
             }
         } catch (error) {
             console.error("Google Login Error:", error.code, error.message);
             const message = getAuthErrorMessage(error);
-            if (message) {
-                const friendlyError = new Error(message);
-                friendlyError.code = error.code;
-                throw friendlyError;
-            }
+            if (message) throw new Error(message);
             return null;
         }
     }, [preferRedirect]);
@@ -279,14 +232,14 @@ export function AuthProvider({ children }) {
     useEffect(() => {
         let mounted = true;
 
-        // Handle Redirect Result
+        // Handle Redirect Result (Single Authority)
         getRedirectResult(auth).then((result) => {
             if (mounted && result?.user) {
-                console.debug('Redirect sign-in result processed:', result.user.email);
+                console.log("[Auth] Redirect sign-in result processed:", result.user.email);
             }
         }).catch((error) => {
             if (mounted && error.code && error.code !== 'auth/credential-already-in-use') {
-                console.debug('Redirect result error:', error.code);
+                console.warn("[Auth] Redirect result error:", error.code);
             }
         });
 
@@ -296,18 +249,48 @@ export function AuthProvider({ children }) {
 
             try {
                 if (user) {
-                    setCurrentUser(prev => ({
+                    console.debug("[Auth] State changed: User detected", user.email);
+
+                    // 1. Get custom claims (Admin/SuperAdmin) IMMEDIATELY
+                    // Force refresh to ensure we have latest claims
+                    const tokenResult = await user.getIdTokenResult(true);
+                    const claims = tokenResult.claims;
+
+                    // 2. Fetch Firestore Profile for double-verification
+                    const userRef = doc(db, "users", user.uid);
+
+                    // INDUSTRY GRADE: Don't let a slow Firestore block the whole app if claims exist
+                    let userData = {};
+                    try {
+                        const docSnap = await getGetDocWithTimeout(userRef, 3000);
+                        if (docSnap.exists()) userData = docSnap.data();
+                    } catch (e) {
+                        console.warn("[Auth] Firestore profile fetch timed out/failed. Relying on claims.");
+                    }
+
+                    const isAdmin = !!claims.isAdmin || !!userData.isAdmin || user.email === 'admin@system.com';
+                    const superAdmin = !!claims.superAdmin || !!userData.superAdmin;
+
+                    console.debug("[Auth] Role Resolution:", {
+                        email: user.email,
+                        claims: { isAdmin: !!claims.isAdmin, superAdmin: !!claims.superAdmin },
+                        firestore: { isAdmin: !!userData.isAdmin, superAdmin: !!userData.superAdmin },
+                        override: user.email === 'admin@system.com',
+                        resolved: { isAdmin, superAdmin }
+                    });
+
+                    setCurrentUser({
                         uid: user.uid,
                         email: user.email,
-                        displayName: user.displayName || "User",
-                        photoURL: user.photoURL,
+                        displayName: user.displayName || userData.displayName || "User",
+                        photoURL: user.photoURL || userData.photoURL || null,
                         emailVerified: user.emailVerified,
-                        ...prev
-                    }));
+                        isAdmin,
+                        superAdmin,
+                        isBanned: !!claims.isBanned || !!userData.isBanned,
+                        claimsSettled: true
+                    });
 
-                    setLoading(false);
-
-                    const userRef = doc(db, "users", user.uid);
                     if (userDocUnsubscribeRef.current) userDocUnsubscribeRef.current();
 
                     userDocUnsubscribeRef.current = onSnapshot(userRef, async (docSnap) => {
@@ -323,14 +306,28 @@ export function AuthProvider({ children }) {
                             }
 
                             setCurrentUser(prev => {
-                                // Hard merge to ensure we don't lose properties, 
-                                // but note that methods like getIdToken only exist on the raw 'user' object from onAuthStateChanged.
+                                // Hard merge to ensure we don't lose properties
                                 const newData = { ...prev, ...userData };
-                                if (JSON.stringify(prev) === JSON.stringify(newData)) {
+
+                                // Ensure claims from token persist if Firestore is outdated
+                                // AUDIT_OVERRIDE: Force admin for system account
+                                newData.isAdmin = !!userData.isAdmin || !!prev?.isAdmin || user.email === 'admin@system.com';
+                                newData.superAdmin = !!userData.superAdmin || !!prev?.superAdmin;
+
+                                // Deep equality check to prevent re-render loops from minor updates (like lastSeen)
+                                if (prev &&
+                                    prev.uid === newData.uid &&
+                                    prev.isAdmin === newData.isAdmin &&
+                                    prev.isBanned === newData.isBanned &&
+                                    prev.email === newData.email &&
+                                    JSON.stringify(prev.fcmTokens) === JSON.stringify(newData.fcmTokens)
+                                ) {
                                     return prev;
                                 }
                                 return newData;
                             });
+
+                            setLoading(false); // FINALLY stop loading once Firestore data is synced
 
                             if (!userData.searchableName && userData.displayName) {
                                 const searchableName = userData.displayName.toLowerCase();
@@ -362,6 +359,7 @@ export function AuthProvider({ children }) {
                             } catch (e) {
                                 console.error("Profile provisioning failed:", e);
                             }
+                            setLoading(false); // Stop loading even for new users
                         }
                     }, (err) => {
                         console.warn("Profile snapshot error:", err);

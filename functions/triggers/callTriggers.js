@@ -67,3 +67,46 @@ exports.onCallCreated = onDocumentCreated("calls/{callId}", async (event) => {
         logger.error("onCallCreated Error", err);
     }
 });
+
+/**
+ * Cleanup WebRTC Signaling Data
+ * Triggered on call document deletion or completion to purge ICE candidates.
+ * Note: We preserve the parent 'call' document for history, but purge the heavy candidates.
+ */
+exports.onCallUpdated = onDocumentCreated("calls/{callId}", async (event) => {
+    const callId = event.params.callId;
+
+    // We set a 10-minute delayed cleanup for candidates. 
+    // This allows sufficient time for any reconnection logic.
+    // In a high-traffic system, we might use a scheduled task, but for 10k, 
+    // a delayed cleanup or a write-time trigger on status='ended' is fine.
+
+    // For this implementation, we trigger cleanup when status changes to anything other than ringing/active.
+    // (Actual status transitions happen via updateCallStatus on client)
+});
+
+// Since we can't easily do delayed execution in v2 without Tasks, 
+// and status changes happen on client, we'll watch for status updates.
+const { onDocumentUpdated } = require("firebase-functions/v2/firestore");
+const { recursiveDeleteCollection } = require('../utils/shared');
+
+exports.cleanupCallSignaling = onDocumentUpdated("calls/{callId}", async (event) => {
+    const after = event.data.after.data();
+    const before = event.data.before.data();
+
+    if (!after || !before) return;
+
+    // Trigger cleanup when call transitions from active state to a terminal state
+    const terminalStates = ['ended', 'rejected', 'missed', 'busy', 'failed'];
+    if (terminalStates.includes(after.status) && !terminalStates.includes(before.status)) {
+        logger.info(`Cleaning up signaling sub-collections for call ${event.params.callId}`);
+        const db = admin.firestore();
+        const callRef = db.collection('calls').doc(event.params.callId);
+
+        // Purge ICE Candidates (Recursive delete)
+        await Promise.all([
+            recursiveDeleteCollection(callRef.collection('callerCandidates'), 100),
+            recursiveDeleteCollection(callRef.collection('calleeCandidates'), 100)
+        ]);
+    }
+});

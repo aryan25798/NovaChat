@@ -1,4 +1,4 @@
-import { rtdb } from "../firebase";
+import { rtdb, auth } from "../firebase";
 import { ref, update, onValue, off, serverTimestamp, set, increment, get } from "firebase/database";
 
 /**
@@ -19,8 +19,7 @@ export const ChatMetadataService = {
         const updates = {};
         const timestamp = serverTimestamp();
 
-        // 1. Update Last Message Preview
-        // We utilize a path that is easily subscribable: chats/{chatId}/meta
+        // 1. Update SHARED Last Message Preview (Allowed by Rules)
         const metaPath = `chats/${chatId}/meta`;
 
         updates[`${metaPath}/lastMessage`] = {
@@ -28,35 +27,20 @@ export const ChatMetadataService = {
             senderId: messageData.senderId,
             timestamp: timestamp,
             type: messageData.type || 'text',
-            isOptimistic: false // It's confirmed on server
+            isOptimistic: false
         };
         updates[`${metaPath}/lastUpdated`] = timestamp;
 
-        // 2. Increment Unread Counts for RECIPIENTS (Atomic Increment)
-        participantIds.forEach(uid => {
-            if (uid !== messageData.senderId) {
-                // Using RTDB atomic increment
-                updates[`${metaPath}/unreadCount/${uid}`] = increment(1);
-            }
-        });
-
-        // 3. Update User-specific "Active Chats" lists (Optional, for sorting if needed, 
-        // but typically we can sort client-side if we subscribe to the user's chat list).
-        // For 10k users, we might want `user_chats/{userId}/{chatId}` = timestamp for fast sorting.
-        participantIds.forEach(uid => {
-            updates[`user_chats/${uid}/${chatId}/lastUpdated`] = timestamp;
-        });
+        // 2. Update OWN "Active Chats" list (Allowed)
+        // We do NOT update others; Cloud Functions handles fan-out to valid recipients.
+        if (auth.currentUser) {
+            updates[`user_chats/${auth.currentUser.uid}/${chatId}/lastUpdated`] = timestamp;
+        }
 
         try {
             await update(ref(rtdb), updates);
         } catch (error) {
-            console.error("RTDB Metadata Sync Failed (init):", error);
-            // Simple transient retry for network resilience
-            setTimeout(async () => {
-                try { await update(ref(rtdb), updates); } catch (e) {
-                    console.error("RTDB Metadata Sync Failed (retry):", e);
-                }
-            }, 2000);
+            console.error("RTDB Metadata Sync Failed:", error);
         }
     },
 

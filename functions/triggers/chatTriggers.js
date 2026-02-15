@@ -179,7 +179,10 @@ async function handleGeminiReply(chatId, userText, senderName) {
 }
 
 exports.onMessageCreated = onDocumentCreated({
-    document: "chats/{chatId}/messages/{messageId}"
+    document: "chats/{chatId}/messages/{messageId}",
+    maxInstances: 100, // Scaled for 10k users
+    minInstances: 1,   // Reduce cold starts for critical messaging
+    memory: "256MiB"
 }, async (event) => {
     const messageData = event.data.data();
     const chatId = event.params.chatId;
@@ -246,13 +249,24 @@ exports.onMessageCreated = onDocumentCreated({
         const senderDoc = await admin.firestore().collection('users').doc(senderId).get();
         const senderName = senderDoc.data()?.displayName || "Someone";
 
-        // 3. Batched User & Presence Fetch
-        const userRefs = recipients.slice(0, 100).map(uid => admin.firestore().collection('users').doc(uid));
-        const [userDocs, activeStatusSnap] = await Promise.all([
-            admin.firestore().getAll(...userRefs),
-            admin.database().ref('status').get() // Fetch all statuses to minimize roundtrips
+        // 3. Batched User & Presence Fetch (Unlimited Chunks)
+        const recipientChunks = [];
+        const CHUNK_SIZE = 100; // Firestore 'in' query limit is 30 usually, getAll is higher but safe at 100
+        for (let i = 0; i < recipients.length; i += CHUNK_SIZE) {
+            recipientChunks.push(recipients.slice(i, i + CHUNK_SIZE));
+        }
+
+        const fetchPromises = recipientChunks.map(chunk => {
+            const refs = chunk.map(uid => admin.firestore().collection('users').doc(uid));
+            return admin.firestore().getAll(...refs);
+        });
+
+        const [userDocsResult, activeStatusSnap] = await Promise.all([
+            Promise.all(fetchPromises),
+            admin.database().ref('status').get()
         ]);
 
+        const userDocs = userDocsResult.flat();
         const allStatuses = activeStatusSnap.val() || {};
         const messagesToSend = [];
 
@@ -265,7 +279,7 @@ exports.onMessageCreated = onDocumentCreated({
             // WHATSAPP LOGIC: Suppress notification if recipient is IN the chat window
             const userActiveChatId = allStatuses[userId]?.activeChatId;
             if (userActiveChatId === chatId) {
-                logger.info(`Notification suppressed: User ${userId} is in chat ${chatId}`);
+                // logger.debug(`Notification suppressed: User ${userId} is in chat ${chatId}`);
                 return;
             }
 
@@ -279,7 +293,7 @@ exports.onMessageCreated = onDocumentCreated({
                     token: token,
                     notification: {
                         title: `New Message from ${senderName}`,
-                        body: messageData.type === 'image' ? '📷 Photo' : messageData.text,
+                        body: messageData.type === 'image' ? '📷 Photo' : (messageData.text.length > 100 ? messageData.text.substring(0, 97) + '...' : messageData.text),
                     },
                     webpush: {
                         headers: {
@@ -298,7 +312,7 @@ exports.onMessageCreated = onDocumentCreated({
                         priority: 'high',
                         notification: {
                             sound: 'default',
-                            clickAction: 'FLUTTER_NOTIFICATION_CLICK' // For consistency if mobile expanded
+                            clickAction: 'FLUTTER_NOTIFICATION_CLICK'
                         }
                     },
                     data: { chatId, senderId, type: 'message' }

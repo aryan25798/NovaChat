@@ -7,18 +7,25 @@ import { collection, query, where, getDocs, limit, doc, updateDoc, arrayUnion, a
  * @param {string} currentUserId - The ID of the current user to exclude.
  * @returns {Promise<Array>} - List of found users.
  */
+/**
+ * Searches for users by email or display name using prefix search.
+ * OPTIMIZED: Uses server-side filtering to avoid loading all users.
+ * @param {string} searchTerm - The search term.
+ * @param {string} currentUserId - The ID of the current user to exclude.
+ * @returns {Promise<Array>} - List of found users.
+ */
 export const searchUsers = async (searchTerm, currentUserId) => {
     const term = (searchTerm || "").toLowerCase().trim();
     const usersRef = collection(db, "users");
-    // Increase limit slightly to allow for in-memory filtering of admins/self
     const FETCH_LIMIT = 20;
 
-    // If no search term, return recent users
+    // If no search term, return recent users (Server-side filtered)
     if (!term) {
         try {
-            // simplified query to avoid index issues with 'superAdmin'
             const q = query(
                 usersRef,
+                where("superAdmin", "==", false), // DB-Level Filter
+                where("isAdmin", "==", false),    // DB-Level Filter
                 orderBy("displayName"),
                 limit(FETCH_LIMIT)
             );
@@ -26,48 +33,43 @@ export const searchUsers = async (searchTerm, currentUserId) => {
             const users = [];
             snap.forEach(doc => {
                 const data = doc.data();
-                // Robust in-memory filtering
-                if (doc.id !== currentUserId && !data.isAdmin && data.superAdmin !== true) {
+                if (doc.id !== currentUserId) {
                     users.push({ id: doc.id, ...data });
                 }
             });
             return users;
         } catch (e) {
             console.error("Error fetching default users:", e);
+            // Fallback for missing index during deployment
+            if (e.code === 'failed-precondition') {
+                console.warn("Missing Index for Default Search. Please check firestore.indexes.json");
+            }
             return [];
         }
     }
 
     const queries = [];
 
-    // Strategy: Search strictly by email if '@' is present, otherwise search both name and email (if possible) or just name.
-    // We remove 'superAdmin' check from DB query to ensure we don't miss records lacking that field.
-
     if (term.includes('@')) {
+        // Email Search matches do not need admin filtering if exact match, but let's be safe
+        // Note: 'email' field is PII, ensure rules allow query.
         queries.push(query(
             usersRef,
             where('email', '>=', term),
             where('email', '<=', term + '\uf8ff'),
+            where('superAdmin', '==', false),
             limit(FETCH_LIMIT)
         ));
     } else {
-        // Priority 1: Search by searchableName (case-insensitive prepared field)
+        // Priority 1: Search by searchableName (prepared field)
+        // We rely on Composite Index: searchableName + superAdmin
         queries.push(query(
             usersRef,
             where('searchableName', '>=', term),
             where('searchableName', '<=', term + '\uf8ff'),
+            where('superAdmin', '==', false),
             limit(FETCH_LIMIT)
         ));
-
-        // Priority 2: Also try searching by email prefix if it looks like a partial email (optional but helpful)
-        if (term.length > 2) {
-            queries.push(query(
-                usersRef,
-                where('email', '>=', term),
-                where('email', '<=', term + '\uf8ff'),
-                limit(FETCH_LIMIT)
-            ));
-        }
     }
 
     try {
@@ -77,7 +79,7 @@ export const searchUsers = async (searchTerm, currentUserId) => {
         snapshots.forEach(snap => {
             snap.forEach(doc => {
                 const data = doc.data();
-                // Strict In-Memory Filtering
+                // Double-check just in case, but DB should have handled it
                 if (doc.id !== currentUserId && data.superAdmin !== true && !data.isAdmin) {
                     userMap.set(doc.id, { id: doc.id, ...data });
                 }
@@ -86,7 +88,7 @@ export const searchUsers = async (searchTerm, currentUserId) => {
 
         const combined = Array.from(userMap.values());
 
-        // Sort by name match relevance (starts with > contains)
+        // Client-side sort for relevance (since we combined multiple queries)
         combined.sort((a, b) => {
             const nameA = (a.displayName || "").toLowerCase();
             const nameB = (b.displayName || "").toLowerCase();
@@ -97,7 +99,7 @@ export const searchUsers = async (searchTerm, currentUserId) => {
             return nameA.localeCompare(nameB);
         });
 
-        return combined.slice(0, 10); // Return top 10
+        return combined.slice(0, 10);
 
     } catch (error) {
         console.error("Error searching users:", error);

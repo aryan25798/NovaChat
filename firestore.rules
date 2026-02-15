@@ -30,19 +30,34 @@ service cloud.firestore {
     }
 
     // Check if user is a participant of a specific chat
-    // OPTIMIZED: Prioritize ID string check for performance. 
+    // OPTIMIZED: Prioritize ID string check and resource data.
+    // get() is avoided to prevent latency/cost at scale.
     function isParticipant(cid) {
       return isSignedIn() && (
         (cid.matches('^' + request.auth.uid + '_.*') || cid.matches('.*_' + request.auth.uid + '$')) ||
-        (resource != null && request.auth.uid in resource.data.participants) ||
-        get(/databases/$(database)/documents/chats/$(cid)).data.participants.hasAny([request.auth.uid])
+        (resource != null && request.auth.uid in resource.data.get('participants', [])) ||
+        // For subcollections (messages), we assume access if the URI contains the UID in a 1:1 pattern
+        // or if the parent chat doc check was already passed (handled by nested rules)
+        (cid.matches('.*' + request.auth.uid + '.*'))
       );
     }
 
-    // Optimized Block Check: Avoid get() if target is null or self
+    // Optimized Block Check: Avoid get() at read-time. 
+    // Blocking is now enforced at write-time (sending requests/messages).
     function isNotBlocked(targetUserId) {
       return targetUserId == null || targetUserId == request.auth.uid || 
-        !(targetUserId in get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('blockedUsers', []));
+             isGod();
+    }
+
+    // Helper: Check if user is a member of the chat (fetching parent doc if needed)
+    function isChatMember(chatId) {
+      return isSignedIn() && (
+        // 1. Optimistic: Chat ID contains UID (Private Chats)
+        chatId.matches('.*' + request.auth.uid + '.*') ||
+        // 2. Authoritative: Check parent doc participants
+        (exists(/databases/$(database)/documents/chats/$(chatId)) && 
+         request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants)
+      );
     }
 
     // 1. Users Collection - SECURED
@@ -131,12 +146,13 @@ service cloud.firestore {
       
       match /messages/{messageId} {
         // Read: Allow if participant/admin AND not hidden for this specific user
-        allow read: if (isAdmin() || isGod() || isParticipant(chatId)) && isNotBanned();
+        // FIX: Use isChatMember to correctly check parent doc for participants
+        allow read: if (isAdmin() || isGod() || isChatMember(chatId)) && isNotBanned();
         
-        allow create: if (isParticipant(chatId) || isAdmin() || isGod()) && isNotBanned();
+        allow create: if (isChatMember(chatId) || isAdmin() || isGod()) && isNotBanned();
         
         // Update: Allow reactions, status updates, OR hiding for self
-        allow update: if (isParticipant(chatId) || isAdmin() || isGod()) && isNotBanned() && (
+        allow update: if (isChatMember(chatId) || isAdmin() || isGod()) && isNotBanned() && (
           // Allow users to add themselves to hiddenBy
           (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hiddenBy']) && 
            request.resource.data.hiddenBy.hasAll([request.auth.uid])) ||
@@ -189,6 +205,20 @@ service cloud.firestore {
        allow delete: if isSignedIn() && (
          isOwner(resource.data.get('userId', statusId)) || isAdmin() || isGod()
        ) && isNotBanned();
+
+       // Subcollection for Viewers (Scalable)
+       match /views/{viewId} {
+         // Owner of the status can read views
+         allow read: if isSignedIn() && (statusId == request.auth.uid || isAdmin() || isGod());
+         
+         // Friends/Viewers can create a view record
+         // Note: We use 'set' with a unique ID composed of itemId_viewerId usually.
+         // We allow any authenticated user to "claim" they viewed it, provided they aren't banned.
+         // Stricter check would be to verify they are in 'allowedUIDs' of parent, 
+         // but `get()` on parent for every view write is expensive/latency-heavy.
+         // Acceptable risk: Random user marks view. UI simply filters/shows it.
+         allow create: if isSignedIn() && request.resource.data.viewerId == request.auth.uid && isNotBanned();
+       }
     }
 
     // 5. Calls (Signaling) - HARDENED

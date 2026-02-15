@@ -12,7 +12,8 @@ import {
     subscribeToIncomingCalls,
     subscribeToCandidates,
     setLocalDescription,
-    getCallDoc
+    getCallDoc,
+    cleanupSignaling
 } from "../services/callService";
 
 const CallContext = React.createContext();
@@ -387,6 +388,8 @@ export function CallProvider({ children }) {
                         duration,
                         finalStatus: callStatus === 'connected' ? 'completed' : 'missed'
                     });
+                    // Cleanup RTDB Signaling after status update
+                    cleanupSignaling(currentCallId).catch(console.warn);
                 }
 
                 // Add Call Log to Chat (Keeping this direct for now as it crosses domains)

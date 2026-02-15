@@ -1,15 +1,19 @@
 import React, { Suspense, lazy } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
-import { NotificationProvider } from './contexts/NotificationContext';
-import { StatusProvider } from './contexts/StatusContext';
+
 import { FriendProvider } from './contexts/FriendContext';
 import { FileUploadProvider } from './contexts/FileUploadContext';
+import Login from './pages/Login';
+import { NotificationProvider } from './contexts/NotificationContext';
+import { StatusProvider } from './contexts/StatusContext';
 
-// Lazy Load Components
-const Login = lazy(() => import('./pages/Login'));
+// ... (imports)
+
+
 const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
 const MainLayout = lazy(() => import('./layouts/MainLayout'));
+const Home = lazy(() => import('./pages/Home'));
 const ChatPage = lazy(() => import('./pages/ChatPage'));
 const EmptyState = lazy(() => import('./components/EmptyState'));
 const ProfilePage = lazy(() => import('./pages/ProfilePage'));
@@ -26,23 +30,6 @@ function PrivateRoute({ children }) {
   return children;
 }
 
-function RoleProtectedRoute({ children, requireAdmin = false }) {
-  const { currentUser } = useAuth();
-
-  if (!currentUser) return <Navigate to="/login" />;
-
-  const isAdmin = currentUser.isAdmin || currentUser.superAdmin;
-
-  if (requireAdmin && !isAdmin) {
-    return <Navigate to="/" />;
-  }
-
-  if (!requireAdmin && isAdmin) {
-    return <Navigate to="/admin" />;
-  }
-
-  return children;
-}
 
 import { useState, useEffect } from 'react';
 
@@ -105,10 +92,48 @@ import GlobalAnnouncements from './components/GlobalAnnouncements'; // Import Ne
 import ErrorBoundary from './components/ErrorBoundary';
 import PermissionErrorBoundary from './components/PermissionErrorBoundary';
 
+// Shells are defined outside and memoized to prevent re-mounting the entire tree on auth changes
+const AdminShell = React.memo(() => (
+  <Routes>
+    <Route path="*" element={<AdminDashboard />} />
+  </Routes>
+));
+
+const UserShell = React.memo(() => (
+  <Routes>
+    <Route element={<MainLayout />}>
+      <Route index element={<Home />} />
+      <Route path="c/:id" element={<ChatPage />} />
+      {/* Fallback/Legacy Route */}
+      <Route path="chat/:id" element={<ChatPage />} />
+      <Route path="profile" element={<ProfilePage />} />
+      <Route path="status" element={<StatusPage />} />
+      <Route path="calls" element={<CallsPage />} />
+      <Route path="contacts" element={<ContactsPage />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Route>
+  </Routes>
+));
+
+const RootGate = () => {
+  const { currentUser } = useAuth();
+  const navigate = useNavigate();
+
+  // If claims are not settled, we wait (Crucial for role resolution)
+  if (!currentUser) return <Login />;
+  if (!currentUser.claimsSettled) return <Loading />;
+
+  const isAdmin = !!currentUser.isAdmin || !!currentUser.superAdmin;
+  console.debug("[RootGate] Selecting Shell. isAdmin:", isAdmin, "email:", currentUser.email);
+
+  return isAdmin ? <AdminShell /> : <UserShell />;
+};
+
 const App = () => {
   return (
     <ErrorBoundary>
       <PermissionErrorBoundary>
+
         <NotificationProvider>
           <LocationTracker />
           <DeliveryStatusListener />
@@ -122,25 +147,12 @@ const App = () => {
                       <Routes>
                         <Route path="/login" element={<Login />} />
                         <Route path="/share" element={<PrivateRoute><SharePage /></PrivateRoute>} />
-                        <Route path="/admin" element={<RoleProtectedRoute requireAdmin={true}><AdminDashboard /></RoleProtectedRoute>} />
-                        <Route
-                          path="/"
-                          element={
-                            <RoleProtectedRoute requireAdmin={false}>
-                              <MainLayout />
-                            </RoleProtectedRoute>
-                          }
-                        >
-                          <Route index element={<EmptyState />} />
-                          <Route path="c/:id" element={<ChatPage />} />
-                          <Route path="profile" element={<ProfilePage />} />
-                          <Route path="settings" element={<Navigate to="/profile" />} />
-                          <Route path="status" element={<StatusPage />} />
-                          <Route path="calls" element={<CallsPage />} />
-                          <Route path="contacts" element={<ContactsPage />} />
-                        </Route>
-
-                        <Route path="*" element={<Navigate to="/" />} />
+                        {/* ROOT GATE: Absolute isolation after login */}
+                        <Route path="*" element={
+                          <PrivateRoute>
+                            <RootGate />
+                          </PrivateRoute>
+                        } />
                       </Routes>
                     </Suspense>
                   </Router>

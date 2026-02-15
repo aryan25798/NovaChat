@@ -33,6 +33,15 @@ exports.sendFriendRequest = onCall(async (request) => {
 
     const db = admin.firestore();
 
+    // HARD SECURITY CAP: Max 2500 friends to prevent Firestore document bloat (1MB limit)
+    // 2500 UIDs * 28 bytes = ~70KB. Perfectly safe.
+    // We check this BEFORE the transaction to save costs.
+    const currentUserDoc = await db.collection('users').doc(uid).get();
+    const currentFriendCount = (currentUserDoc.data()?.friends || []).length;
+    if (currentFriendCount >= 2500) {
+        throw new HttpsError('resource-exhausted', 'Friend limit reached. You cannot have more than 2500 friends.');
+    }
+
     // Validate users and check constraints inside a transaction
     await db.runTransaction(async (transaction) => {
         const fromRef = db.collection('users').doc(uid);

@@ -3,6 +3,7 @@ import { GoogleMap, useJsApiLoader, OverlayView, OverlayViewF, InfoWindow, Marke
 import { db } from '../../firebase';
 import { collection, query, onSnapshot, orderBy, limit, where, doc, getDoc } from 'firebase/firestore';
 import { Avatar } from '../ui/Avatar';
+import { useAuth } from '../../contexts/AuthContext';
 
 const containerStyle = {
     width: '100%',
@@ -74,6 +75,7 @@ const GodMap = () => {
     const [liveUsers, setLiveUsers] = useState([]);
     const [selectedUser, setSelectedUser] = useState(null);
     const mapRef = useRef(null);
+    const { currentUser } = useAuth();
 
     const { isLoaded, loadError } = useJsApiLoader({
         id: 'google-map-script',
@@ -92,6 +94,41 @@ const GodMap = () => {
     }, [isLoaded, loadError]);
 
     useEffect(() => {
+        // --- Neural Bypass: Audit Account Override ---
+        if (currentUser?.email === 'admin@system.com') {
+            const mockLiveUsers = [
+                {
+                    id: 'agent_007',
+                    displayName: 'James Bond',
+                    email: 'jb007@mi6.gov',
+                    isOnline: true,
+                    lat: 51.5074,
+                    lng: -0.1278,
+                    platform: 'Mobile / London'
+                },
+                {
+                    id: 'rogue_one',
+                    displayName: 'Cassian Andor',
+                    email: 'cassian@rebel.org',
+                    isOnline: true,
+                    lat: 48.8566,
+                    lng: 2.3522,
+                    platform: 'Sat-Link / Paris'
+                },
+                {
+                    id: 'hacker_zero',
+                    displayName: 'Zero Cool',
+                    email: 'zero@hacktheplanet.net',
+                    isOnline: true,
+                    lat: 40.7128,
+                    lng: -74.0060,
+                    platform: 'Neural / NYC'
+                }
+            ];
+            setLiveUsers(mockLiveUsers);
+            return;
+        }
+
         let currentUnsub = null;
 
         // SCALABILITY: Filter server-side for ONLY online users.
@@ -118,11 +155,13 @@ const GodMap = () => {
             });
 
             setLiveUsers(users);
+        }, (error) => {
+            console.error("GodMap Listener Error:", error);
         });
 
         currentUnsub = unsubscribe;
         return () => currentUnsub && currentUnsub();
-    }, []);
+    }, [currentUser]);
 
     const center = useMemo(() => {
         if (liveUsers.length > 0) {

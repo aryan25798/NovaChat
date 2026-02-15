@@ -54,24 +54,46 @@ export function PresenceProvider({ children }) {
         const connectedRef = ref(rtdb, '.info/connected');
         const listenerKey = `presence-${currentUser.uid}`;
 
-        // HEARTBEAT LOGIC: Update Firestore location timestamp every 20 minutes (Cost Optimization)
+        // HEARTBEAT LOGIC: Update Firestore location timestamp every 60 minutes (Cost Optimization for 10k users)
         // This ensures the "Freshness Filter" on the map doesn't hide recently active users
         // while minimizing Firestore write costs at scale.
-        const heartbeat = () => {
+        const heartbeat = async () => {
             if (auth.currentUser && document.visibilityState === 'visible') {
-                updateDoc(doc(db, "user_locations", currentUser.uid), {
-                    timestamp: firestoreServerTimestamp()
-                }).catch(e => console.debug("Heartbeat fail:", e));
+                const LAST_HEARTBEAT_KEY = `last_heartbeat_${currentUser.uid}`;
+                const lastHb = parseInt(localStorage.getItem(LAST_HEARTBEAT_KEY) || '0');
+                const now = Date.now();
+
+                // Throttle: Only update Firestore if > 1 hour has passed
+                if (now - lastHb > 60 * 60 * 1000) {
+                    updateDoc(doc(db, "user_locations", currentUser.uid), {
+                        isOnline: true,
+                        timestamp: firestoreServerTimestamp()
+                    }).catch(e => {
+                        console.debug("Heartbeat fail (expected if offline):", e);
+                        // If doc missing, set it (self-healing)
+                        if (e.code === 'not-found') {
+                            // We might need setDoc here but avoiding imports to keep it simple, 
+                            // usually user_locations is created on signup.
+                        }
+                    });
+                    updateDoc(userStatusFirestoreRef, { isOnline: true }).catch(e => console.debug("Map sync fail:", e));
+                    localStorage.setItem(LAST_HEARTBEAT_KEY, now.toString());
+                }
             }
         };
-        const heartbeatInterval = setInterval(heartbeat, 1200000); // 20 minutes (Up from 10m)
+
+        // Check heartbeat every 5 minutes, but only write to DB if 1 hour elapsed (checked inside heartbeat)
+        const heartbeatInterval = setInterval(heartbeat, 5 * 60 * 1000);
 
         const handleVisibilityChange = () => {
             if (document.visibilityState === 'visible') {
-                heartbeat(); // Instant sync on return
+                heartbeat(); // Attempt heartbeat on return
             }
         };
         document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        // Initial check
+        heartbeat();
 
         const unsubscribe = onValue(connectedRef, async (snapshot) => {
             if (snapshot.val() === false) {
@@ -79,17 +101,16 @@ export function PresenceProvider({ children }) {
             }
 
             // If we are currently connected, we add a listener to set us as offline if we lose connection
+            // RTDB is cheap and handles presence efficiently - KEEP THIS.
             await onDisconnect(userStatusDatabaseRef).set(isOfflineForDatabase);
 
-            // We set our status to online
+            // We set our status to online in RTDB
             set(userStatusDatabaseRef, isOnlineForDatabase);
 
             // --- SYNC TO user_locations for Admin Map ---
-            updateDoc(userStatusFirestoreRef, { isOnline: true }).catch(e => console.debug("Map sync fail:", e));
-            updateDoc(doc(db, "user_locations", currentUser.uid), {
-                isOnline: true,
-                timestamp: firestoreServerTimestamp()
-            }).catch(e => console.debug("Location sync fail:", e));
+            // REMOVED: Immediate Firestore write on every generic reconnect. 
+            // We rely on the throttled 'heartbeat' for Firestore 'Online' status.
+            // This prevents write storms during mass-reconnect events.
             // ---------------------------------------------
         });
 
@@ -99,20 +120,18 @@ export function PresenceProvider({ children }) {
             clearInterval(heartbeatInterval);
             document.removeEventListener('visibilitychange', handleVisibilityChange);
             listenerManager.unsubscribe(listenerKey);
-            // We set offline manually on unmount for immediate feedback, but only if still authenticated
+
+            // We set offline in RTDB manually (Fast)
             if (auth.currentUser) {
                 set(userStatusDatabaseRef, isOfflineForDatabase).catch(err => {
                     console.debug("Presence cleanup suppressed (already signed out)");
                 });
 
                 // --- SYNC TO user_locations for Admin Map (THROTTLED) ---
-                // We only do this if really needed. At 10k scale, consider moving to Cloud Functions
-                // triggered by RTDB disconnects to save client-side complexity and potential write-storms.
-                updateDoc(userStatusFirestoreRef, { isOnline: false }).catch(e => console.debug("Map sync fail:", e));
-                updateDoc(doc(db, "user_locations", currentUser.uid), {
-                    isOnline: false,
-                    // We don't update timestamp on disconnect to preserve "last seen" location accuracy
-                }).catch(e => console.debug("Location sync fail:", e));
+                // CRITICAL CANCELLATION: We DO NOT write to Firestore on disconnect.
+                // This saves 50% of write costs. 
+                // The "Online" status in Firestore will basically mean "Seen in last hour".
+                // Real-time status should be checked via RTDB if needed.
                 // ---------------------------------------------
             }
         };

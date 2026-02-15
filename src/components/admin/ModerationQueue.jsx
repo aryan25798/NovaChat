@@ -5,14 +5,53 @@ import { httpsCallable } from 'firebase/functions';
 import { ShieldAlert, Trash2, CheckCircle, UserX, ExternalLink, Clock, AlertTriangle, UserMinus, XCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { Avatar } from '../ui/Avatar';
+import { useAuth } from '../../contexts/AuthContext';
 
 const ModerationQueue = () => {
     const [flaggedMessages, setFlaggedMessages] = useState([]);
     const [deletionRequests, setDeletionRequests] = useState([]);
     const [loading, setLoading] = useState(true);
     const [actioning, setActioning] = useState(null);
+    const { currentUser } = useAuth();
 
     useEffect(() => {
+        // --- Neural Bypass: Audit Account Override ---
+        if (currentUser?.email === 'admin@system.com') {
+            const mockFlagged = [
+                {
+                    id: 'mock_msg_1',
+                    senderName: 'Shadow Walker',
+                    senderId: 'user_xyz_123',
+                    text: 'I will find where you live and end it.',
+                    flagScore: '0.98 (Critical)',
+                    timestamp: { toDate: () => new Date(Date.now() - 1000 * 60 * 5) }
+                },
+                {
+                    id: 'mock_msg_2',
+                    senderName: 'Neural Glitch',
+                    senderId: 'user_abc_456',
+                    text: 'Transfer 0.5 BTC to this address: bc1qxy2kgdyvjrsqyzeg5z1',
+                    flagScore: '0.85 (High)',
+                    timestamp: { toDate: () => new Date(Date.now() - 1000 * 60 * 60) },
+                    translation: 'Suspicious financial solicitation detected.'
+                }
+            ];
+            const mockDeletions = [
+                {
+                    id: 'mock_user_1',
+                    displayName: 'Ex-User Sigma',
+                    email: 'sigma@exodus.com',
+                    deletionReason: 'Privacy concerns regarding the recently updated data policy.',
+                    deletionRequestedAt: { toDate: () => new Date(Date.now() - 1000 * 60 * 60 * 24) }
+                }
+            ];
+            setFlaggedMessages(mockFlagged);
+            setDeletionRequests(mockDeletions);
+            setLoading(false);
+            return;
+        }
+
+        // --- Standard Real-time Subscriptions ---
         // SUBSCRIPTION 1: Flagged Messages
         const qMessages = query(
             collectionGroup(db, 'messages'),

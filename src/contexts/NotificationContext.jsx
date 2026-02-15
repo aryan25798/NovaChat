@@ -213,10 +213,24 @@ export function NotificationProvider({ children }) {
                 if (currentToken && currentUser?.uid) {
                     setToken(currentToken);
                     if (auth.currentUser?.uid === currentUser.uid) {
-                        console.log("[FCM-Flow] Syncing token to Firestore for user:", currentUser.uid);
-                        await updateDoc(doc(db, "users", currentUser.uid), {
-                            fcmTokens: arrayUnion(currentToken)
-                        });
+                        const userRef = doc(db, "users", currentUser.uid);
+                        const userSnap = await getDoc(userRef);
+
+                        if (userSnap.exists()) {
+                            const currentTokens = userSnap.data().fcmTokens || [];
+
+                            // SCALABILITY HARDENING: Prune tokens to prevent document bloat
+                            // We keep the 5 most recent tokens.
+                            let updatedTokens = [...new Set([currentToken, ...currentTokens])];
+                            if (updatedTokens.length > 5) {
+                                updatedTokens = updatedTokens.slice(0, 5);
+                            }
+
+                            console.log("[FCM-Flow] Syncing pruned tokens to Firestore");
+                            await updateDoc(userRef, {
+                                fcmTokens: updatedTokens
+                            });
+                        }
                     }
                 }
             } else {

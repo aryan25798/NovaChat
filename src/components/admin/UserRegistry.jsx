@@ -44,37 +44,86 @@ const UserRegistry = ({ onOpenDossier, onBan, onNuke }) => {
 
     const DOCUMENTS_PER_PAGE = 50;
 
-    const fetchUsers = async (isNextPage = false) => {
+    // Server-Side Search Implementation
+    useEffect(() => {
+        const delayDebounceFn = setTimeout(() => {
+            fetchUsers(false, searchTerm);
+        }, 600);
+
+        return () => clearTimeout(delayDebounceFn);
+    }, [searchTerm, filterStatus]);
+
+    const fetchUsers = async (isNextPage = false, search = '') => {
+        // --- Neural Bypass: Audit Account Override ---
+
         setLoading(true);
         try {
             let q;
-            // Note: Complex filtering with search usually requires Algolia/Typesense.
-            // For this phase, we fetch latest 50 and filter client-side, 
-            // or we could add simple Firestore 'where' clauses if needed.
-            if (isNextPage && lastDoc) {
-                q = query(collection(db, 'users'), orderBy('createdAt', 'desc'), limit(DOCUMENTS_PER_PAGE), startAfter(lastDoc));
-            } else {
-                q = query(collection(db, 'users'), orderBy('createdAt', 'desc'), limit(DOCUMENTS_PER_PAGE));
-            }
+            const usersRef = collection(db, 'users');
+            const term = search.toLowerCase().trim();
 
-            const snapshot = await getDocs(q);
-            const userList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            if (term) {
+                // SERVER-SIDE SEARCH
+                // Note: We use the same indexes as userService.js
+                // We handle 'email' or 'displayName'
+                if (term.includes('@')) {
+                    q = query(
+                        usersRef,
+                        where('email', '>=', term),
+                        where('email', '<=', term + '\uf8ff'),
+                        limit(DOCUMENTS_PER_PAGE)
+                    );
+                } else {
+                    q = query(
+                        usersRef,
+                        where('displayName', '>=', term),
+                        where('displayName', '<=', term + '\uf8ff'),
+                        limit(DOCUMENTS_PER_PAGE)
+                    );
+                }
 
-            if (snapshot.docs.length < DOCUMENTS_PER_PAGE) {
+                // Note: Pagination during search is reset
                 setHasMore(false);
             } else {
+                // DEFAULT LIST (Pagination supported)
+                if (isNextPage && lastDoc) {
+                    q = query(usersRef, orderBy('createdAt', 'desc'), limit(DOCUMENTS_PER_PAGE), startAfter(lastDoc));
+                } else {
+                    q = query(usersRef, orderBy('createdAt', 'desc'), limit(DOCUMENTS_PER_PAGE));
+                }
                 setHasMore(true);
             }
 
-            setLastDoc(snapshot.docs[snapshot.docs.length - 1]);
+            const snapshot = await getDocs(q);
+            let userList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-            if (isNextPage) {
+            // Client-side Refinement for 'status' filter if needed (since basic indexes might not cover all combos)
+            if (filterStatus === 'banned') {
+                userList = userList.filter(u => u.isBanned);
+            } else if (filterStatus === 'active') {
+                userList = userList.filter(u => !u.isBanned);
+            }
+
+            // Exclude System Accounts
+            userList = userList.filter(u => u.displayName !== "Gemini AI");
+
+            if (!term) {
+                if (snapshot.docs.length < DOCUMENTS_PER_PAGE) {
+                    setHasMore(false);
+                }
+                setLastDoc(snapshot.docs[snapshot.docs.length - 1]);
+            }
+
+            if (isNextPage && !term) {
                 setUsers(prev => {
                     const combined = [...prev, ...userList];
-                    return Array.from(new Map(combined.map(item => [item.id, item])).values());
+                    const unique = Array.from(new Map(combined.map(item => [item.id, item])).values());
+                    setFilteredUsers(unique);
+                    return unique;
                 });
             } else {
                 setUsers(userList);
+                setFilteredUsers(userList);
             }
         } catch (error) {
             console.error("Error fetching users:", error);
@@ -82,38 +131,6 @@ const UserRegistry = ({ onOpenDossier, onBan, onNuke }) => {
             setLoading(false);
         }
     };
-
-    useEffect(() => {
-        fetchUsers();
-    }, []);
-
-    // Filter Logic
-    useEffect(() => {
-        let result = users;
-
-        if (searchTerm) {
-            const lowerTerm = searchTerm.toLowerCase();
-            result = result.filter(u =>
-                (u.displayName && u.displayName.toLowerCase().includes(lowerTerm)) ||
-                (u.email && u.email.toLowerCase().includes(lowerTerm)) ||
-                u.id.toLowerCase().includes(lowerTerm)
-            );
-        }
-
-        // Filter out Gemini AI and System accounts
-        result = result.filter(u =>
-            u.displayName !== "Gemini AI" &&
-            u.email !== "gemini@ai.bot" // Assuming this is the email
-        );
-
-        if (filterStatus === 'banned') {
-            result = result.filter(u => u.isBanned);
-        } else if (filterStatus === 'active') {
-            result = result.filter(u => !u.isBanned);
-        }
-
-        setFilteredUsers(result);
-    }, [users, searchTerm, filterStatus]);
 
 
 

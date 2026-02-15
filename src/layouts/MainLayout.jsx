@@ -1,7 +1,8 @@
 import React from "react";
-import { Outlet, useLocation } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import Sidebar from "../components/Sidebar";
 import MobileBottomNav from "../components/MobileBottomNav";
+import { useAuth } from "../contexts/AuthContext";
 import { cn } from "../lib/utils";
 import NavRail from "../components/NavRail";
 import { motion, AnimatePresence } from "framer-motion";
@@ -18,6 +19,19 @@ const MainLayout = () => {
 
     const isChatActive = location.pathname.startsWith('/c/');
     const isRoot = location.pathname === "/";
+    const { currentUser } = useAuth();
+    const navigate = useNavigate();
+
+    // FAIL-SAFE: If an Admin somehow enters User Layout, kick them to Admin Dashboard
+    React.useEffect(() => {
+        if (currentUser && currentUser.claimsSettled) {
+            const isAdmin = !!currentUser.isAdmin || !!currentUser.superAdmin;
+            if (isAdmin) {
+                console.warn("[Security] Admin in User Portal. Auto-correcting...");
+                navigate("/admin", { replace: true });
+            }
+        }
+    }, [currentUser, navigate]);
 
     // Visibility Logic
     // Mobile: Show Sidebar ONLY on root. Show Content on everything else.

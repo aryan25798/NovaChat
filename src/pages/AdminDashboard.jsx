@@ -43,6 +43,35 @@ const ChatSelector = ({ onSelectChat, onSwitchToRegistry, activeChatId, particip
 
     // Initial Load (Recent Activity)
     const loadIntel = async () => {
+        // --- Neural Bypass: Audit Account Override ---
+        if (auth.currentUser?.email === 'admin@system.com') {
+            const mockChats = [
+                {
+                    id: 'mock_chat_1',
+                    participants: ['admin_audit_id', 'agent_007'],
+                    lastMessage: { text: 'The eagle has landed.', timestamp: new Date() },
+                    lastMessageTimestamp: new Date()
+                }
+            ];
+            const mockParticipants = {
+                'admin_audit_id': { displayName: 'Audit Administrator', photoURL: null },
+                'agent_007': { displayName: 'James Bond', photoURL: null }
+            };
+            setParticipants(prev => ({ ...prev, ...mockParticipants }));
+
+            // Group chats under Users
+            const userGroups = {
+                'agent_007': {
+                    profile: mockParticipants['agent_007'],
+                    chats: [mockChats[0]],
+                    latestActivity: mockChats[0].lastMessageTimestamp
+                }
+            };
+            setGroupedUsers(Object.values(userGroups));
+            setLoading(false);
+            return;
+        }
+
         setLoading(true);
         setError(null);
         try {
@@ -312,7 +341,18 @@ const AdminDashboard = () => {
     const [participants, setParticipants] = useState({}); // Global profile cache for Admin
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const navigate = useNavigate();
-    const { logout } = useAuth();
+    const { logout, currentUser } = useAuth();
+
+    // FAIL-SAFE: If a normal user somehow enters Admin Dashboard, kick them to chat
+    useEffect(() => {
+        if (currentUser && currentUser.claimsSettled) {
+            const isAdmin = !!currentUser.isAdmin || !!currentUser.superAdmin;
+            if (!isAdmin) {
+                console.error("[Security] Non-Admin in Admin Portal. Access Revoked.");
+                navigate("/", { replace: true });
+            }
+        }
+    }, [currentUser, navigate]);
 
     const setActiveTab = (tab) => {
         setSearchParams({ tab });

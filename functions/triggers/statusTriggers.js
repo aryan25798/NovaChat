@@ -10,7 +10,11 @@ const admin = require('firebase-admin');
  * 
  * Path: users/{friendId}/feed/status_signals (docId: authorId)
  */
-exports.onStatusWritten = onDocumentWritten("statuses/{userId}", async (event) => {
+exports.onStatusWritten = onDocumentWritten({
+    document: "statuses/{userId}",
+    maxInstances: 50,
+    memory: "256MiB"
+}, async (event) => {
     const db = admin.firestore();
     const userId = event.params.userId;
     const newData = event.data.after.data();
@@ -44,12 +48,16 @@ exports.onStatusWritten = onDocumentWritten("statuses/{userId}", async (event) =
     const latestItem = newItems[newItems.length - 1]; // Assuming append-only
     if (!latestItem) return;
 
-    // Optimization: Cap fan-out to prevent massive write costs for users with 1000s of friends.
-    // Standard Social App Pattern: Push to the first N friends, pull for the rest.
-    const MAX_FAN_OUT = 500;
+    // Optimization: Cap fan-out to 2500 friends (Safe for Launch).
+    // This allows popular users to reach a wide audience without timeouts.
+    const MAX_FAN_OUT = 2500;
     const targets = allowedUIDs.slice(0, MAX_FAN_OUT);
 
-    logger.info(`Fanning out status update from ${userId} to ${targets.length} friends (Capped at ${MAX_FAN_OUT}).`);
+    if (allowedUIDs.length > MAX_FAN_OUT) {
+        logger.warn(`Status fan-out capped. User ${userId} has ${allowedUIDs.length} friends, reaching first ${MAX_FAN_OUT}.`);
+    }
+
+    logger.info(`Fanning out status update from ${userId} to ${targets.length} friends.`);
 
     const batchSize = 450;
     const chunks = [];
