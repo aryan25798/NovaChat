@@ -18,7 +18,8 @@ export default defineConfig(({ mode }) => {
       'VITE_FIREBASE_PROJECT_ID',
       'VITE_FIREBASE_STORAGE_BUCKET',
       'VITE_FIREBASE_MESSAGING_SENDER_ID',
-      'VITE_FIREBASE_APP_ID'
+      'VITE_FIREBASE_APP_ID',
+      'VITE_FIREBASE_VAPID_KEY'
     ];
     const missing = requiredEnv.filter(key => !env[key]);
     if (missing.length > 0) {
@@ -34,7 +35,7 @@ export default defineConfig(({ mode }) => {
       VitePWA({
         strategies: 'injectManifest',
         srcDir: 'src',
-        filename: 'sw.js',
+        filename: 'firebase-messaging-sw.js',
         registerType: 'autoUpdate',
         devOptions: {
           enabled: true
@@ -123,6 +124,7 @@ export default defineConfig(({ mode }) => {
         injectManifest: {
           rollupOptions: {
             output: {
+              entryFileNames: 'firebase-messaging-sw.js',
               manualChunks: undefined
             }
           },
@@ -142,6 +144,10 @@ export default defineConfig(({ mode }) => {
       'import.meta.env.VITE_FIREBASE_VAPID_KEY': JSON.stringify(env.VITE_FIREBASE_VAPID_KEY || ""),
       'import.meta.env.VITE_GEMINI_API_KEY': JSON.stringify(env.VITE_GEMINI_API_KEY || ""),
       'import.meta.env.VITE_GOOGLE_MAPS_API_KEY': JSON.stringify(env.VITE_GOOGLE_MAPS_API_KEY || ""),
+      'import.meta.env.VITE_METERED_API_KEY': JSON.stringify(env.VITE_METERED_API_KEY || ""),
+      'import.meta.env.VITE_TURN_SERVER_URL': JSON.stringify(env.VITE_TURN_SERVER_URL || ""),
+      'import.meta.env.VITE_TURN_SERVER_USER': JSON.stringify(env.VITE_TURN_SERVER_USER || ""),
+      'import.meta.env.VITE_TURN_SERVER_PWD': JSON.stringify(env.VITE_TURN_SERVER_PWD || ""),
     },
     build: {
       target: 'esnext',
@@ -161,14 +167,14 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       host: true,
       headers: {
-        'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+        'Cross-Origin-Opener-Policy': 'unsafe-none',
       },
     },
     preview: {
       port: 4173,
       host: true,
       headers: {
-        'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+        'Cross-Origin-Opener-Policy': 'unsafe-none',
       },
     }
   };

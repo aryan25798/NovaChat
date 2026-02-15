@@ -38,7 +38,9 @@ class SoundService {
             } else if (type === 'dialing') {
                 oscillator.type = 'sine';
                 oscillator.frequency.setValueAtTime(440, now);
-                oscillator.frequency.add(480, now); // Dial tone is dual-frequency, simplification here
+                // Dial tone is traditionally dual-frequency (350+440). 
+                // For simplification, we use a single stable frequency.
+                oscillator.frequency.setValueAtTime(440, now);
                 gainNode.gain.setValueAtTime(0.1, now);
                 oscillator.start(now);
                 oscillator.stop(now + 1.5);

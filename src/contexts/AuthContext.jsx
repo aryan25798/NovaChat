@@ -1,6 +1,6 @@
 import React, { useContext, useState, useEffect, useRef, useCallback } from "react";
 import { auth, googleProvider, db, functions } from "../firebase";
-import { signInWithPopup, getRedirectResult, signOut, onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
+import { signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
 import { doc, setDoc, getDoc, serverTimestamp, updateDoc, onSnapshot } from "firebase/firestore";
 import { listenerManager } from "../utils/ListenerManager";
@@ -94,7 +94,7 @@ export function AuthProvider({ children }) {
             // Throttle: Don't update if last update was less than 5 minutes ago
             const lastUpdate = userData.lastLocationTimestamp?.toDate?.() || 0;
             if (Date.now() - lastUpdate < 300000) { // 5 minutes
-                console.debug("Location update throttled (last update too recent).");
+                // Silenced debug log to reduce console noise in production
                 return;
             }
 
@@ -163,10 +163,22 @@ export function AuthProvider({ children }) {
             }
 
             const startTime = Date.now();
+            // --- STALL GUARD ---
+            // Some browsers (especially with strict COOP/ad-blockers) stall the popup promise forever.
+            // We set a 15s watch. If nothing happens, we flip to redirect.
+            const stallTimeout = setTimeout(() => {
+                console.warn("[Auth] Popup stall detected (15s). Falling back to Redirect.");
+                setPreferRedirect(true);
+                sessionStorage.setItem('prefer_redirect_auth', 'true');
+                window.location.reload(); // Force a fresh state for redirect
+            }, 15000);
+
             try {
                 const result = await signInWithPopup(auth, googleProvider);
+                clearTimeout(stallTimeout);
                 return result;
             } catch (popupError) {
+                clearTimeout(stallTimeout);
                 const errorCode = popupError.code;
                 const duration = Date.now() - startTime;
 

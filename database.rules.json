@@ -32,7 +32,7 @@
                 "signals": {
                     "$messageId": {
                         ".write": "auth != null && (auth.token.isAdmin === true || auth.token.superAdmin === true || root.child('user_chats').child(auth.uid).child($chatId).exists())",
-                        ".validate": "newData.hasChildren(['senderId', 'timestamp'])"
+                        ".validate": "newData.hasChildren(['s', 'ts'])"
                     }
                 },
                 "status": {

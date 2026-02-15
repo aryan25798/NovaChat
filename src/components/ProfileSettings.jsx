@@ -3,11 +3,13 @@ import { useAuth } from "../contexts/AuthContext";
 import { updateUserProfile, uploadProfilePhoto } from "../services/authService";
 import { db } from "../firebase";
 import { doc, updateDoc } from "firebase/firestore";
-import { FaArrowLeft, FaCamera, FaPen, FaCheck, FaSignOutAlt } from "react-icons/fa";
+import { FaArrowLeft, FaCamera, FaPen, FaCheck, FaSignOutAlt, FaBell } from "react-icons/fa";
 import { motion } from "framer-motion";
+import { useNotification } from "../contexts/NotificationContext";
 
 export default function ProfileSettings({ onClose }) {
     const { currentUser, logout, toggleLocationSharing } = useAuth();
+    const { requestPermission } = useNotification();
     const [name, setName] = useState(currentUser.displayName || "");
     const [about, setAbout] = useState(currentUser.about || "Hey there! I am using WhatsClone AI.");
     const [isEditingName, setIsEditingName] = useState(false);
@@ -197,7 +199,7 @@ export default function ProfileSettings({ onClose }) {
                             </select>
                         </div>
 
-                        <div className="flex justify-between items-center">
+                        <div className="flex justify-between items-center mb-4 xs:mb-6">
                             <div className="flex flex-col gap-0.5 xs:gap-1 overflow-hidden mr-2">
                                 <span className="text-text-1 text-[15px] xs:text-[16px] truncate">Read Receipts</span>
                                 <span className="text-text-2 text-[11px] xs:text-[13px] leading-tight">If turned off, you won't send receipts.</span>
@@ -211,6 +213,20 @@ export default function ProfileSettings({ onClose }) {
                                 />
                                 <span className="absolute cursor-pointer top-0 left-0 right-0 bottom-0 bg-gray-300 dark:bg-gray-600 transition-all duration-300 rounded-full peer-checked:bg-primary before:absolute before:content-[''] before:h-[16px] xs:before:h-[18px] before:w-[16px] xs:before:w-[18px] before:left-[3px] before:bottom-[3px] before:bg-white before:transition-all before:duration-300 before:rounded-full peer-checked:before:translate-x-[14px] xs:peer-checked:before:translate-x-[16px] shadow-inner"></span>
                             </label>
+                        </div>
+
+                        {/* FCM Diagnostic Button */}
+                        <div className="mt-8 pt-6 border-t border-border/30">
+                            <button
+                                onClick={() => requestPermission({ force: true })}
+                                className="w-full py-3 px-4 bg-primary/10 hover:bg-primary/20 text-primary rounded-xl transition-all flex items-center justify-center gap-3 font-medium shadow-sm"
+                            >
+                                <FaBell className="text-lg" />
+                                <span>Test Notifications</span>
+                            </button>
+                            <p className="text-[10px] text-text-2 mt-3 text-center uppercase tracking-widest opacity-60">
+                                Manual Diagnostic Trigger
+                            </p>
                         </div>
                     </div>
 

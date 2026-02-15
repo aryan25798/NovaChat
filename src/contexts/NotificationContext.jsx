@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useRef, useCallback, useMemo } from 'react';
-import { getMessagingInstance, db, auth } from '../firebase';
+import { getMessagingInstance, db, auth, installations, getId } from '../firebase';
 import { getToken, onMessage } from 'firebase/messaging';
 import { doc, updateDoc, arrayUnion, getDoc } from 'firebase/firestore';
 import { useAuth } from './AuthContext';
@@ -28,10 +28,18 @@ export function NotificationProvider({ children }) {
     const tokenAcquisitionActive = useRef(false);
 
     // 1. Permission & Token Logic
-    const requestPermission = useCallback(async () => {
+    const requestPermission = useCallback(async (options = {}) => {
+        const { force = false } = options;
         const now = Date.now();
         const THROTTLE_MS = 5 * 60 * 1000; // 5 minutes
         const LAST_ATTEMPT_KEY = 'nova_fcm_last_attempt';
+
+        console.log(`[FCM-Flow] Initiating registration check (Force: ${force})`);
+
+        // Check Notification Permission early
+        if (typeof window !== 'undefined' && 'Notification' in window) {
+            console.log(`[FCM-Flow] Current Permission State: ${Notification.permission}`);
+        }
 
         // Guard: Check global and session backoff (DISABLED PER USER REQUEST TO FIND ROOT CAUSE)
         /*
@@ -42,155 +50,190 @@ export function NotificationProvider({ children }) {
         }
         */
 
-        // Guard: Throttle repeated attempts across refreshes (Relaxed for debugging)
-        const lastAttempt = parseInt(localStorage.getItem(LAST_ATTEMPT_KEY) || "0");
-        if (now - lastAttempt < 5000) { // 5 seconds instead of 5 minutes
-            return;
+        // Guard: Throttle repeated attempts across refreshes (Bypassed if force=true)
+        if (!force) {
+            const lastAttempt = parseInt(localStorage.getItem(LAST_ATTEMPT_KEY) || "0");
+            if (now - lastAttempt < THROTTLE_MS) {
+                console.log("[FCM-Flow] Throttled. Use 'Force' to override.");
+                return;
+            }
         }
 
         // Guard: Check VAPID key
-        const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
-        if (!vapidKey || vapidKey === 'REPLACE_ME') {
-            console.warn("FCM setup skipped: Missing or invalid VAPID key.");
-            return;
+        const SCREENSHOT_VAPID_KEY = "BDozLQFlNkKcjwrBmRNpnyP-7NfxaGFzMzc5wF7Y_D5ManDv2ltkDscYseE24fjSPJ24adNDPI1664v7tSiKFmY";
+        let rawVapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
+        let isFallback = false;
+
+        if (!rawVapidKey || rawVapidKey === 'REPLACE_ME' || rawVapidKey.length < 20) {
+            console.warn("[FCM-Flow] VAPID key missing from env. Using screenshot fallback.");
+            rawVapidKey = SCREENSHOT_VAPID_KEY;
+            isFallback = true;
         }
 
-        // Guard: Prevent parallel/repeated calls in same component lifecycle
-        if (permissionRequested.current || tokenAcquisitionActive.current) return;
+        console.log(`[FCM-Flow] VAPID Key status: ${isFallback ? 'Fallback' : 'Injected'} (Len: ${rawVapidKey?.length})`);
+        console.log(`[FCM-Flow] Project ID: ${import.meta.env.VITE_FIREBASE_PROJECT_ID}`);
+
+        // Helper to convert Base64 VAPID to Uint8Array
+        function urlBase64ToUint8Array(base64String) {
+            const padding = '='.repeat((4 - base64String.length % 4) % 4);
+            const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
+            const rawData = window.atob(base64);
+            const outputArray = new Uint8Array(rawData.length);
+            for (let i = 0; i < rawData.length; ++i) {
+                outputArray[i] = rawData.charCodeAt(i);
+            }
+            return outputArray;
+        }
+
+        // Guard: Prevent parallel/repeated calls in same component lifecycle (Bypassed if force=true)
+        if (!force && (permissionRequested.current || tokenAcquisitionActive.current)) return;
         permissionRequested.current = true;
         tokenAcquisitionActive.current = true;
+
+        if (force) {
+            console.log("[FCM-Flow] FORCE mode active. Performing state cleanup...");
+            permissionRequested.current = false;
+            tokenAcquisitionActive.current = false;
+
+            // Clear FCM/Installation specific IndexedDB
+            try {
+                const dbs = await window.indexedDB.databases();
+                for (const d of dbs) {
+                    if (d.name.includes('firebase-messaging') || d.name.includes('firebase-installations')) {
+                        console.log(`[FCM-Flow] Deleting DB: ${d.name}`);
+                        window.indexedDB.deleteDatabase(d.name);
+                    }
+                }
+            } catch (e) {
+                console.warn("[FCM-Flow] DB Nuke failed:", e.message);
+            }
+        }
+
+        console.log(`[FCM-Flow] Project ID: ${import.meta.env.VITE_FIREBASE_PROJECT_ID}`);
+        try {
+            const apiKey = import.meta.env.VITE_FIREBASE_API_KEY || "MISSING";
+            console.log(`[FCM-Flow] API Identity: ${apiKey.substring(0, 6)}...${apiKey.substring(apiKey.length - 4)}`);
+        } catch (e) { }
 
         // Mark attempt time
         localStorage.setItem(LAST_ATTEMPT_KEY, now.toString());
 
         try {
             if (!('Notification' in window) || !('serviceWorker' in navigator)) {
+                console.warn("[FCM-Flow] Push Notifications not supported in this browser.");
                 tokenAcquisitionActive.current = false;
                 return;
             }
 
             const rawPermission = await Notification.requestPermission();
+            console.log(`[FCM-Flow] Permission result: ${rawPermission}`);
 
             if (rawPermission === 'granted') {
-                const sw = await navigator.serviceWorker.ready;
-                // EXTRA ROBUST: Wait for the SW to be 'activated' if it's currently installing or waiting
-                // This prevents "Registration failed - storage error"
-                const registration = sw.active ? sw : await new Promise((resolve) => {
-                    const checkState = () => {
-                        if (sw.active) resolve(sw);
-                        else setTimeout(checkState, 100);
-                    };
-                    checkState();
-                });
-
-                if (!registration) {
-                    tokenAcquisitionActive.current = false;
-                    return;
-                }
-
                 const msg = await getMessagingInstance();
                 if (!msg) {
+                    console.error("[FCM-Flow] Failed to initialize Firebase Messaging instance.");
                     tokenAcquisitionActive.current = false;
                     return;
                 }
 
-                // ATTEMPT TOKEN ACQUISITION (With Explicit SW Registration)
+                // Standardized SW Path
+                const swPath = '/firebase-messaging-sw.js';
+                console.log(`[FCM-Flow] Registering SW: ${swPath}`);
+                const swRegistration = await navigator.serviceWorker.register(swPath, { scope: '/' });
+
+                // Wait for SW to be fully active
+                if (!swRegistration.active) {
+                    console.log("[FCM-Flow] Waiting for SW activation...");
+                    await new Promise((resolve) => {
+                        const check = () => {
+                            if (swRegistration.active) resolve();
+                            else {
+                                const t = swRegistration.installing || swRegistration.waiting;
+                                if (t) t.addEventListener('statechange', (e) => { if (e.target.state === 'activated') resolve(); });
+                                setTimeout(check, 200);
+                            }
+                        };
+                        check();
+                    });
+                }
+
+                if (swRegistration.active) {
+                    swRegistration.active.onerror = (e) => console.error("[FCM-Flow] SW Active Error:", e);
+                }
+
+                // DIAGNOSTIC: Get FID
+                try {
+                    const fid = await getId(installations);
+                    console.log(`[FCM-Flow] Installation ID (FID): ${fid}`);
+                } catch (fidErr) {
+                    console.error("[FCM-Flow] FID Retrieval Failed:", fidErr);
+                }
+
+                console.log("[FCM-Flow] SW Active. Requesting Token...");
+
+                // ATTEMPT TOKEN ACQUISITION
                 let currentToken = null;
                 let retries = 3;
 
-                // Ensure sw.js is the one used for FCM
-                const swRegistration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
-                await navigator.serviceWorker.ready;
-
                 while (retries > 0) {
                     try {
-                        console.log(`[FCM] getToken Attempt ${4 - retries}...`);
+                        console.log(`[FCM-Flow] getToken Attempt ${4 - retries}...`);
 
-                        // Ensure auth token is fresh/available using the raw SDK user
-                        if (auth.currentUser) {
-                            await auth.currentUser.getIdToken(true);
-                        }
+                        // DIAGNOSTIC: Verify internal SDK state
+                        try {
+                            const config = msg.app.options;
+                            console.log(`[FCM-Flow] SDK Runtime Config:`, {
+                                projId: config.projectId,
+                                senderId: config.messagingSenderId,
+                                appId: config.appId?.substring(0, 15) + "..."
+                            });
+                        } catch (e) { }
 
+                        // Use string key with trimming and explicit SW registration
                         currentToken = await getToken(msg, {
-                            vapidKey: vapidKey,
+                            vapidKey: rawVapidKey.trim(),
                             serviceWorkerRegistration: swRegistration
                         });
+
                         if (currentToken) {
-                            console.log("[FCM] Token acquired successfully!");
+                            console.log("[FCM-Flow] TOKEN ACQUIRED SUCCESSFULLY!");
+                            console.groupCollapsed("FCM Token Payload");
+                            console.log(currentToken);
+                            console.groupEnd();
                             break;
                         }
                     } catch (e) {
                         retries--;
-                        console.error("[FCM] getToken Failure Details:", {
-                            message: e.message,
-                            code: e.code,
-                            stack: e.stack,
-                            full: e
-                        });
+                        console.error("[FCM-Flow] getToken Failure:", e.message || e);
                         if (retries === 0) throw e;
                         await new Promise(r => setTimeout(r, 2000));
                     }
                 }
 
-                if (currentToken) {
+                if (currentToken && currentUser?.uid) {
                     setToken(currentToken);
-                    if (currentUser?.uid && (!currentUser.fcmTokens || !currentUser.fcmTokens.includes(currentToken))) {
+                    if (auth.currentUser?.uid === currentUser.uid) {
+                        console.log("[FCM-Flow] Syncing token to Firestore for user:", currentUser.uid);
                         await updateDoc(doc(db, "users", currentUser.uid), {
                             fcmTokens: arrayUnion(currentToken)
                         });
                     }
                 }
+            } else {
+                console.warn("[FCM-Flow] Permission NOT granted.");
             }
         } catch (error) {
             const errStr = error.toString();
-            const isCredentialError = errStr.includes('401') || errStr.includes('credential') || errStr.includes('authentication') || errStr.includes('missing-project-id');
+            console.warn("[FCM-Flow] Setup Error:", error);
 
-            if (isCredentialError) {
-                console.group("FCM CREDENTIAL ERROR DETECTED");
-                console.warn("[FCM] 401/Auth error encountered. Nuking stale registrations...");
-
-                try {
-                    // NUKE: Unregister ALL service workers to clear stale FCM subscriptions
-                    if ('serviceWorker' in navigator) {
-                        const registrations = await navigator.serviceWorker.getRegistrations();
-                        for (let reg of registrations) {
-                            console.log("[FCM] Unregistering:", reg.scope);
-                            await reg.unregister();
-                        }
-                    }
-
-                    // Clear FCM IndexedDB purely
-                    try {
-                        const dbs = ['fcm_token_details_db', 'firebase-messaging-store'];
-                        for (const dbName of dbs) {
-                            console.log(`[FCM] Deleting IndexedDB: ${dbName}`);
-                            window.indexedDB.deleteDatabase(dbName);
-                        }
-                    } catch (e) { console.warn("[FCM] DB clear failed:", e); }
-                    // Clear storage markers
-                    localStorage.removeItem('nova_fcm_last_attempt');
-                    sessionStorage.removeItem(SESSION_BACKOFF_KEY);
-                    globalFcmErrorBackoff = false;
-
-                    console.log("[FCM] Nuke complete. A page refresh is REQUIRED to recover.");
-                    toast.error("Notification sync issue. Please refresh the page to fix.", { duration: 6000 });
-                } catch (nukeErr) {
-                    console.error("[FCM] Nuke failed:", nukeErr);
-                }
-                console.groupEnd();
-            }
             // Catch 500, 429, or persistent errors to trip circuit breaker
-            else if (errStr.includes('500') || errStr.includes('429') || errStr.includes('Quota exceeded')) {
+            if (errStr.includes('500') || errStr.includes('429') || errStr.includes('Quota exceeded')) {
                 console.group("FCM CRITICAL ERROR");
                 console.error("FCM Error (Circuit Breaker Activated):", errStr);
                 console.groupEnd();
 
                 globalFcmErrorBackoff = true; // Trip global breaker
                 sessionStorage.setItem(SESSION_BACKOFF_KEY, 'true'); // Trip session breaker
-            } else if (error.name === 'AbortError' || errStr.includes('push service')) {
-                // Ignore harmless aborts
-            } else {
-                console.warn("FCM Setup Error:", error);
             }
         } finally {
             tokenAcquisitionActive.current = false;

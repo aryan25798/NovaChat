@@ -34,16 +34,10 @@ const env = loadEnv();
 // Fallback to process.env if deployed where env vars are injected
 const getVar = (key) => process.env[key] || env[key] || "";
 
-/* Standardize on a single Service Worker (sw.js) managed by VitePWA */
-const fcmOutputPath = path.resolve(__dirname, '../public/firebase-messaging-sw.js');
-if (fs.existsSync(fcmOutputPath)) {
-    fs.unlinkSync(fcmOutputPath);
-    console.log('🗑️ Deleted legacy public/firebase-messaging-sw.js');
-}
-
-// Also generate src/sw.js from src/sw.template.js
+// Generate src/firebase-messaging-sw.js from sw.template.js
+const publicSwPath = path.resolve(__dirname, '../public/firebase-messaging-sw.js');
 const mainSwTemplatePath = path.resolve(__dirname, '../src/sw.template.js');
-const mainSwOutputPath = path.resolve(__dirname, '../src/sw.js');
+const mainSwOutputPath = path.resolve(__dirname, '../src/firebase-messaging-sw.js');
 
 if (fs.existsSync(mainSwTemplatePath)) {
     const mainSwTemplate = fs.readFileSync(mainSwTemplatePath, 'utf-8');
@@ -57,6 +51,12 @@ if (fs.existsSync(mainSwTemplatePath)) {
         .replace('__VITE_FIREBASE_DATABASE_URL__', getVar('VITE_FIREBASE_DATABASE_URL'))
         .replace('__VITE_FIREBASE_VAPID_KEY__', getVar('VITE_FIREBASE_VAPID_KEY'));
 
+    // For Source (src/): Keep self.__WB_MANIFEST literal for Vite to inject
     fs.writeFileSync(mainSwOutputPath, mainSwContent);
-    console.log('✅ Generated src/sw.js with environment variables.');
+
+    // For Public (public/): Inject dummy manifest [] to avoid evaluation errors in dev
+    const publicContent = mainSwContent.replace('self.__WB_MANIFEST', '[]');
+    fs.writeFileSync(publicSwPath, publicContent);
+
+    console.log('✅ Generated src/firebase-messaging-sw.js and public/firebase-messaging-sw.js');
 }

@@ -25,6 +25,7 @@ import MessageInput from "./chat/MessageInput";
 import ContactInfoPanel from "./ContactInfoPanel";
 import FullScreenMedia from "./FullScreenMedia";
 import { preCacheMedia } from "../utils/mediaCache";
+import imageCompression from 'browser-image-compression';
 
 export default function ChatWindow({ chat, setChat }) {
     const [messages, setMessages] = useState([]); // Real-time messages (latest chunk)
@@ -41,6 +42,7 @@ export default function ChatWindow({ chat, setChat }) {
     const [serverResults, setServerResults] = useState([]);
     const [pendingQueue, setPendingQueue] = useState([]); // Ultra-fast optimistic queue
     const [rtdbStatus, setRtdbStatus] = useState({}); // RTDB status overrides
+    const [signalMessages, setSignalMessages] = useState([]); // [OPT] Ultra-fast ghost signals
 
     // Media Gallery State
     const [activeMediaMessage, setActiveMediaMessage] = useState(null);
@@ -208,6 +210,7 @@ export default function ChatWindow({ chat, setChat }) {
     useEffect(() => {
         setMessages([]);
         setHistoryMessages([]);
+        setSignalMessages([]); // [OPT] Reset ultra-fast signals
         setHasMoreMessages(true);
         setLoading(true);
         if (chat?.id && currentUser?.uid) {
@@ -244,11 +247,23 @@ export default function ChatWindow({ chat, setChat }) {
         // 4. Instant Signal Subscription (For ultra-fast incoming messages)
         const unsubSignals = lightningSync.subscribeToSignals(chat.id, (payload) => {
             if (payload && payload.senderId !== currentUser.uid) {
-                // If the message isn't in our list yet, we can't show the full UI 
-                // but for simple text chats we could inject a ghost msg. 
-                // For now, this signal mainly ensures onSnapshot fires faster or 
-                // we can trigger an immediate fetch if needed.
-                // In this architecture, it mostly verifies connectivity.
+                // [HYBRID UI] Inject signal as a temporary "ghost" message
+                setSignalMessages(prev => {
+                    // Avoid duplicates if we already have it
+                    if (prev.some(m => m.id === payload.messageId)) return prev;
+
+                    const ghostMsg = {
+                        id: payload.messageId,
+                        text: payload.text,
+                        senderId: payload.senderId,
+                        timestamp: new Date(payload.timestamp || Date.now()),
+                        status: 'delivered',
+                        type: 'text',
+                        isSignal: true // Flag for special rendering
+                    };
+                    // Only keep last 5 signals to avoid memory leaks
+                    return [...prev.slice(-4), ghostMsg];
+                });
             }
         });
 
@@ -347,46 +362,73 @@ export default function ChatWindow({ chat, setChat }) {
         });
     }, [messages, historyMessages]);
 
-    const filteredMessages = useMemo(() => {
-        const clearedAt = chat?.clearedAt?.[currentUser.uid]?.toMillis?.() || (chat?.clearedAt?.[currentUser.uid] instanceof Date ? chat.clearedAt[currentUser.uid].getTime() : 0);
-        const lowerQuery = searchQuery?.toLowerCase();
+    // [SCALE UTILITY] Helper to normalize timestamps from various sources
+    const getMillis = (t) => {
+        if (!t) return 0;
+        if (typeof t.toMillis === 'function') return t.toMillis();
+        if (t instanceof Date) return t.getTime();
+        if (t.seconds) return t.seconds * 1000;
+        return 0;
+    };
 
-        // One-pass insertion into a Map for deduplication
+    // [INDUSTRY-SCALE] Segmented Memoization
+    // Layer 1: Base Messages (Dense, slow-changing)
+    const baseMessages = useMemo(() => {
         const uniqueMap = new Map();
+        const clearedAt = chat?.clearedAt?.[currentUser.uid]?.toMillis?.() || (chat?.clearedAt?.[currentUser.uid] instanceof Date ? chat.clearedAt[currentUser.uid].getTime() : 0);
 
-        const getMillis = (t) => {
-            if (!t) return 0;
-            if (typeof t.toMillis === 'function') return t.toMillis();
-            if (t instanceof Date) return t.getTime();
-            if (t.seconds) return t.seconds * 1000;
-            return 0;
-        };
-
-        const processMsg = (m) => {
+        const processBase = (m) => {
             const msgMillis = getMillis(m.timestamp);
             if (msgMillis <= clearedAt) return;
             if (m.hiddenBy?.includes(currentUser.uid)) return;
-            if (lowerQuery) {
-                const searchText = m.textLower || m.text?.toLowerCase() || "";
-                if (!searchText.includes(lowerQuery)) return;
-            }
-            // Always prefer newer/real data over optimistic in case of ID collisions
             uniqueMap.set(m.id, m);
         };
 
-        if (serverResults?.length > 0) serverResults.forEach(processMsg);
-        historyMessages.forEach(processMsg);
-        messages.forEach(processMsg);
-        pendingQueue.forEach(processMsg);
+        if (serverResults?.length > 0) serverResults.forEach(processBase);
+        historyMessages.forEach(processBase);
+        messages.forEach(processBase);
 
-        // Sort just once at the end
         return Array.from(uniqueMap.values()).sort((a, b) => {
             const tA = getMillis(a.timestamp);
             const tB = getMillis(b.timestamp);
-            if (tA !== tB) return tA - tB;
-            return a.id.localeCompare(b.id);
+            return tA !== tB ? tA - tB : a.id.localeCompare(b.id);
         });
-    }, [messages, historyMessages, searchQuery, serverResults, chat, currentUser.uid, pendingQueue]);
+    }, [messages, historyMessages, serverResults, chat?.clearedAt, currentUser.uid]);
+
+    // Layer 2: Filtered & Signal-Injected Messages (Agile, fast-changing)
+    const filteredMessages = useMemo(() => {
+        const uniqueMap = new Map();
+        const lowerQuery = searchQuery?.toLowerCase();
+
+        // 1. Add base layer (already sorted and cleared)
+        baseMessages.forEach(m => uniqueMap.set(m.id, m));
+
+        // 2. Add high-frequency signals and queue items
+        const processActive = (m) => {
+            if (uniqueMap.has(m.id)) return; // Prefer existing records
+            uniqueMap.set(m.id, m);
+        };
+
+        signalMessages.forEach(processActive);
+        pendingQueue.forEach(processActive);
+
+        let results = Array.from(uniqueMap.values());
+
+        // 3. Search filter
+        if (lowerQuery) {
+            results = results.filter(m => {
+                const searchText = m.textLower || m.text?.toLowerCase() || "";
+                return searchText.includes(lowerQuery);
+            });
+        }
+
+        // Return sorted (Base is already sorted, but signals/pending might be out of order)
+        return results.sort((a, b) => {
+            const tA = getMillis(a.timestamp);
+            const tB = getMillis(b.timestamp);
+            return tA !== tB ? tA - tB : a.id.localeCompare(b.id);
+        });
+    }, [baseMessages, signalMessages, pendingQueue, searchQuery]);
 
     const mediaMessages = useMemo(() => {
         return filteredMessages.filter(m => {

@@ -14,6 +14,8 @@ import { ThemeProvider } from './contexts/ThemeContext'
 import { registerSW } from 'virtual:pwa-register';
 
 // Register PWA Service Worker
+/* 
+// Register PWA Service Worker (DISABLED: Using manual registration in NotificationContext for FCM consistency)
 const updateSW = registerSW({
   onNeedRefresh() {
     console.log('New content available, please refresh.');
@@ -22,15 +24,17 @@ const updateSW = registerSW({
     console.log('App ready to work offline.');
   },
 });
+*/
 
 // --- Service Worker Migration & Purge Logic (Legacy) ---
 if ('serviceWorker' in navigator) {
-  const MIGRATION_KEY = 'nova_sw_migrated_v5'; // Bumped version
+  const MIGRATION_KEY = 'nova_sw_migrated_v6'; // Bumped to v6 for fresh cycle
   if (!localStorage.getItem(MIGRATION_KEY)) {
     navigator.serviceWorker.getRegistrations().then((registrations) => {
       for (const registration of registrations) {
-        // Only unregister if it's NOT our current sw.js or if it's from a legacy path
-        if (registration.active?.scriptURL.includes('firebase-messaging-sw')) {
+        const url = registration.active?.scriptURL || "";
+        // Only unregister OLD/LEGACY paths, NOT our new standard one
+        if (url.includes('firebase-messaging-sw') && !url.includes('firebase-messaging-sw.js')) {
           registration.unregister();
           console.log('Legacy FCM Service Worker unregistered.');
         }

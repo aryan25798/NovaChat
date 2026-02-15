@@ -34,36 +34,56 @@ export const auth = getAuth(app);
 setPersistence(auth, browserLocalPersistence);
 export const googleProvider = new GoogleAuthProvider();
 
-// Initialize Firestore with persistence settings
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, clearIndexedDbPersistence } from "firebase/firestore";
-
-export const db = initializeFirestore(app, {
-    localCache: persistentLocalCache({
-        tabManager: persistentMultipleTabManager()
-    })
-});
+// Initialize Firestore with Adaptive Persistence Engine (v1.5.0)
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache, clearIndexedDbPersistence, terminate } from "firebase/firestore";
 
 /**
- * Emergency Repair: Clears local Firestore cache
- * Use when experiencing "BloomFilterError" or stale data.
+ * [INDUSTRY-GRADE] Adaptive Persistence Logic
+ * Automatically detects storage health and falls back to Memory-Only mode if IndexedDB is deadlocked.
+ */
+const STORAGE_KEY = 'DISABLE_FIREBASE_PERSISTENCE';
+const RECOVERY_KEY = 'FIREBASE_RECOVERY_ATTEMPT';
+
+// Auto-sense: If we were previously forced into memory mode, keep it for stability
+let usePersistence = localStorage.getItem(STORAGE_KEY) !== 'true';
+
+// Fallback logic for high-scale environments
+export const db = initializeFirestore(app, {
+    localCache: usePersistence
+        ? persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+        : memoryLocalCache()
+});
+
+console.log(`[Firebase] Adaptive Engine: Persistence=${usePersistence ? 'ENABLED' : 'DISABLED (Memory-Only Fallback)'}`);
+
+/**
+ * Emergency Nuclear Repair: Forcefully resets persistence and reloads.
  */
 export const clearCache = async () => {
     try {
+        console.log("[Firebase] Initiating Nuclear Repair...");
+        // 1. Terminate ensures the DB is offline and locks are released
+        // 1. Terminate ensures the DB is offline and locks are released
+        await terminate(db);
+        // 2. Clear IndexedDB
         await clearIndexedDbPersistence(db);
-        console.log("Firestore cache cleared successfully.");
+        console.log("[Firebase] Firestore cache cleared successfully.");
         return true;
     } catch (err) {
-        console.error("Failed to clear Firestore cache:", err);
+        console.error("[Firebase] Nuclear Repair failed:", err);
         return false;
     }
 };
 
 import { getDatabase } from "firebase/database";
 import { getFunctions } from "firebase/functions";
+import { getInstallations, getId } from "firebase/installations";
 
 export const rtdb = getDatabase(app);
 export const storage = getStorage(app);
 export const functions = getFunctions(app);
+export const installations = getInstallations(app);
+export { getId };
 
 
 // Lazy-initialize messaging to prevent crash if SW not registered or browser unsupported

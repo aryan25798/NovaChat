@@ -8,5 +8,5 @@ self.FIREBASE_CONFIG = {
     messagingSenderId: "662334343258",
     appId: "1:662334343258:web:a1b7a9fe49563c9aeaf063",
     databaseURL: "https://whatsappclone-50b5b-default-rtdb.firebaseio.com",
-    vapidKey: "BG5ZvG4aNhyFiDpbq9hRJReflq83oSdZfSnXoWU8fzFMOY44oegwPF6FtdAHgKkkKIl_QnPtQsyQ-AWQ9g1ZUbE"
+    vapidKey: "BDozLQFlNkKcjwrBmRNpnyP-7NfxaGFzMzc5wF7Y_D5ManDv2ltkDscYseE24fjSPJ24adNDPI1664v7tSiKFmY"
 };

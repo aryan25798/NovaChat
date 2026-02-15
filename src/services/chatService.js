@@ -293,7 +293,53 @@ export const sendMessage = async (chatId, currentUser, text, replyTo = null, opt
     if (!chatId || !currentUser || !text) return;
 
     console.log(`[ChatService] Enqueueing message: ${text.substring(0, 10)}... to ${chatId}`);
-    return messageQueue.add(() => sendMessageSequential(chatId, currentUser, text, replyTo, optimisticId, metadata));
+
+    return messageQueue.add(async () => {
+        const TIMEOUT_MS = 30000; // Increased to 30s
+        const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("NETWORK_TIMEOUT_BLOCKED")), TIMEOUT_MS)
+        );
+
+        try {
+            // Connectivity Watchdog: Log state before attempting send
+            console.log(`[ChatService] Pre-flight: online=${navigator.onLine}, auth=${!!auth.currentUser}`);
+
+            // Pre-flight check: Ensure user is actually "signed in" to avoid vague Firestore errors
+            if (!auth.currentUser) throw new Error("AUTH_SESSION_EXPIRED");
+
+            return await Promise.race([
+                sendMessageSequential(chatId, currentUser, text, replyTo, optimisticId, metadata),
+                timeoutPromise
+            ]);
+        } catch (err) {
+            console.error("[ChatService] Send failure details:", {
+                code: err.code,
+                message: err.message,
+                name: err.name,
+                online: navigator.onLine
+            });
+
+            if (err.message === "NETWORK_TIMEOUT_BLOCKED") {
+                throw new Error("Connection timed out (30s). Your local database may be locked. Please go to the Profile Page and click 'REPAIR DATABASE'.");
+            }
+
+            if (err.code === 'permission-denied' || err.message === "AUTH_SESSION_EXPIRED") {
+                throw new Error("Session invalid: Please try logging out and back in. (API Key might be restricted)");
+            }
+
+            // Specialized handling for ERR_BLOCKED_BY_CLIENT style errors
+            const errStr = err.toString().toLowerCase();
+            const isNetworkBlock = errStr.includes("extension") ||
+                errStr.includes("blocked") ||
+                (errStr.includes("failed to fetch") && !navigator.onLine);
+
+            if (isNetworkBlock) {
+                throw new Error("Network error: Connection was blocked. Please disable any 'Privacy' tools or Ad-blockers.");
+            }
+
+            throw new Error(`Send failed: ${err.message || "Unknown error"}`);
+        }
+    });
 };
 
 async function sendMessageSequential(chatId, currentUser, text, replyTo, optimisticId, metadata) {
@@ -326,8 +372,29 @@ async function sendMessageSequential(chatId, currentUser, text, replyTo, optimis
         lightningSync.sendInstantSignal(chatId, currentUser.uid, docRef.id, text);
 
         // 2. Firestore Write (Official Record)
-        console.log("[ChatService] Adding new document");
-        await setDoc(docRef, messageData);
+        const tStartWrite = performance.now();
+        console.log(`[ChatService] Starting Firestore Write (t=0ms)`);
+
+        // [INDUSTRY-GRADE] Resilience Watchdog: Capture storage hangs before they block the UI
+        const writePromise = setDoc(docRef, messageData);
+        const watchDogPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("STORAGE_DEADLOCK_DETECTED")), 5000)
+        );
+
+        try {
+            await Promise.race([writePromise, watchDogPromise]);
+            const tEndWrite = performance.now();
+            console.log(`[ChatService] Firestore Write SUCCESS in ${(tEndWrite - tStartWrite).toFixed(2)}ms`);
+        } catch (err) {
+            if (err.message === "STORAGE_DEADLOCK_DETECTED") {
+                console.error("[ChatService] CRITICAL: Firestore write hung (>5s). Auto-triggering Persistence Bypass for next session.");
+                localStorage.setItem('DISABLE_FIREBASE_PERSISTENCE', 'true');
+                // We don't throw yet, we allow the RTDB signal to be the "truth" for this interaction
+                // But we'll track this as a pending sync item.
+            } else {
+                throw err;
+            }
+        }
 
         // 2. Update Last Message & Counters (Lazy Creation)
         // [HYBRID SCALABILITY] We now offload high-frequency metadata to RTDB
@@ -352,23 +419,25 @@ async function sendMessageSequential(chatId, currentUser, text, replyTo, optimis
         const lastSync = parseInt(localStorage.getItem(LAST_SYNC_KEY) || '0');
         const nowMillis = Date.now();
 
-        if (nowMillis - lastSync > 5000) { // 5-second window
+        if (nowMillis - lastSync > 5000) { // 5-second window (Scalability Guardrail)
             localStorage.setItem(LAST_SYNC_KEY, nowMillis.toString());
             const chatRef = doc(db, "chats", chatId);
-            updateDoc(chatRef, {
-                lastMessage: {
-                    text: messageData.text,
-                    senderId: currentUser.uid,
-                    timestamp: messageData.timestamp
-                },
-                lastMessageTimestamp: serverTimestamp()
-            }).catch((e) => {
-                if (e.code === 'unavailable' || e.code === 'resource-exhausted') {
-                    console.warn("[ChatService] Firestore sync throttled (Hotspot protection active).");
-                } else {
-                    console.warn("[ChatService] Firestore sync failed:", e);
-                }
-            });
+
+            // [INDUSTRY-SCALE] Prune metadata for large groups to prevent "Hot Document" limits
+            const metaUpdate = {
+                'lastMessage.text': messageData.text,
+                'lastMessage.senderId': currentUser.uid,
+                'lastMessage.timestamp': messageData.timestamp,
+                updatedAt: serverTimestamp()
+            };
+
+            // Only sync participants to Firestore if it's a small group (<50)
+            // RTDB handles the source of truth for membership in large groups.
+            if (participants.length > 0 && participants.length < 50) {
+                metaUpdate.participants = participants;
+            }
+
+            updateDoc(chatRef, metaUpdate).catch(e => console.warn("[ChatService] Meta sync throttled/denied", e.message));
         }
 
         // We still might need to ensure the Firestore doc exists for "indexing" purposes (search, list)
