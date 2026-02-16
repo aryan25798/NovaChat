@@ -387,6 +387,13 @@ exports.unblockUser = onCall(async (request) => {
     const uid = request.auth.uid;
     const { targetUserId } = request.data;
 
+    if (!targetUserId || typeof targetUserId !== 'string') {
+        throw new HttpsError('invalid-argument', 'Target user ID is required.');
+    }
+    if (uid === targetUserId) {
+        throw new HttpsError('invalid-argument', 'You cannot unblock yourself.');
+    }
+
     const db = admin.firestore();
     await db.collection('users').doc(uid).update({
         blockedUsers: admin.firestore.FieldValue.arrayRemove(targetUserId)

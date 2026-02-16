@@ -38,7 +38,7 @@ async function checkRateLimit(uid, action, limit, windowMs) {
         return isAllowed;
     } catch (e) {
         logger.error("Rate limit check failed", e);
-        return true; // Fail open
+        return false; // Fail closed — block action if rate limit check fails
     }
 }
 

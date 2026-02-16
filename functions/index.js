@@ -4,9 +4,8 @@ const { logger } = require("firebase-functions");
 const admin = require('firebase-admin');
 
 
-// 1. Initialize Admin SDK globally
-// Force Redeploy: 2026-02-14T11:33:00+05:30
 
+// 1. Initialize Admin SDK globally
 admin.initializeApp();
 
 // 2. Set Global Options (Scale for 10k+ Users - Cost Optimized)
@@ -134,21 +133,24 @@ exports.toggleAnnouncementStatus = onCall(async (request) => {
     }
 });
 
-exports.getAdminStats = onCall(async (request) => {
+exports.getAdminStats = onCall({
+    memory: "512MiB",
+    timeoutSeconds: 30
+}, async (request) => {
     if (!request.auth || (!request.auth.token.superAdmin && !request.auth.token.isAdmin)) {
         throw new HttpsError('permission-denied', 'Only Admins can view stats.');
     }
 
     try {
         const db = admin.firestore();
+        const now = new Date();
 
         // 1. Real Counters
         const usersSnap = await db.collection('users').count().get();
         const totalUsers = usersSnap.data().count;
 
         // Active Users (last 24h)
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
         const activeSnap = await db.collection('users')
             .where('lastSeen', '>', admin.firestore.Timestamp.fromDate(yesterday))
             .count().get();
@@ -158,18 +160,54 @@ exports.getAdminStats = onCall(async (request) => {
         const chatsSnap = await db.collection('chats').count().get();
         const totalChats = chatsSnap.data().count;
 
-        // 2. Time-Series Data (PLACEHOLDER: simulated from real totals)
-        // TODO: Replace with real aggregation from an analytics subcollection or BigQuery export.
-        const userGrowth = Array.from({ length: 30 }, (_, i) => ({
-            date: new Date(Date.now() - (29 - i) * 24 * 60 * 60 * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-            count: Math.floor(totalUsers * (0.8 + (i / 30) * 0.2))
-        }));
+        // 2. User Growth — Real 30-day cumulative signups
+        const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        thirtyDaysAgo.setHours(0, 0, 0, 0);
 
-        // PLACEHOLDER: Random traffic data — NOT real message counts.
-        const messageTraffic = Array.from({ length: 24 }, (_, i) => ({
-            hour: `${i}:00`,
-            count: Math.floor(Math.random() * 50) + 10
-        }));
+        const userGrowthPromises = [];
+        for (let i = 0; i < 30; i++) {
+            const dayEnd = new Date(thirtyDaysAgo.getTime() + (i + 1) * 24 * 60 * 60 * 1000);
+            userGrowthPromises.push(
+                db.collection('users')
+                    .where('createdAt', '<=', admin.firestore.Timestamp.fromDate(dayEnd))
+                    .count().get()
+                    .then(snap => ({
+                        date: dayEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+                        count: snap.data().count
+                    }))
+                    .catch(() => ({
+                        date: dayEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+                        count: 0
+                    }))
+            );
+        }
+
+        // 3. Message Traffic — Real 24-hour hourly volume
+        const messageTrafficPromises = [];
+        for (let h = 0; h < 24; h++) {
+            const hourStart = new Date(yesterday.getTime() + h * 60 * 60 * 1000);
+            const hourEnd = new Date(hourStart.getTime() + 60 * 60 * 1000);
+            messageTrafficPromises.push(
+                db.collectionGroup('messages')
+                    .where('timestamp', '>=', admin.firestore.Timestamp.fromDate(hourStart))
+                    .where('timestamp', '<', admin.firestore.Timestamp.fromDate(hourEnd))
+                    .count().get()
+                    .then(snap => ({
+                        hour: `${hourStart.getHours()}:00`,
+                        count: snap.data().count
+                    }))
+                    .catch(() => ({
+                        hour: `${hourStart.getHours()}:00`,
+                        count: 0
+                    }))
+            );
+        }
+
+        // Execute all chart queries in parallel
+        const [userGrowth, messageTraffic] = await Promise.all([
+            Promise.all(userGrowthPromises),
+            Promise.all(messageTrafficPromises)
+        ]);
 
         return {
             totalUsers,
@@ -182,8 +220,7 @@ exports.getAdminStats = onCall(async (request) => {
             },
             charts: {
                 userGrowth,
-                messageTraffic,
-                isPlaceholder: true // Signal to frontend that charts are simulated
+                messageTraffic
             }
         };
 

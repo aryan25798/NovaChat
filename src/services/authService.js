@@ -95,6 +95,15 @@ export const getUserProfile = async (uid) => {
 
 export const uploadProfilePhoto = async (uid, file) => {
     try {
+        const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+        if (!ALLOWED_TYPES.includes(file.type)) {
+            throw new Error('Invalid file type. Please upload a JPEG, PNG, GIF, or WebP image.');
+        }
+        const MAX_SIZE = 10 * 1024 * 1024; // 10MB
+        if (file.size > MAX_SIZE) {
+            throw new Error('File too large. Maximum size is 10MB.');
+        }
+
         const fileRef = ref(storage, `profiles/${uid}_${Date.now()}`);
         await uploadBytes(fileRef, file);
         const url = await getDownloadURL(fileRef);

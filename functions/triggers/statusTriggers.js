@@ -73,7 +73,8 @@ exports.onStatusWritten = onDocumentWritten({
 
         // --- FIRESTORE SYNC: Parallel update for StatusContext consistency ---
         // This ensures the frontend's Firestore listener triggers a sync even if RTDB is delayed.
-        const firestorePromises = allowedUIDs.slice(0, 100).map(friendId => {
+        // Cap at 500 to balance coverage vs. Cloud Function execution time.
+        const firestorePromises = allowedUIDs.slice(0, 500).map(friendId => {
             const feedRef = db.collection('users').doc(friendId).collection('feed').doc('status_signals');
             return feedRef.set({
                 [userId]: {
@@ -86,7 +87,7 @@ exports.onStatusWritten = onDocumentWritten({
         });
 
         await Promise.all(firestorePromises);
-        logger.info(`Firestore Sync Signals sent to first 100 friends.`);
+        logger.info(`Firestore Sync Signals sent to ${Math.min(allowedUIDs.length, 500)} friends.`);
 
     } catch (error) {
         logger.error("Fan-out failed (RTDB or Firestore)", error);

@@ -86,11 +86,14 @@ export function CallProvider({ children }) {
 
     // 1.5 Calling Timeout (Outgoing)
     const timeoutRef = useRef(null);
+    const callStateStatusRef = useRef(callState?.status);
+    callStateStatusRef.current = callState?.status;
+
     useEffect(() => {
         if (callState?.status === 'ringing' && !callState.isIncoming) {
             // Start 45s timeout for outgoing calls
             timeoutRef.current = setTimeout(() => {
-                if (callState.status === 'ringing') {
+                if (callStateStatusRef.current === 'ringing') {
                     console.log("Call timeout reached. Ending as missed.");
                     endCall(true);
                 }

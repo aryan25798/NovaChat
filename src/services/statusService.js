@@ -6,7 +6,6 @@ import { v4 as uuidv4 } from "uuid";
 import { listenerManager } from "../utils/ListenerManager";
 import { functions } from "../firebase";
 import { httpsCallable } from "firebase/functions";
-import { sendMessage } from "./chatService";
 
 const STATUS_COLLECTION = "statuses";
 
@@ -174,9 +173,9 @@ export const syncStatuses = async (knownState = {}) => {
         const syncFn = httpsCallable(functions, 'syncStatusFeed');
 
         // TIMEOUT SAFETY: Cloud Functions can sometimes hang or be extremely slow.
-        // We race the function call against a 10s timeout to keep the UI responsive.
+        // We race the function call against a 25s timeout (relaxed from 10s for cold starts).
         const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("SYNC_TIMEOUT")), 10000)
+            setTimeout(() => reject(new Error("SYNC_TIMEOUT")), 25000)
         );
 
         const result = await Promise.race([syncFn({ knownState }), timeoutPromise]);
@@ -189,10 +188,10 @@ export const syncStatuses = async (knownState = {}) => {
         return result.data; // { updates: [ ... ], hasMore: bool }
     } catch (error) {
         const errStr = error.toString();
-        // Trigger 5-minute cooldown if we hit rate limits or timeouts
+        // Trigger short cooldown if we hit rate limits or timeouts
         if (errStr.includes('401') || errStr.includes('429') || errStr.includes('SYNC_TIMEOUT')) {
-            const COOLDOWN_MS = 300000; // 5 Minutes
-            console.warn(`Status sync: ${errStr.includes('TIMEOUT') ? 'Timeout' : 'Throttling'} detected. Activating 5m Backoff.`);
+            const COOLDOWN_MS = 45000; // 45 Seconds (was 5m)
+            console.warn(`Status sync: ${errStr.includes('TIMEOUT') ? 'Timeout' : 'Throttling'} detected. Activating 45s Backoff.`);
             if (typeof sessionStorage !== 'undefined') {
                 sessionStorage.setItem('nova_status_backoff_until', (Date.now() + COOLDOWN_MS).toString());
             }
@@ -202,8 +201,6 @@ export const syncStatuses = async (knownState = {}) => {
     }
 };
 
-// Deprecated: Old O(N) Loop (Kept for reference if rollback needed, but commented out in spirit)
-// export const subscribeToRecentUpdates = ... (Deleted)
 
 // --- Mark Status Viewed (Scalable Subcollection) ---
 export const markStatusAsViewed = async (statusDocId, itemId, currentUserId) => {
@@ -247,9 +244,6 @@ export const replyToStatus = async (currentUser, statusUser, statusItem, text) =
             isStatusReply: true
         };
 
-        // Ensure the chat document exists before sending
-        const { doc, getDoc, setDoc, serverTimestamp: fsTimestamp } = await import('firebase/firestore');
-        const { db } = await import('../firebase');
         const chatRef = doc(db, 'chats', chatId);
         const chatSnap = await getDoc(chatRef);
 
@@ -262,12 +256,12 @@ export const replyToStatus = async (currentUser, statusUser, statusItem, text) =
                     [statusUser.uid]: { displayName: statusUser.displayName || 'User', photoURL: statusUser.photoURL || null }
                 },
                 type: 'private',
-                createdAt: fsTimestamp(),
+                createdAt: serverTimestamp(),
                 unreadCount: { [currentUser.uid]: 0, [statusUser.uid]: 0 }
             });
         }
 
-        await sendMessage(chatId, text, currentUser, replyContext);
+        await sendMessage(chatId, currentUser, text, replyContext);
 
     } catch (error) {
         console.error("Error replying to status:", error);

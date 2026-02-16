@@ -261,13 +261,19 @@ exports.onMessageCreated = onDocumentCreated({
             return admin.firestore().getAll(...refs);
         });
 
-        const [userDocsResult, activeStatusSnap] = await Promise.all([
+        const [userDocsResult, ...statusSnapshots] = await Promise.all([
             Promise.all(fetchPromises),
-            admin.database().ref('status').get()
+            // Fetch only the specific users' presence instead of the entire status node
+            ...recipientIds.map(uid => admin.database().ref(`status/${uid}`).get())
         ]);
 
         const userDocs = userDocsResult.flat();
-        const allStatuses = activeStatusSnap.val() || {};
+        const allStatuses = {};
+        recipientIds.forEach((uid, i) => {
+            if (statusSnapshots[i].exists()) {
+                allStatuses[uid] = statusSnapshots[i].val();
+            }
+        });
         const messagesToSend = [];
 
         userDocs.forEach(userDoc => {
@@ -293,7 +299,13 @@ exports.onMessageCreated = onDocumentCreated({
                     token: token,
                     notification: {
                         title: `New Message from ${senderName}`,
-                        body: messageData.type === 'image' ? '📷 Photo' : (messageData.text.length > 100 ? messageData.text.substring(0, 97) + '...' : messageData.text),
+                        body: messageData.type === 'image' ? '📷 Photo'
+                            : messageData.type === 'video' ? '🎥 Video'
+                                : messageData.type === 'audio' ? '🎵 Audio'
+                                    : messageData.type === 'file' ? '📎 File'
+                                        : (messageData.text || 'New message').length > 100
+                                            ? (messageData.text || 'New message').substring(0, 97) + '...'
+                                            : (messageData.text || 'New message'),
                     },
                     webpush: {
                         headers: {

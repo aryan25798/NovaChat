@@ -51,6 +51,7 @@ export function AuthProvider({ children }) {
     const [currentUser, setCurrentUser] = useState(null);
     const [loading, setLoading] = useState(true);
     const isLoggingOutRef = useRef(false);
+    const claimSyncAttempted = useRef(false);
     const userDocUnsubscribeRef = useRef(null);
     const [preferRedirect, setPreferRedirect] = useState(() => {
         return typeof sessionStorage !== 'undefined' && sessionStorage.getItem('nova_auth_prefer_redirect') === 'true';
@@ -277,9 +278,9 @@ export function AuthProvider({ children }) {
                             displayName: user.displayName || "User",
                             photoURL: user.photoURL,
                             emailVerified: user.emailVerified,
-                            // Safe default; background sync will elevate if needed
-                            isAdmin: user.email === 'admin@system.com',
-                            superAdmin: user.email === 'admin@system.com',
+                            // Safe default; background sync via claims will elevate if needed
+                            isAdmin: false,
+                            superAdmin: false,
                             isBanned: false,
                             claimsSettled: false // FIX: Do NOT assume true. Wait for role resolution.
                         };
@@ -341,10 +342,33 @@ export function AuthProvider({ children }) {
                                 const newData = { ...prev, ...userData };
 
                                 // Ensure claims from token persist if Firestore is outdated
-                                // AUDIT_OVERRIDE: Force admin for system account
-                                newData.isAdmin = !!userData.isAdmin || !!prev?.isAdmin || newData.email === 'admin@system.com';
-                                newData.superAdmin = !!userData.superAdmin || !!prev?.superAdmin || newData.email === 'admin@system.com';
+                                newData.isAdmin = !!userData.isAdmin || !!prev?.isAdmin;
+                                newData.superAdmin = !!userData.superAdmin || !!prev?.superAdmin;
                                 newData.claimsSettled = true; // CRITICAL: Release the RootGate blocker
+
+                                // ADMIN BOOTSTRAP: If system admin lacks privileges, force sync
+                                const userEmail = user?.email?.toLowerCase();
+                                if (userEmail === 'admin@system.com' && !newData.isAdmin && !claimSyncAttempted.current) {
+                                    console.warn("[Auth] System Admin lacks privileges. Attempting bootstrap sync...", { email: userEmail, isAdmin: newData.isAdmin });
+                                    claimSyncAttempted.current = true;
+
+                                    // Use top-level import
+                                    const syncAdminClaimsFn = httpsCallable(functions, 'syncAdminClaims');
+
+                                    syncAdminClaimsFn()
+                                        .then(() => user.getIdToken(true))
+                                        .then((idToken) => user.getIdTokenResult()) // Refresh claims
+                                        .then((tokenResult) => {
+                                            console.log("[Auth] Bootstrap complete. Claims refreshed:", tokenResult.claims);
+                                            setCurrentUser(p => ({
+                                                ...p,
+                                                isAdmin: !!tokenResult.claims.isAdmin,
+                                                superAdmin: !!tokenResult.claims.superAdmin,
+                                                claimsSettled: true
+                                            }));
+                                        })
+                                        .catch(err => console.error("[Auth] Bootstrap failed:", err));
+                                }
 
                                 // Deep equality check to prevent re-render loops from minor updates (like lastSeen)
                                 if (prev &&

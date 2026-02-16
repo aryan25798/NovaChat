@@ -21,40 +21,6 @@ import { listenerManager } from '../utils/ListenerManager';
 // --- Pagination Helpers ---
 const DEFAULT_LIMIT = 50;
 
-/**
- * Generic Paginated Fetcher
- * @param {string} collectionName 
- * @param {object} lastDoc - The last document from the previous fetch (for cursor)
- * @param {number} limitCount 
- * @returns {Promise<{data: Array, lastDoc: object}>}
- */
-const fetchPaginatedData = async (collectionName, lastDoc = null, limitCount = DEFAULT_LIMIT) => {
-    try {
-        let q = query(
-            collection(db, collectionName),
-            orderBy('createdAt', 'desc'), // Ensure you have this index or use a field that exists on all docs
-            limit(limitCount)
-        );
-
-        if (lastDoc) {
-            q = query(
-                collection(db, collectionName),
-                orderBy('createdAt', 'desc'),
-                startAfter(lastDoc),
-                limit(limitCount)
-            );
-        }
-
-        const snapshot = await getDocs(q);
-        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        const newLastDoc = snapshot.docs[snapshot.docs.length - 1];
-
-        return { data, lastDoc: newLastDoc };
-    } catch (error) {
-        console.error(`Error fetching ${collectionName}:`, error);
-        throw error;
-    }
-};
 
 export const fetchUsers = async (lastDoc = null) => {
     // Users might not have 'createdAt' indexed reliably in all legacy docs, 
@@ -145,8 +111,6 @@ export const deleteUserAndData = async (userId) => {
 
 // --- Content Moderation (Permanent Deletions) ---
 
-// --- Content Moderation (Permanent Deletions) ---
-
 export const deleteChatPermanently = async (chatId) => {
     const adminDeleteChatFn = httpsCallable(functions, 'adminDeleteChat');
     return adminDeleteChatFn({ chatId });
@@ -179,15 +143,19 @@ export const subscribeToChatMessages = (chatId, callback) => {
     return () => listenerManager.unsubscribe(listenerKey);
 };
 
-// --- Admin Verification ---
+// --- Admin Verification (Uses Custom Claims — authoritative source) ---
 
-export const checkIsAdmin = async (userId) => {
-    if (!userId) return false;
-    const userDoc = await getDoc(doc(db, "users", userId));
-    return userDoc.exists() && userDoc.data().isAdmin === true;
+export const checkIsAdmin = async () => {
+    const { auth } = await import('../firebase');
+    const user = auth.currentUser;
+    if (!user) return false;
+    const tokenResult = await user.getIdTokenResult();
+    return !!tokenResult.claims.isAdmin || !!tokenResult.claims.superAdmin;
 };
-export const checkIsSuperAdmin = async (userId) => {
-    if (!userId) return false;
-    const userDoc = await getDoc(doc(db, "users", userId));
-    return userDoc.exists() && userDoc.data().superAdmin === true;
+export const checkIsSuperAdmin = async () => {
+    const { auth } = await import('../firebase');
+    const user = auth.currentUser;
+    if (!user) return false;
+    const tokenResult = await user.getIdTokenResult();
+    return !!tokenResult.claims.superAdmin;
 };

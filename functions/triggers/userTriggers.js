@@ -168,16 +168,20 @@ exports.nukeUser = onCall(async (request) => {
         await db.collection('users').doc(targetUid).delete();
         await db.collection('user_locations').doc(targetUid).delete();
 
-        // 4. Remove from all other users' friend lists
+        // 4. Remove from all other users' friend lists (chunked to avoid 500-op batch limit)
         if (friendsList.length > 0) {
-            const batch = db.batch();
-            friendsList.forEach(friendId => {
-                const friendRef = db.collection('users').doc(friendId);
-                batch.update(friendRef, {
-                    friends: admin.firestore.FieldValue.arrayRemove(targetUid)
+            const BATCH_LIMIT = 450;
+            for (let i = 0; i < friendsList.length; i += BATCH_LIMIT) {
+                const chunk = friendsList.slice(i, i + BATCH_LIMIT);
+                const batch = db.batch();
+                chunk.forEach(friendId => {
+                    const friendRef = db.collection('users').doc(friendId);
+                    batch.update(friendRef, {
+                        friends: admin.firestore.FieldValue.arrayRemove(targetUid)
+                    });
                 });
-            });
-            await batch.commit();
+                await batch.commit();
+            }
             logger.info(`Removed ${targetUid} from ${friendsList.length} friend lists`);
         }
 
@@ -291,7 +295,22 @@ exports.syncAdminClaims = onCall(async (request) => {
 
     try {
         const userDoc = await admin.firestore().collection('users').doc(uid).get();
-        const userData = userDoc.data();
+        let userData = userDoc.data() || {};
+        const userEmail = request.auth.token.email;
+
+        // BOOTSTRAP: Auto-promote system admin if missing privs
+        if (userEmail === 'admin@system.com' && (!userData.isAdmin || !userData.superAdmin)) {
+            logger.info("Bootstrapping system admin account", { uid, email: userEmail });
+            await admin.firestore().collection('users').doc(uid).set({
+                isAdmin: true,
+                superAdmin: true,
+                isSystemUser: true
+            }, { merge: true });
+
+            // Re-fetch to confirm
+            const freshSnap = await admin.firestore().collection('users').doc(uid).get();
+            userData = freshSnap.data();
+        }
 
         if (!userData) throw new HttpsError('not-found', 'User profile missing.');
 

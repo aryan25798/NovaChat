@@ -39,15 +39,8 @@ export const searchUsersPaged = async (searchTerm, currentUserId, lastDoc = null
 
         snap.forEach(doc => {
             const data = doc.data();
-            // Filter system/self users
-            const isSystemUser = doc.id.toLowerCase().includes('gemini') ||
-                doc.id.toLowerCase().includes('admin') ||
-                (data.displayName && (
-                    data.displayName.toLowerCase().includes('gemini') ||
-                    data.displayName.toLowerCase().includes('admin')
-                ));
-
-            if (doc.id !== currentUserId && !data.superAdmin && !data.isAdmin && !isSystemUser) {
+            // Filter system/self users using explicit flags
+            if (doc.id !== currentUserId && !data.superAdmin && !data.isAdmin && !data.isGemini && !data.isSystemUser) {
                 users.push({ id: doc.id, ...data });
             }
         });
@@ -135,7 +128,6 @@ export const getUsersByIds = async (userIds) => {
  */
 export const getPagedUsers = async (lastDoc = null, pageSize = 15, currentUserId = null) => {
     try {
-        console.debug("[UserFetch] Fetching paged users. LastDoc:", !!lastDoc);
         let q = query(
             collection(db, "users"),
             orderBy("displayName"),
@@ -147,18 +139,12 @@ export const getPagedUsers = async (lastDoc = null, pageSize = 15, currentUserId
         }
 
         const snapshot = await getDocs(q);
-        console.debug(`[UserFetch] Received ${snapshot.size} users from Firestore.`);
 
         const users = snapshot.docs
             .map(doc => ({ id: doc.id, ...doc.data() }))
             .filter(u => {
-                const isSystemUser = u.id.toLowerCase().includes('gemini') ||
-                    u.id.toLowerCase().includes('admin') ||
-                    (u.displayName && (
-                        u.displayName.toLowerCase().includes('gemini') ||
-                        u.displayName.toLowerCase().includes('admin')
-                    ));
-                return u.id !== currentUserId && !u.superAdmin && !u.isAdmin && !isSystemUser;
+                // Filter system/self users using explicit flags
+                return u.id !== currentUserId && !u.superAdmin && !u.isAdmin && !u.isGemini && !u.isSystemUser;
             })
             .slice(0, pageSize);
 

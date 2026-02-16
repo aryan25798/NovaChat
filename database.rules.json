@@ -9,9 +9,10 @@
         "user_chats": {
             "$userId": {
                 ".read": "auth != null && auth.uid == $userId",
+                ".write": "auth != null && auth.uid == $userId",
                 "$chatId": {
+                    ".validate": "newData.hasChildren(['lastUpdated']) || newData.val() == null",
                     "lastUpdated": {
-                        ".write": "auth != null && auth.uid == $userId",
                         ".validate": "newData.isNumber()"
                     }
                 }
