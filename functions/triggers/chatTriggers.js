@@ -135,7 +135,7 @@ async function handleGeminiReply(chatId, userText, senderName) {
             lastMessage: {
                 text: aiResponseText,
                 senderId: GEMINI_BOT_ID,
-                timestamp: new Date(),
+                timestamp: admin.firestore.FieldValue.serverTimestamp(),
             },
             lastMessageTimestamp: admin.firestore.FieldValue.serverTimestamp(),
         };
@@ -180,9 +180,9 @@ async function handleGeminiReply(chatId, userText, senderName) {
 
 exports.onMessageCreated = onDocumentCreated({
     document: "chats/{chatId}/messages/{messageId}",
-    maxInstances: 100, // Scaled for 10k users
-    minInstances: 1,   // Reduce cold starts for critical messaging
-    memory: "256MiB"
+    maxInstances: 100, // Scaled for 10k+ users
+    memory: "256MiB",
+    secrets: ["GEMINI_API_KEY"]
 }, async (event) => {
     const messageData = event.data.data();
     const chatId = event.params.chatId;
@@ -613,7 +613,9 @@ exports.adminHardDeleteMessage = onCall(async (request) => {
  * Handles direct Gemini API calls server-side to protect the API Key.
  * Supports: 'summarize', 'smartReply'
  */
-exports.aiAgentHelper = onCall(async (request) => {
+exports.aiAgentHelper = onCall({
+    secrets: ["GEMINI_API_KEY"]
+}, async (request) => {
     if (!request.auth) throw new HttpsError('unauthenticated', 'Login required.');
     const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 

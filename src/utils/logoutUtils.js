@@ -123,8 +123,8 @@ export async function hardReset() {
     if (window.indexedDB && window.indexedDB.databases) {
         try {
             const dbs = await window.indexedDB.databases();
-            dbs.forEach(db => {
-                if (!dbsToDelete.includes(db.name)) dbsToDelete.push(db.name);
+            dbs.forEach(idbInfo => {
+                if (!dbsToDelete.includes(idbInfo.name)) dbsToDelete.push(idbInfo.name);
             });
         } catch (e) {
             console.warn("Could not list databases:", e);

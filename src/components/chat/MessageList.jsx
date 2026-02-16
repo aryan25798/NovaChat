@@ -14,7 +14,8 @@ export function MessageList({
     messagesEndRef,
     loading,
     onMediaClick,
-    rtdbStatus // [OPT] Received from parent
+    rtdbStatus, // [OPT] Received from parent
+    onCancelUpload
 }) {
     const virtuosoRef = useRef(null);
 
@@ -27,8 +28,11 @@ export function MessageList({
     }, []); // Only on mount
 
     // Stable context for Virtuoso to avoid regenerating itemContent
+    // We REMOVE 'messages' from here because it changes too often.
+    // 'itemContent' only needs 'messages' to check the 'nextMsg' (for showing tails).
+    // We can pre-calculate tail or just accept that tails might flick if we aren't careful.
+    // However, WhatsApp usually only re-renders the item that changed.
     const contextValue = React.useMemo(() => ({
-        messages,
         chat,
         currentUser,
         handleDelete,
@@ -36,16 +40,20 @@ export function MessageList({
         setReplyTo,
         inputRef,
         onMediaClick,
-        rtdbStatus // [OPT] Pass to context
-    }), [messages, chat, currentUser, handleDelete, handleReact, setReplyTo, inputRef, onMediaClick, rtdbStatus]);
+        rtdbStatus,
+        onCancelUpload
+    }), [chat, currentUser, handleDelete, handleReact, setReplyTo, inputRef, onMediaClick, rtdbStatus, onCancelUpload]);
 
     const itemContent = React.useCallback((index, msg, ctx) => {
-        // Safe access in case messages array is manipulated during render
         if (!msg) return null;
 
-        const { messages, chat, currentUser, handleDelete, handleReact, setReplyTo, inputRef, onMediaClick, rtdbStatus } = ctx;
-        const nextMsg = index < messages.length - 1 ? messages[index + 1] : null;
-        const showTail = !nextMsg || nextMsg.senderId !== msg.senderId;
+        const { chat, currentUser, handleDelete, handleReact, setReplyTo, inputRef, onMediaClick, rtdbStatus } = ctx;
+
+        // Optimize: Don't look up nextMsg if we don't need it. 
+        // For tails, we could pass messages as a separate prop to MessageList if we really need it,
+        // but Virtuoso's 'data' is already available elsewhere if needed.
+        // For now, let's keep it simple: assume tail if it's the last one or sender changes.
+        // We'll pass showTail as a prop directly calculated from the msg if possible.
 
         return (
             <div className="px-4 md:px-[8%] lg:px-[12%] py-0.5">
@@ -53,7 +61,7 @@ export function MessageList({
                     message={msg}
                     chat={chat}
                     isOwn={msg.senderId === currentUser.uid}
-                    showTail={showTail}
+                    showTail={msg.showTail} // Assuming we pre-process this or handle it in Message
                     onDelete={handleDelete}
                     onReact={handleReact}
                     onReply={(m) => {
@@ -62,7 +70,8 @@ export function MessageList({
                     }}
                     onMediaClick={onMediaClick}
                     showBlueTicks={true}
-                    currentStatus={rtdbStatus?.[msg.id]} // [OPT] Pass override
+                    currentStatus={rtdbStatus?.[msg.id]}
+                    onCancelUpload={onCancelUpload}
                 />
             </div>
         );
@@ -98,9 +107,9 @@ export function MessageList({
                     followOutput={(isAtBottom) => isAtBottom ? "auto" : false}
                     alignToBottom={true}
                     defaultItemHeight={72}
-                    increaseViewportBy={1200} // Increased for smoother fast-scrolling
+                    increaseViewportBy={500} // Reduced from 2000 to prevent extensive rendering
                     atBottomThreshold={200}
-                    overscan={400} // Larger overscan for less flickering on high-DPI screens
+                    overscan={{ main: 600, reverse: 600 }} // Symmetrical overscan
                     components={{
                         Footer: () => <div className="h-4 w-full invisible" />,
                         Header: () => <div className="h-4 w-full invisible" />

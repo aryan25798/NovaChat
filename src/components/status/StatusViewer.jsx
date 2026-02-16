@@ -57,9 +57,11 @@ const StatusViewer = ({ statusGroup, onClose, allStatuses = [] }) => {
         // Force reflow/reset logic is handled by keying the progress bar in render
     }, [currentIndex, currentGroup, currentStatus.type]);
 
-    // Auto-advance is now handled by onAnimationEnd of the progress bar
     const handleAnimationEnd = () => {
-        handleNext();
+        // Defer state update to avoid "Node cannot be found" if unmounting occurs immediately
+        setTimeout(() => {
+            handleNext();
+        }, 0);
     };
 
     const handleNext = () => {

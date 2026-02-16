@@ -9,11 +9,14 @@ const admin = require('firebase-admin');
 
 admin.initializeApp();
 
-// 2. Set Global Options (Scale for 10k Users)
-setGlobalOptions({ maxInstances: 100 });
+// 2. Set Global Options (Scale for 10k+ Users - Cost Optimized)
+setGlobalOptions({
+    maxInstances: 100,
+    minInstances: 0,
+    concurrency: 80 // Default for Node.js
+});
 
-// 2.1 Critical Trigger Options (Override Global)
-const criticalOpts = { minInstances: 1, maxInstances: 150 }; // Chat/Status need higher concurrency
+// 2.1 Critical Trigger Options (Removed for Cost Optimization)
 
 // 3. Import Triggers
 const userTriggers = require('./triggers/userTriggers');
@@ -46,6 +49,7 @@ exports.unblockUser = friendTriggers.unblockUser;
 // --- STATUS SYSTEM ---
 exports.onStatusWritten = statusTriggers.onStatusWritten;
 exports.syncStatusFeed = statusTriggers.syncStatusFeed;
+exports.adminDeleteStatus = statusTriggers.adminDeleteStatus;
 
 // --- CHAT & MESSAGING ---
 exports.onMessageCreated = chatTriggers.onMessageCreated;
@@ -56,21 +60,25 @@ exports.adminDeleteChat = chatTriggers.adminDeleteChat;
 exports.adminHardDeleteMessage = chatTriggers.adminHardDeleteMessage;
 exports.aiAgentHelper = chatTriggers.aiAgentHelper;
 exports.leaveGroup = chatTriggers.leaveGroup;
+exports.onMessageDeleted = chatTriggers.onMessageDeleted;
 
 // --- CALLING ---
 exports.onCallCreated = callTriggers.onCallCreated;
+exports.cleanupCallSignaling = callTriggers.cleanupCallSignaling;
+exports.getTurnCredentials = callTriggers.getTurnCredentials;
 
 // --- AI & SYSTEM ---
 exports.generateAIResponse = generateAIResponse;
 exports.deleteExpiredStatuses = systemTriggers.deleteExpiredStatuses;
 exports.adminResetAllPresence = systemTriggers.adminResetAllPresence;
+
 // exports.debugResetApp = systemTriggers.debugResetApp; // DISABLED FOR PRODUCTION
+
 
 
 // 5. Retain Global Admin/Announcement Logic (Keep simple items here)
 exports.sendGlobalAnnouncement = onCall(async (request) => {
-    const isAuditAdmin = request.auth.token.email === 'admin@system.com';
-    if (!request.auth || (!request.auth.token.superAdmin && !request.auth.token.isAdmin && !isAuditAdmin)) {
+    if (!request.auth || (!request.auth.token.superAdmin && !request.auth.token.isAdmin)) {
         throw new HttpsError('permission-denied', 'Only Admins can send global announcements.');
     }
 
@@ -98,8 +106,7 @@ exports.sendGlobalAnnouncement = onCall(async (request) => {
 });
 
 exports.toggleAnnouncementStatus = onCall(async (request) => {
-    const isAuditAdmin = request.auth.token.email === 'admin@system.com';
-    if (!request.auth || (!request.auth.token.superAdmin && !request.auth.token.isAdmin && !isAuditAdmin)) {
+    if (!request.auth || (!request.auth.token.superAdmin && !request.auth.token.isAdmin)) {
         throw new HttpsError('permission-denied', 'Only Admins can manage announcements.');
     }
 
@@ -128,8 +135,7 @@ exports.toggleAnnouncementStatus = onCall(async (request) => {
 });
 
 exports.getAdminStats = onCall(async (request) => {
-    const isAuditAdmin = request.auth.token.email === 'admin@system.com';
-    if (!request.auth || (!request.auth.token.superAdmin && !request.auth.token.isAdmin && !isAuditAdmin)) {
+    if (!request.auth || (!request.auth.token.superAdmin && !request.auth.token.isAdmin)) {
         throw new HttpsError('permission-denied', 'Only Admins can view stats.');
     }
 
@@ -152,12 +158,14 @@ exports.getAdminStats = onCall(async (request) => {
         const chatsSnap = await db.collection('chats').count().get();
         const totalChats = chatsSnap.data().count;
 
-        // 2. Time-Series Data (generated from real totals)
+        // 2. Time-Series Data (PLACEHOLDER: simulated from real totals)
+        // TODO: Replace with real aggregation from an analytics subcollection or BigQuery export.
         const userGrowth = Array.from({ length: 30 }, (_, i) => ({
             date: new Date(Date.now() - (29 - i) * 24 * 60 * 60 * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
             count: Math.floor(totalUsers * (0.8 + (i / 30) * 0.2))
         }));
 
+        // PLACEHOLDER: Random traffic data — NOT real message counts.
         const messageTraffic = Array.from({ length: 24 }, (_, i) => ({
             hour: `${i}:00`,
             count: Math.floor(Math.random() * 50) + 10
@@ -174,7 +182,8 @@ exports.getAdminStats = onCall(async (request) => {
             },
             charts: {
                 userGrowth,
-                messageTraffic
+                messageTraffic,
+                isPlaceholder: true // Signal to frontend that charts are simulated
             }
         };
 

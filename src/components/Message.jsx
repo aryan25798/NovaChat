@@ -11,7 +11,7 @@ import MessageBubble from './chat/MessageBubble';
 
 const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "👏"];
 
-const Message = memo(({ message, chat, isOwn, onDelete, onReply, onReact, onMediaClick, showBlueTicks, showTail, currentStatus }) => {
+const Message = memo(({ message, chat, isOwn, onDelete, onReply, onReact, onMediaClick, showBlueTicks, showTail, currentStatus, onCancelUpload }) => {
     const [showMenu, setShowMenu] = useState(false);
     const { currentUser } = useAuth();
 
@@ -199,6 +199,7 @@ const Message = memo(({ message, chat, isOwn, onDelete, onReply, onReact, onMedi
                                 message={message}
                                 isOwn={isOwn}
                                 onMediaClick={onMediaClick}
+                                onCancelUpload={onCancelUpload}
                             />
                         )}
 

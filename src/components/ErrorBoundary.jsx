@@ -13,6 +13,12 @@ class ErrorBoundary extends React.Component {
     componentDidCatch(error, errorInfo) {
         // You can also log the error to an error reporting service
         console.error("Uncaught error:", error, errorInfo);
+
+        // AUTO-RECOVERY for lazy loading failures
+        if (error.name === 'ChunkLoadError' || error.message?.includes('Loading chunk')) {
+            console.warn("ChunkLoadError detected. Attempting auto-reload...");
+            window.location.reload();
+        }
     }
 
     render() {

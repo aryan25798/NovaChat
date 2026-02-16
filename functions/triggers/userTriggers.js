@@ -1,4 +1,4 @@
-const { onValueUpdated } = require("firebase-functions/v2/database");
+const { onValueUpdated, onValueWritten } = require("firebase-functions/v2/database");
 const { onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { logger } = require("firebase-functions");
@@ -8,16 +8,27 @@ const { bulkDeleteByQuery, recursiveDeleteCollection, recursiveDeleteStorage, lo
 // Database reference shortcuts (initialized in main index.js, but need local require if modular)
 // Best practice: admin is initialized once globally.
 
-exports.onUserStatusChanged = onValueUpdated("/status/{uid}", async (event) => {
+exports.onUserStatusChanged = onValueWritten("/status/{uid}", async (event) => {
     const status = event.data.after.val();
+    const beforeStatus = event.data.before.val() || {};
     const uid = event.params.uid;
 
-    if (!status || !uid) return null;
+    if (!uid) return null;
 
-    const isOnline = status.state === 'online';
+    // Handle deletion or state change
+    const isOnline = status ? status.state === 'online' : false;
+    const wasOnline = beforeStatus.state === 'online';
+
+    // GUARD: If status didn't change, we skip the Firestore update to prevent write churn.
+    // The client handles its own local heartbeat/throttling. 
+    // We only sync to Firestore when "Online/Offline" flips.
+    if (isOnline === wasOnline && event.data.before.exists()) {
+        // console.debug(`[Presence] Skipping Firestore sync for ${uid} (No state change)`);
+        return null;
+    }
+
     const db = admin.firestore();
-
-    logger.info(`Syncing presence for ${uid}: ${status.state}`, { uid, isOnline });
+    logger.info(`Presence Sync: ${uid} is now ${isOnline ? 'online' : 'offline'}`, { uid, isOnline });
 
     try {
         const batch = db.batch();
@@ -94,8 +105,7 @@ exports.onAdminFieldsChanged = onDocumentWritten('users/{userId}', async (event)
 });
 
 exports.banUser = onCall(async (request) => {
-    const isAuditAdmin = request.auth.token.email === 'admin@system.com';
-    if (!request.auth || (!request.auth.token.superAdmin && !request.auth.token.isAdmin && !isAuditAdmin)) {
+    if (!request.auth || (!request.auth.token.superAdmin && !request.auth.token.isAdmin)) {
         throw new HttpsError('permission-denied', 'Only Admin or Super Admin can ban users.');
     }
 
@@ -126,8 +136,7 @@ exports.banUser = onCall(async (request) => {
 
 exports.nukeUser = onCall(async (request) => {
     // 1. Security Check
-    const isAuditAdmin = request.auth.token.email === 'admin@system.com';
-    if (!request.auth || (!request.auth.token.superAdmin && !request.auth.token.isAdmin && !isAuditAdmin)) {
+    if (!request.auth || (!request.auth.token.superAdmin && !request.auth.token.isAdmin)) {
         throw new HttpsError('permission-denied', 'Only Admin or Super Admin can nuke users.');
     }
 
@@ -302,12 +311,6 @@ exports.syncAdminClaims = onCall(async (request) => {
             updated = true;
         }
 
-        // AUDIT_OVERRIDE: Force claims for system account
-        if (request.auth.token.email === 'admin@system.com') {
-            claims.isAdmin = true;
-            claims.superAdmin = true;
-            updated = true;
-        }
 
         if (updated) {
             await admin.auth().setCustomUserClaims(uid, claims);

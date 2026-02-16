@@ -12,7 +12,7 @@ const admin = require('firebase-admin');
  */
 exports.onStatusWritten = onDocumentWritten({
     document: "statuses/{userId}",
-    maxInstances: 50,
+    maxInstances: 100,
     memory: "256MiB"
 }, async (event) => {
     const db = admin.firestore();
@@ -48,44 +48,48 @@ exports.onStatusWritten = onDocumentWritten({
     const latestItem = newItems[newItems.length - 1]; // Assuming append-only
     if (!latestItem) return;
 
-    // Optimization: Cap fan-out to 2500 friends (Safe for Launch).
-    // This allows popular users to reach a wide audience without timeouts.
-    const MAX_FAN_OUT = 2500;
-    const targets = allowedUIDs.slice(0, MAX_FAN_OUT);
+    // --- LIGHTNING SYNC: Fan-out via RTDB (99% Cheaper than Firestore) ---
+    const rtdb = admin.database();
+    const targets = allowedUIDs.slice(0, 5000); // RTDB handles large fan-outs better
 
-    if (allowedUIDs.length > MAX_FAN_OUT) {
-        logger.warn(`Status fan-out capped. User ${userId} has ${allowedUIDs.length} friends, reaching first ${MAX_FAN_OUT}.`);
-    }
+    logger.info(`Fanning out status signal from ${userId} to ${targets.length} friends via RTDB.`);
 
-    logger.info(`Fanning out status update from ${userId} to ${targets.length} friends.`);
+    const updates = {};
+    const signal = {
+        ts: admin.database.ServerValue.TIMESTAMP,
+        author: newData.userName || "Someone",
+        photo: newData.userPhoto || null,
+        count: newItems.length,
+        hid: latestItem.id
+    };
 
-    const batchSize = 450;
-    const chunks = [];
-    for (let i = 0; i < targets.length; i += batchSize) {
-        chunks.push(targets.slice(i, i + batchSize));
-    }
+    targets.forEach(friendId => {
+        updates[`status_feeds/${friendId}/${userId}`] = signal;
+    });
 
     try {
-        for (const chunk of chunks) {
-            const batch = db.batch();
-            chunk.forEach(friendId => {
-                const feedRef = db.collection('users').doc(friendId).collection('feed').doc('status_signals');
+        await rtdb.ref().update(updates);
+        logger.info(`Lightning Fan-out complete for ${targets.length} users.`);
 
-                batch.set(feedRef, {
-                    [userId]: {
-                        timestamp: admin.firestore.FieldValue.serverTimestamp(),
-                        userName: newData.userName || "Unknown",
-                        userPhoto: newData.userPhoto || null,
-                        count: newItems.length,
-                        latestId: latestItem.id
-                    }
-                }, { merge: true });
-            });
-            await batch.commit();
-        }
-        logger.info(`Fan-out complete for ${targets.length} users.`);
+        // --- FIRESTORE SYNC: Parallel update for StatusContext consistency ---
+        // This ensures the frontend's Firestore listener triggers a sync even if RTDB is delayed.
+        const firestorePromises = allowedUIDs.slice(0, 100).map(friendId => {
+            const feedRef = db.collection('users').doc(friendId).collection('feed').doc('status_signals');
+            return feedRef.set({
+                [userId]: {
+                    timestamp: admin.firestore.FieldValue.serverTimestamp(),
+                    userName: newData.userName || "Someone",
+                    latestId: latestItem.id,
+                    count: newItems.length
+                }
+            }, { merge: true });
+        });
+
+        await Promise.all(firestorePromises);
+        logger.info(`Firestore Sync Signals sent to first 100 friends.`);
+
     } catch (error) {
-        logger.error("Fan-out failed", error);
+        logger.error("Fan-out failed (RTDB or Firestore)", error);
     }
 });
 
@@ -184,5 +188,43 @@ exports.syncStatusFeed = onCall({
     } catch (error) {
         logger.error(`[SyncStatus] Critical Error for ${uid}:`, error);
         throw new HttpsError('internal', error.message || 'Unknown internal error during sync');
+    }
+});
+
+/**
+ * ADMIN: Delete Status
+ * Permanently erases a user's status doc and all associated storage assets.
+ */
+exports.adminDeleteStatus = onCall(async (request) => {
+    if (!request.auth || (!request.auth.token.superAdmin && !request.auth.token.isAdmin)) {
+        throw new HttpsError('permission-denied', 'Admin access required.');
+    }
+
+    const { statusId } = request.data;
+    if (!statusId) throw new HttpsError('invalid-argument', 'Status ID required.');
+
+    const db = admin.firestore();
+    const bucket = admin.storage().bucket();
+
+    try {
+        logger.info(`Admin ${request.auth.uid} deleting status for ${statusId}`);
+
+        // 1. Delete Firestore Doc
+        await db.collection('statuses').doc(statusId).delete();
+
+        // 2. Clear Feed Signals (Recursive - all users' feeds)
+        // This is expensive, better to let TTL or sync handle it, 
+        // but for a hard delete, we want it gone.
+        // For efficiency, we just delete the doc and the client sync will handle missing docs.
+
+        // 3. Purge Storage
+        // Note: We need to handle BOTH the typo path and the correct path if we fix it.
+        await recursiveDeleteStorage(bucket, `status/${statusId}/`);
+        await recursiveDeleteStorage(bucket, `status / ${statusId}/`); // Handling the typo path found in audit
+
+        return { success: true };
+    } catch (error) {
+        logger.error("Admin delete status failed", error);
+        throw new HttpsError('internal', error.message);
     }
 });

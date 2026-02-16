@@ -36,6 +36,8 @@ const MainLayout = () => {
     // Visibility Logic
     // Mobile: Show Sidebar ONLY on root. Show Content on everything else.
     // Desktop/Tablet: Always show both.
+    // Mobile: Show Sidebar ONLY on root. Show Content on everything else.
+    // Desktop/Tablet: Always show both.
     const showSidebar = !isMobile || isRoot;
     const showContent = !isMobile || !isRoot;
 
@@ -47,15 +49,15 @@ const MainLayout = () => {
 
             {/* Application Shell */}
             <div className={cn(
-                "flex-1 flex overflow-hidden relative bg-surface shadow-2xl transition-all duration-300",
-                isDesktop ? "max-w-[100vw] mx-auto" : "w-full"
+                "flex-1 flex overflow-hidden relative bg-surface transition-all duration-300",
+                isDesktop ? "max-w-[100vw] mx-auto" : "w-full h-full"
             )}>
 
                 {/* Sidebar Pane (Chat List) */}
                 <aside
                     className={cn(
                         "flex-col border-r border-border/50 bg-surface-elevated relative z-30 shrink-0 h-full transition-all duration-300",
-                        isMobile ? (showSidebar ? "w-full flex" : "hidden") : (isTablet ? "w-[340px] flex" : "w-[420px] lg:w-[450px] xl:w-[480px] flex")
+                        isMobile ? (showSidebar ? "w-screen flex" : "hidden") : (isTablet ? "w-[340px] flex" : "w-[420px] lg:w-[450px] xl:w-[480px] flex")
                     )}
                 >
                     <Sidebar />

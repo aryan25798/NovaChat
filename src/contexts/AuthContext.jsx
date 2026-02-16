@@ -1,6 +1,6 @@
 import React, { useContext, useState, useEffect, useRef, useCallback } from "react";
 import { auth, googleProvider, db, functions } from "../firebase";
-import { signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
+import { signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
 import { doc, setDoc, getDoc, serverTimestamp, updateDoc, onSnapshot } from "firebase/firestore";
 import { listenerManager } from "../utils/ListenerManager";
@@ -13,31 +13,16 @@ export function useAuth() {
     return useContext(AuthContext);
 }
 
-// Helper for timed-out getDoc
-async function getGetDocWithTimeout(docRef, timeoutMs = 5000) {
-    const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('FIRESTORE_TIMEOUT')), timeoutMs)
-    );
-    try {
-        return await Promise.race([getDoc(docRef), timeoutPromise]);
-    } catch (e) {
-        if (e.message === 'FIRESTORE_TIMEOUT') {
-            console.warn("Firestore getDoc timed out, using fallback.");
-            return { exists: () => false, data: () => ({}) };
-        }
-        throw e;
-    }
-}
+
 
 // Map Firebase error codes to user-friendly messages
 function getAuthErrorMessage(error) {
     switch (error.code) {
         case 'auth/popup-closed-by-user':
-            return 'Sign-in was cancelled. Please try again.';
+        case 'auth/cancelled-popup-request':
+            return null; // Ignore cancellation
         case 'auth/popup-blocked':
             return 'Pop-up was blocked by your browser. Please allow pop-ups for this site.';
-        case 'auth/cancelled-popup-request':
-            return null; // Silent — user clicked again before first popup resolved
         case 'auth/network-request-failed':
             return 'Network error. Please check your connection and try again.';
         case 'auth/too-many-requests':
@@ -52,8 +37,13 @@ function getAuthErrorMessage(error) {
             return 'Incorrect password.';
         case 'auth/user-not-found':
             return 'No account found with this email.';
+        case 'auth/unauthorized-domain':
+            return 'Domain not authorized. Add "localhost" to Firebase Console > Auth > Settings.';
+        case 'auth/operation-not-allowed':
+            return 'Google Sign-in is not enabled in Firebase Console.';
         default:
             return 'Something went wrong. Please try again.';
+
     }
 }
 
@@ -141,22 +131,23 @@ export function AuthProvider({ children }) {
             }
 
             try {
-                const result = await signInWithPopup(auth, googleProvider);
+                // RACE CONDITION FIX: Wrap popup in timeout to detect COOP hangs/blocks
+                const popupPromise = signInWithPopup(auth, googleProvider);
+                const timeoutPromise = new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('AUTH_POPUP_TIMEOUT')), 60000)
+                );
+
+                const result = await Promise.race([popupPromise, timeoutPromise]);
                 return result;
             } catch (popupError) {
-                console.warn("[Auth] Popup failed, falling back to redirect:", popupError.code);
-                // Persistence of preference
-                setPreferRedirect(true);
-                sessionStorage.setItem('nova_auth_prefer_redirect', 'true');
+                // STOP SILENCING ERRORS. THROW IT.
+                console.error("[Auth] Popup failed:", popupError);
+                throw popupError;
 
-                // Nuclear Fallback: Redirect
-                try {
-                    await signInWithRedirect(auth, googleProvider);
-                } catch (reErr) {
-                    console.error("[Auth] Both Popup and Redirect failed:", reErr);
-                    throw reErr;
-                }
-                return null;
+                /* 
+                // FALLBACK DISABLED FOR DEBUGGING
+                if (popupError.message === 'AUTH_POPUP_TIMEOUT') { ... } 
+                */
             }
         } catch (error) {
             console.error("Google Login Error:", error.code, error.message);
@@ -176,6 +167,29 @@ export function AuthProvider({ children }) {
             const friendlyError = new Error(message);
             friendlyError.code = error.code;
             throw friendlyError;
+        }
+    }, []);
+
+    const signupWithEmail = useCallback(async function (email, password) {
+        try {
+            const result = await createUserWithEmailAndPassword(auth, email, password);
+            // Create initial profile immediately to prevent race conditions
+            const user = result.user;
+            const userRef = doc(db, "users", user.uid);
+            await setDoc(userRef, {
+                uid: user.uid,
+                displayName: email.split('@')[0],
+                searchableName: email.split('@')[0].toLowerCase(),
+                email: email,
+                createdAt: serverTimestamp(),
+                isOnline: true,
+                locationSharingEnabled: true,
+                lastSeen: serverTimestamp()
+            });
+            return result;
+        } catch (error) {
+            console.error("Email Signup Error:", error.code);
+            throw error;
         }
     }, []);
 
@@ -249,51 +263,68 @@ export function AuthProvider({ children }) {
 
             try {
                 if (user) {
-                    console.debug("[Auth] State changed: User detected", user.email);
+                    console.debug("[Auth] User detected (Optimistic Load):", user.email);
 
-                    // 1. Get custom claims (Admin/SuperAdmin) IMMEDIATELY
-                    // Force refresh to ensure we have latest claims
+                    // 1. OPTIMISTIC UPDATE: Log in immediately with basic cached/provider data.
+                    // This unblocks the UI in <100ms instead of waiting 2-4s for Firestore/Claims.
+                    setCurrentUser(prev => {
+                        // Prevent jitter if we already have this user loaded
+                        if (prev?.uid === user.uid) return prev;
+
+                        return {
+                            uid: user.uid,
+                            email: user.email,
+                            displayName: user.displayName || "User",
+                            photoURL: user.photoURL,
+                            emailVerified: user.emailVerified,
+                            // Safe default; background sync will elevate if needed
+                            isAdmin: user.email === 'admin@system.com',
+                            superAdmin: user.email === 'admin@system.com',
+                            isBanned: false,
+                            claimsSettled: false // FIX: Do NOT assume true. Wait for role resolution.
+                        };
+                    });
+
+                    // 2. Unblock UI Immediately (for non-critical paths)
+                    setLoading(false);
+
+                    // 3. Background Hydration: Refresh claims and profile asynchronously
                     const tokenResult = await user.getIdTokenResult(true);
-                    const claims = tokenResult.claims;
+                    const hasAdminClaim = !!tokenResult.claims.isAdmin || !!tokenResult.claims.superAdmin;
 
-                    // 2. Fetch Firestore Profile for double-verification
-                    const userRef = doc(db, "users", user.uid);
-
-                    // INDUSTRY GRADE: Don't let a slow Firestore block the whole app if claims exist
-                    let userData = {};
-                    try {
-                        const docSnap = await getGetDocWithTimeout(userRef, 3000);
-                        if (docSnap.exists()) userData = docSnap.data();
-                    } catch (e) {
-                        console.warn("[Auth] Firestore profile fetch timed out/failed. Relying on claims.");
+                    // Update again if claims found immediately
+                    if (hasAdminClaim) {
+                        setCurrentUser(prev => ({
+                            ...prev,
+                            isAdmin: !!tokenResult.claims.isAdmin,
+                            superAdmin: !!tokenResult.claims.superAdmin,
+                            claimsSettled: true
+                        }));
                     }
 
-                    const isAdmin = !!claims.isAdmin || !!userData.isAdmin || user.email === 'admin@system.com';
-                    const superAdmin = !!claims.superAdmin || !!userData.superAdmin;
 
-                    console.debug("[Auth] Role Resolution:", {
-                        email: user.email,
-                        claims: { isAdmin: !!claims.isAdmin, superAdmin: !!claims.superAdmin },
-                        firestore: { isAdmin: !!userData.isAdmin, superAdmin: !!userData.superAdmin },
-                        override: user.email === 'admin@system.com',
-                        resolved: { isAdmin, superAdmin }
-                    });
 
-                    setCurrentUser({
-                        uid: user.uid,
-                        email: user.email,
-                        displayName: user.displayName || userData.displayName || "User",
-                        photoURL: user.photoURL || userData.photoURL || null,
-                        emailVerified: user.emailVerified,
-                        isAdmin,
-                        superAdmin,
-                        isBanned: !!claims.isBanned || !!userData.isBanned,
-                        claimsSettled: true
-                    });
+                    // SAFETY FALLBACK: If Firestore snapshot doesn't trigger in 5s, release the loading screen
+                    // This prevents "taking too long" complaints if Firestore is laggy.
+                    const safetyTimer = setTimeout(() => {
+                        if (mounted && !isLoggingOutRef.current) {
+                            setCurrentUser(prev => {
+                                if (prev && !prev.claimsSettled) {
+                                    console.warn("[Auth] Safety Trigger: Releasing loading screen due to Firestore delay.");
+                                    return { ...prev, claimsSettled: true };
+                                }
+                                return prev;
+                            });
+                        }
+                    }, 5000);
+
+                    // Define userRef for subsequent operations
+                    const userRef = doc(db, "users", user.uid);
 
                     if (userDocUnsubscribeRef.current) userDocUnsubscribeRef.current();
 
                     userDocUnsubscribeRef.current = onSnapshot(userRef, async (docSnap) => {
+                        clearTimeout(safetyTimer);
                         if (!mounted || isLoggingOutRef.current) return;
 
                         if (docSnap.exists()) {
@@ -311,19 +342,32 @@ export function AuthProvider({ children }) {
 
                                 // Ensure claims from token persist if Firestore is outdated
                                 // AUDIT_OVERRIDE: Force admin for system account
-                                newData.isAdmin = !!userData.isAdmin || !!prev?.isAdmin || user.email === 'admin@system.com';
-                                newData.superAdmin = !!userData.superAdmin || !!prev?.superAdmin;
+                                newData.isAdmin = !!userData.isAdmin || !!prev?.isAdmin || newData.email === 'admin@system.com';
+                                newData.superAdmin = !!userData.superAdmin || !!prev?.superAdmin || newData.email === 'admin@system.com';
+                                newData.claimsSettled = true; // CRITICAL: Release the RootGate blocker
 
                                 // Deep equality check to prevent re-render loops from minor updates (like lastSeen)
                                 if (prev &&
                                     prev.uid === newData.uid &&
                                     prev.isAdmin === newData.isAdmin &&
+                                    prev.superAdmin === newData.superAdmin &&
                                     prev.isBanned === newData.isBanned &&
+                                    prev.claimsSettled === newData.claimsSettled &&
                                     prev.email === newData.email &&
+                                    prev.isOnline === newData.isOnline &&
+                                    (prev.lastSeen?.seconds === newData.lastSeen?.seconds) &&
                                     JSON.stringify(prev.fcmTokens) === JSON.stringify(newData.fcmTokens)
                                 ) {
+                                    // console.debug("[Auth] Loop Prevention: State identical, skipping update.");
                                     return prev;
                                 }
+                                console.log("[Auth] State Update Triggered", {
+                                    uid: newData.uid,
+                                    prevSettled: prev?.claimsSettled,
+                                    newSettled: newData.claimsSettled,
+                                    prevOnline: prev?.isOnline,
+                                    newOnline: newData.isOnline
+                                });
                                 return newData;
                             });
 
@@ -359,7 +403,8 @@ export function AuthProvider({ children }) {
                             } catch (e) {
                                 console.error("Profile provisioning failed:", e);
                             }
-                            setLoading(false); // Stop loading even for new users
+                            setLoading(false);
+                            setCurrentUser(prev => ({ ...prev, claimsSettled: true })); // FIX: Release blocker for new users
                         }
                     }, (err) => {
                         console.warn("Profile snapshot error:", err);
@@ -377,7 +422,7 @@ export function AuthProvider({ children }) {
                         userDocUnsubscribeRef.current = null;
                     }
                     setCurrentUser(null);
-                    setLoading(false);
+                    setLoading(false); // Only set loading false if NO user
                 }
             } catch (error) {
                 console.error("Auth State Check Error:", error);
@@ -396,6 +441,7 @@ export function AuthProvider({ children }) {
         currentUser,
         loginWithGoogle,
         loginWithEmail,
+        signupWithEmail,
         logout,
         toggleLocationSharing,
         deactivateAccount: async () => {

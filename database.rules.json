@@ -19,25 +19,35 @@
         },
         "chats": {
             "$chatId": {
-                ".read": "auth != null && (auth.token.isAdmin === true || auth.token.superAdmin === true || root.child('user_chats').child(auth.uid).child($chatId).exists())",
+                ".read": "auth != null && (auth.token.isAdmin === true || auth.token.superAdmin === true || root.child('user_chats').child(auth.uid).child($chatId).exists() || $chatId === 'gemini_' + auth.uid || ($chatId.contains('_') && ($chatId.beginsWith(auth.uid + '_') || $chatId.endsWith('_' + auth.uid))))",
                 "meta": {
-                    ".write": "auth != null && (auth.token.isAdmin === true || auth.token.superAdmin === true || root.child('user_chats').child(auth.uid).child($chatId).exists())"
+                    ".write": "auth != null && (auth.token.isAdmin === true || auth.token.superAdmin === true || root.child('user_chats').child(auth.uid).child($chatId).exists() || ($chatId.contains('_') && ($chatId.beginsWith(auth.uid + '_') || $chatId.endsWith('_' + auth.uid))))",
+                    "lastMessage": {
+                        ".write": "auth != null && newData.child('senderId').val() === auth.uid",
+                        ".validate": "newData.hasChildren(['text', 'senderId', 'timestamp'])"
+                    },
+                    "unreadCount": {
+                        "$uid": {
+                            ".write": "auth != null && auth.uid == $uid",
+                            ".validate": "newData.val() == 0"
+                        }
+                    }
                 },
                 "typing": {
                     "$userId": {
-                        ".write": "auth != null && (auth.uid == $userId || auth.token.isAdmin === true || auth.token.superAdmin === true)",
+                        ".write": "auth != null && (auth.uid == $userId || auth.token.isAdmin === true || auth.token.superAdmin === true || ($chatId.contains('_') && ($chatId.beginsWith(auth.uid + '_') || $chatId.endsWith('_' + auth.uid))))",
                         ".validate": "newData.isNumber() || newData.val() == null"
                     }
                 },
                 "signals": {
                     "$messageId": {
-                        ".write": "auth != null && (auth.token.isAdmin === true || auth.token.superAdmin === true || root.child('user_chats').child(auth.uid).child($chatId).exists())",
+                        ".write": "auth != null && (auth.token.isAdmin === true || auth.token.superAdmin === true || root.child('user_chats').child(auth.uid).child($chatId).exists() || $chatId === 'gemini_' + auth.uid || ($chatId.contains('_') && ($chatId.beginsWith(auth.uid + '_') || $chatId.endsWith('_' + auth.uid))))",
                         ".validate": "newData.hasChildren(['s', 'ts'])"
                     }
                 },
                 "status": {
                     "$messageId": {
-                        ".write": "auth != null && (auth.token.isAdmin === true || auth.token.superAdmin === true || root.child('user_chats').child(auth.uid).child($chatId).exists())"
+                        ".write": "auth != null && (auth.token.isAdmin === true || auth.token.superAdmin === true || root.child('user_chats').child(auth.uid).child($chatId).exists() || $chatId === 'gemini_' + auth.uid || ($chatId.contains('_') && ($chatId.beginsWith(auth.uid + '_') || $chatId.endsWith('_' + auth.uid))))"
                     }
                 }
             }
@@ -45,8 +55,8 @@
         "calls": {
             "$callId": {
                 ".read": "auth != null && (data.child('callerId').val() === auth.uid || data.child('receiverId').val() === auth.uid || auth.token.isAdmin === true)",
-                ".write": "auth != null",
-                ".validate": "(!data.exists() && newData.child('callerId').val() === auth.uid) || (data.child('callerId').val() === auth.uid || data.child('receiverId').val() === auth.uid)"
+                ".write": "auth != null && ((!data.exists() && newData.child('callerId').val() === auth.uid) || (data.child('callerId').val() === auth.uid || data.child('receiverId').val() === auth.uid))",
+                ".validate": "newData.hasChildren(['callerId', 'receiverId'])"
             }
         }
     }

@@ -87,6 +87,10 @@
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
+    height: 100dvh;
+    width: 100vw;
+    overflow: hidden;
+    position: fixed;
   }
 }
 
@@ -117,4 +121,14 @@
   animation-name: progress;
   animation-timing-function: linear;
   animation-fill-mode: forwards;
+}
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.animate-shimmer {
+  animation: shimmer 2s infinite linear;
+  background: linear-gradient(90deg, transparent 25%, rgba(0, 0, 0, 0.05) 50%, transparent 75%);
+  background-size: 200% 100%;
 }

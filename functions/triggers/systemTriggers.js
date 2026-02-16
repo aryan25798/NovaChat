@@ -1,8 +1,8 @@
 const { onRequest } = require("firebase-functions/v2/https");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
-
-
+const admin = require('firebase-admin');
+const { recursiveDeleteCollection, bulkDeleteByQuery } = require('../utils/shared');
 
 /**
  * ADMIN: Global Presence Reset
@@ -54,11 +54,10 @@ exports.adminResetAllPresence = onCall(async (request) => {
  * Runs every hour to cleanup statuses older than 24 hours.
  */
 exports.deleteExpiredStatuses = onSchedule("every 1 hours", async (event) => {
-    const admin = require('firebase-admin');
     const { logger } = require("firebase-functions");
-    const { bulkDeleteByQuery } = require('../utils/shared');
 
     const db = admin.firestore();
+    const bucket = admin.storage().bucket();
     const expiryDate = new Date();
     expiryDate.setHours(expiryDate.getHours() - 24);
 
@@ -66,9 +65,42 @@ exports.deleteExpiredStatuses = onSchedule("every 1 hours", async (event) => {
         .where('timestamp', '<', admin.firestore.Timestamp.fromDate(expiryDate));
 
     try {
-        const deletedCount = await bulkDeleteByQuery(expiredQuery);
+        const snapshot = await expiredQuery.get();
+        if (snapshot.empty) return;
+
+        let deletedCount = 0;
+        let storagePurged = 0;
+
+        for (const doc of snapshot.docs) {
+            const data = doc.data();
+            const userId = doc.id;
+
+            // Purge storage assets for each status item
+            if (data.items && data.items.length > 0) {
+                for (const item of data.items) {
+                    if (item.mediaUrl) {
+                        try {
+                            const decodedPath = decodeURIComponent(item.mediaUrl.split('/o/')[1].split('?')[0]);
+                            await bucket.file(decodedPath).delete();
+                            storagePurged++;
+                        } catch (e) { /* file may already be deleted */ }
+                    }
+                }
+            }
+
+            // Also purge by prefix as a safety net
+            try {
+                const [files] = await bucket.getFiles({ prefix: `status/${userId}/` });
+                await Promise.all(files.map(f => f.delete().catch(() => { })));
+                storagePurged += files.length;
+            } catch (e) { /* ignore */ }
+
+            await doc.ref.delete();
+            deletedCount++;
+        }
+
         if (deletedCount > 0) {
-            logger.info(`Cleanup: Deleted ${deletedCount} expired statuses.`);
+            logger.info(`Cleanup: Deleted ${deletedCount} expired statuses, purged ${storagePurged} storage assets.`);
         }
     } catch (error) {
         logger.error("Status cleanup failed", error);
@@ -142,3 +174,5 @@ exports.debugResetApp = onCall(async (request) => {
         throw new HttpsError('internal', error.message);
     }
 });
+
+

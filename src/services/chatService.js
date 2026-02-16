@@ -83,21 +83,22 @@ export const subscribeToMessages = (chatId, currentUserId, callback, updateReadS
         // 2. Emit ONLY if changed (Optimized Comparison)
         const currentMessages = Array.from(messageCache.values());
 
-        // Efficient check: See if count changed or last message ID/timestamp changed
-        const lastMsg = currentMessages[currentMessages.length - 1];
-        const lastEmittedMsg = JSON.parse(lastEmittedJson || 'null');
+        // Selective check: count, last id, and last status
+        const currentCheck = currentMessages.map(m => ({
+            id: m.id,
+            t: m.timestamp?.toString(),
+            s: m.status,
+            p: m.progress,
+            tx: m.text?.substring(0, 10)
+        }));
 
-        const hasChanged = !lastEmittedJson ||
-            currentMessages.length !== (JSON.parse(lastEmittedJson)).length ||
-            lastMsg?.id !== lastEmittedMsg?.id ||
-            lastMsg?.timestamp?.toString() !== lastEmittedMsg?.timestamp?.toString();
+        const currentCheckJson = JSON.stringify(currentCheck);
 
-        if (hasChanged) {
+        if (currentCheckJson !== lastEmittedJson) {
             callback(currentMessages);
-            // We still store a minimal representation to detect changes next time
-            lastEmittedJson = JSON.stringify(currentMessages.map(m => ({ id: m.id, timestamp: m.timestamp?.toString() })));
+            lastEmittedJson = currentCheckJson;
         } else {
-            // console.log("[ChatService] Snapshot fired but no relevant changes. Ignoring.");
+            // console.log("[ChatService] No changes detected.");
         }
 
         // 3. Mark Read/Delivered (Debounced)
@@ -165,25 +166,50 @@ const flushReadBatch = async () => {
 
     const batch = writeBatch(db);
     let opCount = 0;
+    const processedDocs = [];
 
-    readBatchBuffer.forEach((docs) => {
-        docs.forEach(d => {
-            if (opCount < 450) { // Firestore batch limit is 500
+    // 1. Collect up to 450 items
+    for (const [chatId, docs] of readBatchBuffer.entries()) {
+        for (const d of docs) {
+            if (opCount < 450) {
                 batch.update(d.ref, { read: true, delivered: true });
+                processedDocs.push({ chatId, doc: d });
                 opCount++;
+            } else {
+                break;
             }
-        });
+        }
+        if (opCount >= 450) break;
+    }
+
+    if (opCount === 0) return;
+
+    // 2. Remove from buffer before commit to avoid duplicates in concurrent flushes
+    processedDocs.forEach(({ chatId, doc }) => {
+        const set = readBatchBuffer.get(chatId);
+        if (set) {
+            set.delete(doc);
+            if (set.size === 0) readBatchBuffer.delete(chatId);
+        }
     });
 
-    readBatchBuffer.clear();
     readDebounceTimer = null;
 
-    if (opCount > 0) {
-        try {
-            await batch.commit();
-        } catch (error) {
-            console.warn("Batch read update failed:", error);
+    try {
+        await batch.commit();
+        // 3. If there are still items in the buffer, schedule another flush
+        if (readBatchBuffer.size > 0) {
+            readDebounceTimer = setTimeout(flushReadBatch, 100);
         }
+    } catch (error) {
+        console.warn("Batch read update failed, restoring to buffer:", error);
+        // 4. Restore to buffer on failure
+        processedDocs.forEach(({ chatId, doc }) => {
+            if (!readBatchBuffer.has(chatId)) readBatchBuffer.set(chatId, new Set());
+            readBatchBuffer.get(chatId).add(doc);
+        });
+        // Retry with backoff
+        readDebounceTimer = setTimeout(flushReadBatch, FLUSH_DELAY * 2);
     }
 };
 
@@ -192,25 +218,49 @@ const flushDeliveredBatch = async () => {
 
     const batch = writeBatch(db);
     let opCount = 0;
+    const processedDocs = [];
 
-    deliveredBatchBuffer.forEach((docs) => {
-        docs.forEach(d => {
+    // 1. Collect up to 450 items
+    for (const [chatId, docs] of deliveredBatchBuffer.entries()) {
+        for (const d of docs) {
             if (opCount < 450) {
                 batch.update(d.ref, { delivered: true });
+                processedDocs.push({ chatId, doc: d });
                 opCount++;
+            } else {
+                break;
             }
-        });
+        }
+        if (opCount >= 450) break;
+    }
+
+    if (opCount === 0) return;
+
+    // 2. Remove from buffer
+    processedDocs.forEach(({ chatId, doc }) => {
+        const set = deliveredBatchBuffer.get(chatId);
+        if (set) {
+            set.delete(doc);
+            if (set.size === 0) deliveredBatchBuffer.delete(chatId);
+        }
     });
 
-    deliveredBatchBuffer.clear();
     deliveredDebounceTimer = null;
 
-    if (opCount > 0) {
-        try {
-            await batch.commit();
-        } catch (error) {
-            console.warn("Batch delivery update failed:", error);
+    try {
+        await batch.commit();
+        // 3. Schedule next if remaining
+        if (deliveredBatchBuffer.size > 0) {
+            deliveredDebounceTimer = setTimeout(flushDeliveredBatch, 100);
         }
+    } catch (error) {
+        console.warn("Batch delivery update failed, restoring to buffer:", error);
+        // 4. Restore
+        processedDocs.forEach(({ chatId, doc }) => {
+            if (!deliveredBatchBuffer.has(chatId)) deliveredBatchBuffer.set(chatId, new Set());
+            deliveredBatchBuffer.get(chatId).add(doc);
+        });
+        deliveredDebounceTimer = setTimeout(flushDeliveredBatch, FLUSH_DELAY * 2);
     }
 };
 
@@ -345,6 +395,45 @@ export const sendMessage = async (chatId, currentUser, text, replyTo = null, opt
 async function sendMessageSequential(chatId, currentUser, text, replyTo, optimisticId, metadata) {
     console.log("[ChatService] Processing message in queue...", { chatId, optimisticId });
     try {
+        const chatRef = doc(db, "chats", chatId);
+
+        // [LAZY INIT] Ensure parent chat doc exists for "Ghost chats"
+        // This ensures the recipient's chat list can detect the new conversation.
+        const chatSnap = await getDoc(chatRef);
+        if (!chatSnap.exists() && chatId.includes('_')) {
+            console.log(`[ChatService] Lazy-creating ghost chat: ${chatId}`);
+            const parts = chatId.split('_');
+            const otherUid = parts.find(uid => uid !== currentUser.uid);
+
+            // Try to fetch other user's basic info for the first-time shell
+            let otherUserInfo = { displayName: "User", photoURL: null };
+            try {
+                const uSnap = await getDoc(doc(db, "users", otherUid));
+                if (uSnap.exists()) {
+                    const ud = uSnap.data();
+                    otherUserInfo = { displayName: ud.displayName || "User", photoURL: ud.photoURL || null };
+                }
+            } catch (e) {
+                console.warn("[ChatService] Failed to fetch peer info for ghost init", e);
+            }
+
+            const initData = {
+                id: chatId,
+                participants: parts,
+                participantInfo: {
+                    [currentUser.uid]: { displayName: currentUser.displayName, photoURL: currentUser.photoURL },
+                    [otherUid]: otherUserInfo
+                },
+                lastMessage: null,
+                lastMessageTimestamp: serverTimestamp(),
+                type: 'private',
+                unreadCount: { [currentUser.uid]: 0, [otherUid]: 0 },
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp()
+            };
+            await setDoc(chatRef, initData).catch(e => console.warn("[ChatService] Ghost setDoc failed", e));
+        }
+
         const messagesRef = collection(db, "chats", chatId, "messages");
         const docRef = optimisticId ? doc(messagesRef, optimisticId) : doc(messagesRef);
 
@@ -365,8 +454,6 @@ async function sendMessageSequential(chatId, currentUser, text, replyTo, optimis
                 senderName: replyTo.senderName
             } : null
         };
-
-        const chatRef = doc(db, "chats", chatId);
 
         // 1. Instant Signaling (RTDB - Sub-100ms delivery for the recipient)
         lightningSync.sendInstantSignal(chatId, currentUser.uid, docRef.id, text);
@@ -505,7 +592,7 @@ export const repairChatMetadata = async (chatId, currentUserId) => {
 
 
 
-export const sendMediaMessage = async (chatId, sender, fileData, replyTo = null) => {
+export const sendMediaMessage = async (chatId, sender, fileData, replyTo = null, msgId = null) => {
     checkRateLimit();
     const type = fileData.fileType.startsWith('image/') ? 'image' :
         fileData.fileType.startsWith('video/') ? 'video' :
@@ -525,6 +612,8 @@ export const sendMediaMessage = async (chatId, sender, fileData, replyTo = null)
         fileName: fileData.fileName,
         fileSize: fileData.fileSize,
         fileType: fileData.fileType,
+        width: fileData.width || null,
+        height: fileData.height || null,
         text: type === 'image' ? '📷 Photo' : type === 'video' ? '🎥 Video' : '📎 File',
         textLower: (type === 'image' ? '📷 Photo' : type === 'video' ? '🎥 Video' : '📎 File').toLowerCase(),
         replyTo: replyTo ? { id: replyTo.id, text: replyTo.text, senderName: replyTo.senderName } : null
@@ -532,7 +621,7 @@ export const sendMediaMessage = async (chatId, sender, fileData, replyTo = null)
 
     try {
         const messagesRef = collection(db, "chats", chatId, "messages");
-        const docRef = doc(messagesRef);
+        const docRef = msgId ? doc(messagesRef, msgId) : doc(messagesRef);
 
         messageData.id = docRef.id;
 

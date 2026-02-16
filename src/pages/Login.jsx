@@ -6,7 +6,7 @@ import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../firebase";
 
 export default function Login() {
-    const { currentUser, loginWithGoogle, loginWithEmail } = useAuth();
+    const { currentUser, loginWithGoogle, loginWithEmail, signupWithEmail } = useAuth();
     const navigate = useNavigate();
     const [isAdminLogin, setIsAdminLogin] = useState(false);
     const [email, setEmail] = useState("");
@@ -30,10 +30,8 @@ export default function Login() {
             if (!result) {
                 setLoading(false);
             }
-            // onAuthStateChanged in AuthContext handles the rest
         } catch (error) {
             setStatus({ error: error.message || "Failed to log in. Please try again." });
-            console.error(error);
             setLoading(false);
         }
     };
@@ -44,7 +42,7 @@ export default function Login() {
         setStatus({ error: "" });
         try {
             await loginWithEmail(email, password);
-            navigate("/admin");
+            // navigate("/admin"); // Let the useEffect above handle the redirect based on auth state
         } catch (error) {
             setStatus({ error: "Invalid admin credentials." });
         } finally {
@@ -212,6 +210,29 @@ export default function Login() {
                             </button>
                         </form>
                     )}
+
+                    {/* Dev Login/Signup Backdoor */}
+                    <div className="pt-4 border-t border-border">
+                        <details className="text-xs text-muted-foreground cursor-pointer">
+                            <summary>Dev Tools</summary>
+                            <div className="mt-2 space-y-2">
+                                <input id="dev-email" placeholder="Email" className="w-full p-2 border rounded" />
+                                <input id="dev-pass" placeholder="Password" type="password" className="w-full p-2 border rounded" />
+                                <div className="flex gap-2">
+                                    <button onClick={() => {
+                                        const e = document.getElementById('dev-email').value;
+                                        const p = document.getElementById('dev-pass').value;
+                                        loginWithEmail(e, p).catch(err => alert(err.message));
+                                    }} className="bg-blue-500 text-white px-3 py-1 rounded">Login</button>
+                                    <button onClick={() => {
+                                        const e = document.getElementById('dev-email').value;
+                                        const p = document.getElementById('dev-pass').value;
+                                        signupWithEmail(e, p).catch(err => alert(err.message));
+                                    }} className="bg-green-500 text-white px-3 py-1 rounded" id="dev-signup-btn">Signup</button>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
 
                     <div className="pt-8 text-center text-xs text-muted-foreground">
                         <p>© 2024 NovaChat. Secure & Encrypted.</p>

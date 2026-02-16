@@ -145,16 +145,21 @@ export const deleteUserAndData = async (userId) => {
 
 // --- Content Moderation (Permanent Deletions) ---
 
+// --- Content Moderation (Permanent Deletions) ---
+
 export const deleteChatPermanently = async (chatId) => {
-    await deleteDoc(doc(db, "chats", chatId));
+    const adminDeleteChatFn = httpsCallable(functions, 'adminDeleteChat');
+    return adminDeleteChatFn({ chatId });
 };
 
 export const deleteMessagePermanently = async (chatId, messageId) => {
-    await deleteDoc(doc(db, "chats", chatId, "messages", messageId));
+    const adminHardDeleteMessageFn = httpsCallable(functions, 'adminHardDeleteMessage');
+    return adminHardDeleteMessageFn({ chatId, messageId });
 };
 
 export const deleteStatus = async (statusId) => {
-    await deleteDoc(doc(db, "statuses", statusId));
+    const adminDeleteStatusFn = httpsCallable(functions, 'adminDeleteStatus');
+    return adminDeleteStatusFn({ statusId });
 };
 
 // --- Spy Mode ---

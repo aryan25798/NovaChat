@@ -26,16 +26,17 @@ export const VideoPlayer = ({ src, className, fileName = "video.mp4" }) => {
 
     return (
         <div
-            className={cn("relative group/vplayer overflow-hidden rounded-xl", className)}
+            className={cn("relative group/vplayer overflow-hidden rounded-xl bg-black", className)}
             onMouseEnter={() => setHover(true)}
             onMouseLeave={() => setHover(false)}
         >
             <video
                 ref={videoRef}
                 src={src}
-                className="w-full h-auto block"
+                className="w-full h-auto max-h-[inherit] block cursor-pointer"
                 onClick={togglePlay}
                 preload="metadata"
+                playsInline
                 onPlay={() => setIsPlaying(true)}
                 onPause={() => setIsPlaying(false)}
                 onEnded={handleEnded}

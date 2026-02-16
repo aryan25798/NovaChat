@@ -4,7 +4,9 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
  * Callable Function to securely generate AI responses.
  * API key loaded from functions/.env (server-side only).
  */
-exports.generateAIResponse = onCall(async (request) => {
+exports.generateAIResponse = onCall({
+    secrets: ["GEMINI_API_KEY"]
+}, async (request) => {
     // 1. Auth Check
     if (!request.auth) {
         throw new HttpsError('unauthenticated', 'User must be logged in.');

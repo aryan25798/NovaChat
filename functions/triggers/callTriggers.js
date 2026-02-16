@@ -2,6 +2,8 @@ const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { logger } = require("firebase-functions");
 const admin = require('firebase-admin');
 const { checkRateLimit } = require('../utils/shared');
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const axios = require('axios'); // Ensure axios is available or use fetch
 
 exports.onCallCreated = onDocumentCreated("calls/{callId}", async (event) => {
     const callData = event.data.data();
@@ -68,25 +70,8 @@ exports.onCallCreated = onDocumentCreated("calls/{callId}", async (event) => {
     }
 });
 
-/**
- * Cleanup WebRTC Signaling Data
- * Triggered on call document deletion or completion to purge ICE candidates.
- * Note: We preserve the parent 'call' document for history, but purge the heavy candidates.
- */
-exports.onCallUpdated = onDocumentCreated("calls/{callId}", async (event) => {
-    const callId = event.params.callId;
 
-    // We set a 10-minute delayed cleanup for candidates. 
-    // This allows sufficient time for any reconnection logic.
-    // In a high-traffic system, we might use a scheduled task, but for 10k, 
-    // a delayed cleanup or a write-time trigger on status='ended' is fine.
-
-    // For this implementation, we trigger cleanup when status changes to anything other than ringing/active.
-    // (Actual status transitions happen via updateCallStatus on client)
-});
-
-// Since we can't easily do delayed execution in v2 without Tasks, 
-// and status changes happen on client, we'll watch for status updates.
+// Cleanup when calls enter terminal state
 const { onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { recursiveDeleteCollection } = require('../utils/shared');
 

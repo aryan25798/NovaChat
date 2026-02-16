@@ -14,7 +14,8 @@ const firebaseConfig = {
 };
 
 // Diagnostic Check for Production Builds
-if (import.meta.env.PROD) {
+// Diagnostic Check for ALL Builds
+if (true) {
     const missingKeys = Object.entries(firebaseConfig)
         .filter(([_, value]) => !value)
         .map(([key]) => key);
@@ -24,8 +25,9 @@ if (import.meta.env.PROD) {
             missing: missingKeys,
             envSource: "import.meta.env"
         });
+        alert(`MISSING CONFIG: ${missingKeys.join(', ')}. Check .env file.`);
     } else {
-        console.log("Firebase config verified (PROD)");
+        console.log("Firebase config verified.");
     }
 }
 
@@ -45,7 +47,13 @@ const STORAGE_KEY = 'DISABLE_FIREBASE_PERSISTENCE';
 const RECOVERY_KEY = 'FIREBASE_RECOVERY_ATTEMPT';
 
 // Auto-sense: If we were previously forced into memory mode, keep it for stability
-let usePersistence = localStorage.getItem(STORAGE_KEY) !== 'true';
+// RECOVERY: We are force-enabling persistence to fix "slow loading" issues.
+// Checks for deadlock will need to be more sophisticated than a permanent flag.
+if (localStorage.getItem(STORAGE_KEY) === 'true') {
+    console.warn("[Firebase] Resetting persistence flag to fix slow loading.");
+    localStorage.removeItem(STORAGE_KEY);
+}
+let usePersistence = true;
 
 // Fallback logic for high-scale environments
 export const db = initializeFirestore(app, {

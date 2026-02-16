@@ -15,18 +15,24 @@ export function PresenceProvider({ children }) {
     const { currentUser } = useAuth();
     const [isOnline, setIsOnline] = useState(false);
     const [activeChatId, setActiveChatId] = useState(null);
+    const lastSentActiveChatId = useRef(undefined); // Track last value pushed to RTDB
     const presenceListeners = useRef(new Map()); // Map<userId, { count: number, unsubscribe: function, lastData: object }>
     const callbacks = useRef(new Map()); // Map<userId, Set<callback>>
 
     // Update active chat in RTDB for notification suppression
     const updateActiveChat = useCallback((chatId) => {
-        setActiveChatId(chatId);
+        const normalizedId = chatId || null;
+        if (lastSentActiveChatId.current === normalizedId) return;
+
+        setActiveChatId(normalizedId);
+        lastSentActiveChatId.current = normalizedId;
+
         if (currentUser) {
             const userStatusDatabaseRef = ref(rtdb, '/status/' + currentUser.uid);
             set(userStatusDatabaseRef, {
                 state: 'online',
                 last_changed: rtdbServerTimestamp(),
-                activeChatId: chatId || null
+                activeChatId: normalizedId
             }).catch(e => console.debug("Active chat sync fail:", e));
         }
     }, [currentUser]);

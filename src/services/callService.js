@@ -40,6 +40,9 @@ export const createCallDoc = async (caller, receiver, type, chatId) => {
         timestamp: serverTimestamp()
     });
 
+    // 3. Register Disconnect Cleanup (Safe Signaling)
+    rtdb.ref(`calls/${callId}`).onDisconnect().remove();
+
     return callId;
 };
 
@@ -163,4 +166,14 @@ export const cleanupSignaling = async (callId) => {
     } catch (e) {
         console.warn("Error cleaning up signaling:", e);
     }
+};
+
+// HELPER: Integrated Disconnect Watchdog
+export const registerDisconnectCleanup = (callId) => {
+    if (!callId) return;
+    const rtdbRef = ref(rtdb, `calls/${callId}`);
+    // This ensures if the tab crashes/closes, the RINGING and CANDIDATES are purged
+    // Firestore status will still be 'missed' or 'ended' via client-side logic + triggers
+    const disconnectRef = ref(rtdb, `calls/${callId}`);
+    return rtdb.ref(`calls/${callId}`).onDisconnect().remove();
 };

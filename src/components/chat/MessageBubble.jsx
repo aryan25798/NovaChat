@@ -7,33 +7,45 @@ import { VideoPlayer } from "../ui/VideoPlayer";
 import { downloadMedia } from "../../utils/downloadHelper";
 import { Button } from "../ui/Button";
 import FullScreenMedia from "../FullScreenMedia";
-import { getCachedMedia, cacheMedia } from "../../utils/mediaCache";
+import { getSyncCachedMedia, getCachedMedia } from "../../utils/mediaCache";
+import { motion } from "framer-motion";
 
-const MessageBubble = ({ message, isOwn, onMediaClick }) => {
+const MessageBubble = ({ message, isOwn, onMediaClick, onCancelUpload }) => {
     const [imgError, setImgError] = React.useState(false);
-    const [resolvedUrl, setResolvedUrl] = React.useState(null);
 
     // Consolidated URL getter
     const mediaUrl = message.imageUrl || message.fileUrl || message.videoUrl || message.audioUrl || message.url || message.mediaUrl;
 
     // Resolve cached URL
+    // CRITICAL: Use synchronous cache check to prevent the "1-tick flash" during re-renders
+    const [resolvedUrl, setResolvedUrl] = React.useState(() => getSyncCachedMedia(mediaUrl) || mediaUrl);
+    const lastUrlRef = React.useRef(mediaUrl);
+
     React.useEffect(() => {
         if (!mediaUrl) return;
+        setImgError(false);
+
+        // Update local state immediately if URL changed (synchronous sync)
+        if (lastUrlRef.current !== mediaUrl) {
+            setResolvedUrl(mediaUrl);
+            lastUrlRef.current = mediaUrl;
+        }
 
         let isMounted = true;
         const resolve = async () => {
-            // 1. Check if already cached in IndexedDB
-            const cached = await getCachedMedia(mediaUrl);
-            if (cached && isMounted) {
-                setResolvedUrl(cached);
-                return;
+            try {
+                // If we already have a blob URL, don't re-resolve same mediaUrl
+                if (resolvedUrl?.startsWith('blob:')) return;
+
+                const cached = await getCachedMedia(mediaUrl);
+                if (cached && isMounted) {
+                    setResolvedUrl(cached);
+                    lastUrlRef.current = cached;
+                    return;
+                }
+            } catch (e) {
+                console.warn("Cache check failed", e);
             }
-
-            // 2. If not, use the remote URL for now, but trigger a background cache
-            if (isMounted) setResolvedUrl(mediaUrl);
-
-            // Background caching (optional, the browser also caches)
-            // cacheMedia(mediaUrl); 
         };
 
         resolve();
@@ -56,10 +68,14 @@ const MessageBubble = ({ message, isOwn, onMediaClick }) => {
         if (message.type === 'file' || mediaUrl) return 'file';
         return 'text';
     }, [message, mediaUrl]);
+
     const hasMedia = displayType === 'image' || displayType === 'video';
+    const isPending = message.status === 'pending' || message.isOptimistic;
+    const progress = message.progress || 0;
 
     const handleMediaClick = (e) => {
         e.stopPropagation();
+        if (isPending) return; // Don't open full screen while uploading
         if (onMediaClick) onMediaClick(message);
     };
 
@@ -68,23 +84,84 @@ const MessageBubble = ({ message, isOwn, onMediaClick }) => {
         return /^\s*(📷|🎥|📎|📹|🎵)?\s*(Photo|Video|File|Audio|Document)\s*$/i.test(text);
     };
 
+    const ProgressCircle = ({ value, status, onCancel }) => (
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/40 backdrop-blur-[2px] transition-all duration-300 group/cancel">
+            <div className="relative w-14 h-14 flex items-center justify-center">
+                <svg className="absolute inset-0 w-full h-full -rotate-90 scale-90">
+                    <circle
+                        cx="28" cy="28" r="24"
+                        fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="3"
+                    />
+                    <motion.circle
+                        cx="28" cy="28" r="24"
+                        fill="none" stroke="white" strokeWidth="3"
+                        strokeDasharray="151"
+                        initial={{ strokeDashoffset: 151 }}
+                        animate={{ strokeDashoffset: 151 - (151 * (status === 'compressing' ? 5 : value) / 100) }}
+                        transition={{ type: "spring", damping: 20, stiffness: 100 }}
+                    />
+                </svg>
+
+                {/* Cancel Button Overlay */}
+                <button
+                    onClick={(e) => { e.stopPropagation(); onCancel(); }}
+                    className="z-20 w-8 h-8 flex items-center justify-center rounded-full bg-black/40 hover:bg-black/60 transition-colors text-white"
+                >
+                    <div className="relative w-3 h-3">
+                        <div className="absolute top-1/2 left-0 w-full h-0.5 bg-white rotate-45 -translate-y-1/2 rounded-full"></div>
+                        <div className="absolute top-1/2 left-0 w-full h-0.5 bg-white -rotate-45 -translate-y-1/2 rounded-full"></div>
+                    </div>
+                </button>
+            </div>
+            <div className="mt-3 text-white font-bold text-[11px] tracking-wide uppercase drop-shadow-md flex flex-col items-center gap-1">
+                <span>{status === 'compressing' ? 'Compressing...' : `${Math.round(value)}%`}</span>
+                {status === 'uploading' && <span className="text-[9px] opacity-70 font-medium">Uploading...</span>}
+            </div>
+        </div>
+    );
+
     return (
         <div className={cn("relative w-full", hasMedia ? "pb-1" : "")}>
             {/* IMAGE */}
             {displayType === 'image' && (
-                <div className="relative rounded-lg overflow-hidden mb-1 min-h-[150px] bg-black/5 dark:bg-black/20 cursor-pointer"
-                    onClick={handleMediaClick}>
+                <div
+                    className="relative rounded-lg overflow-hidden mb-1 bg-black/5 dark:bg-black/20 cursor-pointer group"
+                    style={{
+                        aspectRatio: (message.width && message.height) ? `${message.width} / ${message.height}` : 'auto',
+                        minHeight: (message.width && message.height) ? 'auto' : '150px',
+                        maxHeight: '350px',
+                        width: (message.width && message.height) && (message.width < message.height) ? 'fit-content' : '100%'
+                    }}
+                    onClick={handleMediaClick}
+                >
+                    {/* Shimmer / Skeleton Background */}
+                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent animate-shimmer"
+                        style={{ backgroundSize: '200% 100%' }} />
+
+                    {isPending && (
+                        <ProgressCircle
+                            value={progress}
+                            status={message.uploadStatus}
+                            onCancel={() => onCancelUpload?.(message.id)}
+                        />
+                    )}
+
                     {!imgError && resolvedUrl ? (
                         <img
                             src={resolvedUrl}
                             alt="Shared"
-                            className="w-full max-h-[350px] object-cover rounded-lg transition-opacity hover:opacity-95"
+                            className={cn(
+                                "w-full h-full object-cover rounded-lg transition-all duration-300",
+                                isPending ? "blur-[2px] opacity-70" : "hover:opacity-95",
+                                // Only show after it actually loads to prevent partial render flash
+                                !resolvedUrl ? "opacity-0" : "opacity-100"
+                            )}
                             onError={() => setImgError(true)}
                             loading="lazy"
                             decoding="async"
                         />
                     ) : (
-                        <div className="w-full h-[150px] flex flex-col items-center justify-center text-gray-500 gap-2">
+                        <div className="w-full h-full min-h-[150px] flex flex-col items-center justify-center text-gray-500 gap-2">
                             <FaFileAlt size={40} className="opacity-50" />
                             <span className="text-xs">Image not available</span>
                         </div>
@@ -94,26 +171,46 @@ const MessageBubble = ({ message, isOwn, onMediaClick }) => {
 
             {/* VIDEO */}
             {displayType === 'video' && resolvedUrl && (
-                <div className="relative rounded-lg overflow-hidden mb-1 min-w-[200px] bg-black/5 dark:bg-black/20 cursor-pointer"
-                    onClick={handleMediaClick}>
+                <div
+                    className="relative rounded-lg overflow-hidden mb-1 bg-black/5 dark:bg-black/20 cursor-pointer group"
+                    style={{
+                        aspectRatio: (message.width && message.height) ? `${message.width} / ${message.height}` : 'auto',
+                        minWidth: '200px',
+                        maxHeight: '350px'
+                    }}
+                    onClick={handleMediaClick}
+                >
+                    {isPending && (
+                        <ProgressCircle
+                            value={progress}
+                            status={message.uploadStatus}
+                            onCancel={() => onCancelUpload?.(message.id)}
+                        />
+                    )}
+
                     <VideoPlayer
                         src={resolvedUrl}
-                        className="max-h-[350px] pointer-events-none" // Overlay handles the click
+                        className={cn(
+                            "w-full h-full transition-all",
+                            isPending ? "blur-[2px] opacity-70 pointer-events-none" : ""
+                        )}
                         fileName={message.fileName}
                     />
                     {/* Play Overlay */}
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/10 group-hover:bg-black/20 transition-colors">
-                        <div className="w-12 h-12 bg-black/50 rounded-full flex items-center justify-center text-white backdrop-blur-sm border border-white/30">
-                            <FaPlay className="ml-1" />
+                    {!isPending && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/10 group-hover:bg-black/20 transition-colors">
+                            <div className="w-12 h-12 bg-black/50 rounded-full flex items-center justify-center text-white backdrop-blur-sm border border-white/30 group-hover:scale-110 transition-transform">
+                                <FaPlay className="ml-1" />
+                            </div>
                         </div>
-                    </div>
+                    )}
                 </div>
             )}
 
             {/* AUDIO */}
-            {displayType === 'audio' && mediaUrl && (
+            {displayType === 'audio' && (mediaUrl || resolvedUrl) && (
                 <div className="flex items-center gap-2 min-w-[200px] p-2 bg-black/5 dark:bg-black/10 rounded-lg my-1">
-                    <audio controls src={mediaUrl} className="w-full h-8" />
+                    <audio controls src={resolvedUrl || mediaUrl} className="w-full h-8" />
                 </div>
             )}
 

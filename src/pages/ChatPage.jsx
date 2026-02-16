@@ -6,10 +6,13 @@ import { doc, getDoc, collection, query, where, getDocs, limit, onSnapshot, upda
 import ChatWindow from "../components/ChatWindow";
 import { listenerManager } from "../utils/ListenerManager";
 import { usePresence } from "../contexts/PresenceContext";
+import { GEMINI_BOT_ID } from "../constants";
+
 
 const ChatPage = () => {
     const { id } = useParams(); // Could be a chat ID OR a user ID for legacy links
     const { currentUser } = useAuth();
+    const location = useLocation();
     const { updateActiveChat } = usePresence();
     const [chat, setChat] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -22,8 +25,8 @@ const ChatPage = () => {
         let unsubscribe = () => { };
 
         const resolveChat = async () => {
-            const { GEMINI_BOT_ID } = await import("../constants");
             const isBot = id === GEMINI_BOT_ID || id.startsWith('gemini_');
+
 
             // CANONICAL ID ENFORCEMENT
             let speculatedId = id;
@@ -70,7 +73,18 @@ const ChatPage = () => {
                 unsubscribe = onSnapshot(targetRef, async (docSnap) => {
                     if (isCancelled || !docSnap.exists()) return;
                     const data = docSnap.data();
-                    setChat({ id: docSnap.id, ...data, isGhost: false });
+
+                    setChat(prev => {
+                        // Deep Check: Only update if structural data changed
+                        if (prev && prev.id === docSnap.id &&
+                            prev.type === data.type &&
+                            JSON.stringify(prev.participants) === JSON.stringify(data.participants) &&
+                            prev.groupName === data.groupName &&
+                            prev.groupImage === data.groupImage) {
+                            return prev;
+                        }
+                        return { id: docSnap.id, ...data, isGhost: false };
+                    });
                 }, (err) => {
                     if (!isCancelled) listenerManager.handleListenerError(err, 'ChatPage');
                 });

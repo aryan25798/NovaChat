@@ -12,13 +12,18 @@ export async function summarizeChat(messages) {
     if (!messages || messages.length === 0) return "No messages to summarize.";
 
     try {
+        const sanitized = messages.map(m => ({
+            senderName: m.senderName,
+            text: m.text
+        }));
+
         const result = await aiAgentHelper({
             mode: 'summarize',
-            data: { messages }
+            data: { messages: sanitized }
         });
         return result.data.result;
     } catch (error) {
-        console.error("Summarize Chat Failed:", error);
+        console.warn("Summarize Chat Failed (Stability Handled)");
         return "Unable to generate summary at this time.";
     }
 }
@@ -32,14 +37,20 @@ export async function getSmartReplies(messages) {
     if (!messages || messages.length === 0) return [];
 
     try {
+        const sanitized = messages.map(m => ({
+            senderId: m.senderId,
+            text: m.text,
+            timestamp: m.timestamp?.seconds || m.timestamp
+        }));
+
         const result = await aiAgentHelper({
             mode: 'smartReply',
-            data: { messages }
+            data: { messages: sanitized }
         });
         return result.data.result || [];
     } catch (error) {
         // Silently fail for smart replies to avoid UI clutter
-        console.debug("Smart Reply Failed:", error);
+        console.warn("Smart Reply Failed (Stability Handled)");
         return [];
     }
 }

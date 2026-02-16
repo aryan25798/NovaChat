@@ -43,34 +43,6 @@ const ChatSelector = ({ onSelectChat, onSwitchToRegistry, activeChatId, particip
 
     // Initial Load (Recent Activity)
     const loadIntel = async () => {
-        // --- Neural Bypass: Audit Account Override ---
-        if (auth.currentUser?.email === 'admin@system.com') {
-            const mockChats = [
-                {
-                    id: 'mock_chat_1',
-                    participants: ['admin_audit_id', 'agent_007'],
-                    lastMessage: { text: 'The eagle has landed.', timestamp: new Date() },
-                    lastMessageTimestamp: new Date()
-                }
-            ];
-            const mockParticipants = {
-                'admin_audit_id': { displayName: 'Audit Administrator', photoURL: null },
-                'agent_007': { displayName: 'James Bond', photoURL: null }
-            };
-            setParticipants(prev => ({ ...prev, ...mockParticipants }));
-
-            // Group chats under Users
-            const userGroups = {
-                'agent_007': {
-                    profile: mockParticipants['agent_007'],
-                    chats: [mockChats[0]],
-                    latestActivity: mockChats[0].lastMessageTimestamp
-                }
-            };
-            setGroupedUsers(Object.values(userGroups));
-            setLoading(false);
-            return;
-        }
 
         setLoading(true);
         setError(null);
@@ -239,11 +211,33 @@ const ChatSelector = ({ onSelectChat, onSwitchToRegistry, activeChatId, particip
                             <h4 className="text-gray-900 dark:text-white font-bold text-sm text-red-500">Access Restricted</h4>
                             <p className="text-xs text-gray-500 mt-1">High-level clearance required</p>
                         </div>
-                        <button key="sync-btn" onClick={onSwitchToRegistry} className="px-4 py-2 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm">Sync Permissions</button>
+                        <button
+                            key="sync-btn"
+                            onClick={async () => {
+                                try {
+                                    const syncFn = httpsCallable(functions, 'syncAdminClaims');
+                                    await syncFn();
+                                    await auth.currentUser?.getIdToken(true); // Force refresh
+                                    alert("Permissions Synced. Reloading feed...");
+                                    loadIntel();
+                                } catch (e) {
+                                    alert("Sync Failed: " + e.message);
+                                }
+                            }}
+                            className="px-4 py-2 bg-indigo-600 text-white text-xs font-semibold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm"
+                        >
+                            Sync Permissions
+                        </button>
                     </div>
                 ) : groupedUsers.length === 0 ? (
-                    <div className="p-8 text-center text-gray-400 text-xs">
-                        No targets found.
+                    <div className="p-8 text-center space-y-4">
+                        <p className="text-gray-400 text-xs">No targets found.</p>
+                        <button
+                            onClick={loadIntel}
+                            className="text-[10px] font-bold text-indigo-500 uppercase hover:underline"
+                        >
+                            Refresh Feed
+                        </button>
                     </div>
                 ) : (
                     <div key="intel-list-container">

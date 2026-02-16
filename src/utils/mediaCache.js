@@ -14,25 +14,54 @@ const initDB = async () => {
     });
 };
 
+// Track active object URLs to allow cleanup
+const activeObjectURLs = new Set();
+const memoryCache = new Map(); // Synchronous cache for current session
+
 /**
  * Tries to get a blob URL from cache. If not found, returns null.
+ * IMPORTANT: Call revokeMediaURL() when the URL is no longer needed to prevent memory leaks.
  * @param {string} url - The Firebase Storage URL
  * @returns {Promise<string|null>} - The object URL or null
  */
+/**
+ * Synchronous version of getCachedMedia for zero-flash renders if already resolved once.
+ */
+export const getSyncCachedMedia = (url) => {
+    return memoryCache.get(url) || null;
+};
+
 export const getCachedMedia = async (url) => {
     if (!url) return null;
+
+    // Check synchronous memory cache first
+    if (memoryCache.has(url)) return memoryCache.get(url);
+
     try {
         const db = await initDB();
         const record = await db.get(STORE_NAME, url);
 
         if (record && record.blob) {
-            // Create a temporary object URL for the blob
-            return URL.createObjectURL(record.blob);
+            const objectURL = URL.createObjectURL(record.blob);
+            activeObjectURLs.add(objectURL);
+            memoryCache.set(url, objectURL);
+            return objectURL;
         }
         return null;
     } catch (error) {
         console.error("Error retrieving cached media:", error);
         return null;
+    }
+};
+
+/**
+ * Revoke an object URL to free memory.
+ * @param {string} objectURL - The object URL to revoke
+ */
+export const revokeMediaURL = (objectURL) => {
+    if (objectURL && activeObjectURLs.has(objectURL)) {
+        URL.revokeObjectURL(objectURL);
+        activeObjectURLs.delete(objectURL);
     }
 };
 

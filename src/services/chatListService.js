@@ -26,39 +26,41 @@ export const subscribeToUserChats = (userId, callback, limitCount = 30, componen
     let firestoreData = new Map(); // Map<chatId, chatDocData>
     let rtdbData = {};             // Object<chatId, metadata>
 
-    // Helper to merge and sort
+    // Helper to merge and sort (Throttled)
+    let throttleTimeout = null;
     const emitUpdates = () => {
+        if (throttleTimeout) return;
+
+        throttleTimeout = setTimeout(() => {
+            throttleTimeout = null;
+            processUpdates();
+        }, 400); // 400ms throttle
+    };
+
+    const processUpdates = () => {
         const getMillis = (t) => {
             if (!t) return 0;
             if (typeof t.toMillis === 'function') return t.toMillis();
             if (t instanceof Date) return t.getTime();
             if (t.seconds) return t.seconds * 1000;
-            return 0;
+            return t; // Case for raw numbers
         };
 
         const mergedChats = Array.from(firestoreData.values()).map(chat => {
             const meta = rtdbData[chat.id];
             if (meta) {
-                // [HYBRID] Merge RTDB metadata into Firestore doc
-                // We prefer RTDB for 'unreadCount' and 'lastMessage'
                 const userUnread = meta.unreadCount?.[userId] || 0;
-
                 return {
                     ...chat,
                     lastMessage: meta.lastMessage || chat.lastMessage,
                     lastMessageTimestamp: meta.lastUpdated ? (new Date(meta.lastUpdated)) : chat.lastMessageTimestamp,
-                    unreadCount: {
-                        ...chat.unreadCount,
-                        [userId]: userUnread
-                    },
-                    // Flag to debug source if needed
+                    unreadCount: { ...chat.unreadCount, [userId]: userUnread },
                     _source: 'hybrid'
                 };
             }
             return chat;
         });
 
-        // Sort by merged timestamp
         mergedChats.sort((a, b) => {
             const tA = getMillis(a.lastMessageTimestamp);
             const tB = getMillis(b.lastMessageTimestamp);

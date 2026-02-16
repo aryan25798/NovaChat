@@ -120,8 +120,13 @@ const RootGate = () => {
   const navigate = useNavigate();
 
   // If claims are not settled, we wait (Crucial for role resolution)
+  // FALLBACK: If we have a user but claims are taking too long, we show loading but 
+  // AuthContext now has a 5s safety trigger to auto-settle them.
   if (!currentUser) return <Login />;
-  if (!currentUser.claimsSettled) return <Loading />;
+
+  if (!currentUser.claimsSettled) {
+    return <Loading />;
+  }
 
   const isAdmin = !!currentUser.isAdmin || !!currentUser.superAdmin;
   console.debug("[RootGate] Selecting Shell. isAdmin:", isAdmin, "email:", currentUser.email);

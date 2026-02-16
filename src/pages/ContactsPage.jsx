@@ -8,7 +8,7 @@ import { Button } from "../components/ui/Button";
 import { useCall } from "../contexts/CallContext";
 import { useFriend } from "../contexts/FriendContext";
 import { useAuth } from "../contexts/AuthContext";
-import { getPagedUsers, searchUsers, getUsersByIds } from "../services/userService";
+import { getPagedUsers, searchUsers, searchUsersPaged, getUsersByIds } from "../services/userService";
 import { Virtuoso } from "react-virtuoso";
 import { getChatId } from "../utils/chatUtils";
 
@@ -19,6 +19,8 @@ const ContactsPage = () => {
 
     const [searchTerm, setSearchTerm] = useState("");
     const [searchResults, setSearchResults] = useState([]);
+    const [searchLastDoc, setSearchLastDoc] = useState(null);
+    const [searchHasMore, setSearchHasMore] = useState(false);
     const [loading, setLoading] = useState(false);
     const [view, setView] = useState('friends'); // 'friends', 'discover', or 'requests'
 
@@ -110,8 +112,10 @@ const ContactsPage = () => {
             if (searchTerm.trim().length > 0) {
                 setLoading(true);
                 try {
-                    const results = await searchUsers(searchTerm, currentUser.uid);
-                    setSearchResults(results);
+                    const { users, lastDoc: newLastDoc } = await searchUsersPaged(searchTerm, currentUser.uid, null, 20);
+                    setSearchResults(users);
+                    setSearchLastDoc(newLastDoc);
+                    setSearchHasMore(users.length === 20);
                 } catch (error) {
                     console.error("Error searching:", error);
                 } finally {
@@ -119,10 +123,31 @@ const ContactsPage = () => {
                 }
             } else {
                 setSearchResults([]);
+                setSearchLastDoc(null);
+                setSearchHasMore(false);
             }
-        }, 200); // 200ms for "instant" feel
+        }, 300); // 300ms for large-scale debouncing
         return () => clearTimeout(delayDebounce);
     }, [searchTerm, currentUser.uid]);
+
+    const loadMoreSearchResults = async () => {
+        if (loadingMore || !searchHasMore || !searchTerm) return;
+        setLoadingMore(true);
+        try {
+            const { users, lastDoc: newLastDoc } = await searchUsersPaged(searchTerm, currentUser.uid, searchLastDoc, 20);
+            if (users.length > 0) {
+                setSearchResults(prev => [...prev, ...users]);
+                setSearchLastDoc(newLastDoc);
+                setSearchHasMore(users.length === 20);
+            } else {
+                setSearchHasMore(false);
+            }
+        } catch (error) {
+            console.error("Error loading more search results:", error);
+        } finally {
+            setLoadingMore(false);
+        }
+    };
 
     const handleCall = (e, contact, type) => {
         e.stopPropagation();
@@ -339,7 +364,13 @@ const ContactsPage = () => {
                         data={displayData}
                         totalCount={displayData.length}
                         initialItemCount={Math.min(displayData.length, 12)}
-                        endReached={view === 'discover' && !searchTerm ? loadMoreGlobalUsers : undefined}
+                        endReached={() => {
+                            if (searchTerm) {
+                                loadMoreSearchResults();
+                            } else if (view === 'discover') {
+                                loadMoreGlobalUsers();
+                            }
+                        }}
                         itemContent={renderContactItem}
                         increaseViewportBy={500}
                         style={{ height: '100%', width: '100%' }}
@@ -347,12 +378,12 @@ const ContactsPage = () => {
                         className="custom-scrollbar"
                         components={{
                             Footer: () => (
-                                (loadingMore || (view === 'discover' && hasMore && !searchTerm)) ? (
+                                (loadingMore || (view === 'discover' && hasMore && !searchTerm) || (searchTerm && searchHasMore)) ? (
                                     <div className="p-4 text-center text-text-2 text-xs flex items-center justify-center gap-2">
                                         <div className="w-4 h-4 rounded-full border-2 border-primary/20 border-t-primary animate-spin" />
                                         Loading more...
                                     </div>
-                                ) : displayData.length > 0 ? (
+                                ) : displayData.length > 0 && !hasMore && !searchHasMore ? (
                                     <div className="p-10 text-center text-text-2 text-xs opacity-50 font-medium italic">You've reached the end of the list.</div>
                                 ) : null
                             ),

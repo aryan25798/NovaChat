@@ -47,7 +47,7 @@ export function FriendProvider({ children }) {
 
         const unsubFriends = subscribeToFriends(currentUser.uid, (data) => {
             setFriends(prev => {
-                if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
+                if (prev.length === data.length && prev[0]?.id === data[0]?.id) return prev;
                 return data;
             });
             friendsLoaded = true;
@@ -55,7 +55,7 @@ export function FriendProvider({ children }) {
         });
         const unsubIncoming = subscribeToIncomingRequests(currentUser.uid, (data) => {
             setIncomingRequests(prev => {
-                if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
+                if (prev.length === data.length && prev[0]?.id === data[0]?.id) return prev;
                 return data;
             });
             incomingLoaded = true;
@@ -63,7 +63,7 @@ export function FriendProvider({ children }) {
         });
         const unsubOutgoing = subscribeToOutgoingRequests(currentUser.uid, (data) => {
             setOutgoingRequests(prev => {
-                if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
+                if (prev.length === data.length && prev[0]?.id === data[0]?.id) return prev;
                 return data;
             });
             outgoingLoaded = true;

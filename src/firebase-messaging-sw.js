@@ -84,7 +84,7 @@ importScripts('https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-com
 
 // Initialize the Firebase app in the service worker
 const firebaseConfig = {
-    apiKey: "AIzaSyAtqHwOk2zwqdmr_3puMCVH_aAmzx0GtTI",
+    apiKey: "AIzaSyA-Y3hCMcglnjbt5jVFWNWR38HESeez6EY",
     authDomain: "whatsappclone-50b5b.firebaseapp.com",
     projectId: "whatsappclone-50b5b",
     storageBucket: "whatsappclone-50b5b.firebasestorage.app",

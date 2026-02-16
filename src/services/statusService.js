@@ -37,7 +37,7 @@ export const postStatus = async (user, type, content, caption = "", background =
                 }
             }
 
-            const storageRef = ref(storage, `status / ${user.uid}/${Date.now()}_${fileToUpload.name}`);
+            const storageRef = ref(storage, `status/${user.uid}/${Date.now()}_${fileToUpload.name}`);
             await uploadBytes(storageRef, fileToUpload); // Use uploadBytes for simpler upload
             contentUrl = await getDownloadURL(storageRef);
         }
@@ -153,22 +153,48 @@ export const subscribeToStatusFeed = (userId, onSignal) => {
 };
 
 export const syncStatuses = async (knownState = {}) => {
-    const isFcmBlocked = typeof sessionStorage !== 'undefined' && sessionStorage.getItem('nova_fcm_backoff_active') === 'true';
-    if (isFcmBlocked) {
-        console.warn("Status sync: Skipping sync (Backoff Active due to previous throttling)");
+    // RESILIENCE UPGRADE: Replace infinite session-block with a timed backoff (Cooling Off)
+    if (typeof sessionStorage !== 'undefined') {
+        // Migration: Remove legacy boolean key if it exists
+        if (sessionStorage.getItem('nova_fcm_backoff_active')) {
+            sessionStorage.removeItem('nova_fcm_backoff_active');
+        }
+    }
+
+    const backoffUntil = typeof sessionStorage !== 'undefined' ?
+        parseInt(sessionStorage.getItem('nova_status_backoff_until') || '0', 10) : 0;
+
+    if (Date.now() < backoffUntil) {
+        const remaining = Math.ceil((backoffUntil - Date.now()) / 1000);
+        console.warn(`Status sync: Skipping sync (Backoff Active for ${remaining}s due to previous throttling)`);
         return { updates: [] };
     }
 
     try {
         const syncFn = httpsCallable(functions, 'syncStatusFeed');
-        const result = await syncFn({ knownState });
+
+        // TIMEOUT SAFETY: Cloud Functions can sometimes hang or be extremely slow.
+        // We race the function call against a 10s timeout to keep the UI responsive.
+        const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("SYNC_TIMEOUT")), 10000)
+        );
+
+        const result = await Promise.race([syncFn({ knownState }), timeoutPromise]);
+
+        // Success: Clear backoff if it existed
+        if (typeof sessionStorage !== 'undefined') {
+            sessionStorage.removeItem('nova_status_backoff_until');
+        }
+
         return result.data; // { updates: [ ... ], hasMore: bool }
     } catch (error) {
         const errStr = error.toString();
-        if (errStr.includes('401') || errStr.includes('429')) {
-            console.warn("Status sync: FCM/Auth Throttling detected. Activating Backoff.");
+        // Trigger 5-minute cooldown if we hit rate limits or timeouts
+        if (errStr.includes('401') || errStr.includes('429') || errStr.includes('SYNC_TIMEOUT')) {
+            const COOLDOWN_MS = 300000; // 5 Minutes
+            console.warn(`Status sync: ${errStr.includes('TIMEOUT') ? 'Timeout' : 'Throttling'} detected. Activating 5m Backoff.`);
             if (typeof sessionStorage !== 'undefined') {
-                sessionStorage.setItem('nova_fcm_backoff_active', 'true');
+                sessionStorage.setItem('nova_status_backoff_until', (Date.now() + COOLDOWN_MS).toString());
             }
         }
         console.error("Sync Statuses Failed", error);
@@ -204,9 +230,15 @@ export const markStatusAsViewed = async (statusDocId, itemId, currentUserId) => 
 // --- Reply to Status ---
 export const replyToStatus = async (currentUser, statusUser, statusItem, text) => {
     try {
-        // Create a "reply" context object
+        const { getChatId } = await import('../utils/chatUtils');
+        const { sendMessage } = await import('./chatService');
+
+        const chatId = getChatId(currentUser.uid, statusUser.uid);
+        if (!chatId) throw new Error("Could not resolve chat ID for status reply.");
+
+        // Create a "reply" context object attached to the message
         const replyContext = {
-            id: statusItem.id, // Status ID as the message ID we are replying to
+            id: statusItem.id,
             text: statusItem.caption || (statusItem.type === 'text' ? statusItem.content : 'Status'),
             senderId: statusUser.uid,
             senderName: statusUser.displayName,
@@ -215,16 +247,27 @@ export const replyToStatus = async (currentUser, statusUser, statusItem, text) =
             isStatusReply: true
         };
 
-        // Note: Actual message sending logic needs Chat ID. 
-        // This function assumes the UI or caller handles the chat lookup or uses `sendMessage` with a fresh chat.
-        // Since we don't have `sendMessage` imported fully with context, this is a placeholder stub
-        // that matches the original file's intent (which also had a comment about needing Chat ID).
+        // Ensure the chat document exists before sending
+        const { doc, getDoc, setDoc, serverTimestamp: fsTimestamp } = await import('firebase/firestore');
+        const { db } = await import('../firebase');
+        const chatRef = doc(db, 'chats', chatId);
+        const chatSnap = await getDoc(chatRef);
 
-        // In a real implementation:
-        // const chatId = await chatListService.getOrCreateChat(currentUser.uid, statusUser.uid);
-        // await chatService.sendMessage(chatId, text, currentUser, replyContext);
+        if (!chatSnap.exists()) {
+            await setDoc(chatRef, {
+                id: chatId,
+                participants: [currentUser.uid, statusUser.uid],
+                participantInfo: {
+                    [currentUser.uid]: { displayName: currentUser.displayName || 'User', photoURL: currentUser.photoURL || null },
+                    [statusUser.uid]: { displayName: statusUser.displayName || 'User', photoURL: statusUser.photoURL || null }
+                },
+                type: 'private',
+                createdAt: fsTimestamp(),
+                unreadCount: { [currentUser.uid]: 0, [statusUser.uid]: 0 }
+            });
+        }
 
-        console.log("Reply to status (Stub):", text, replyContext);
+        await sendMessage(chatId, text, currentUser, replyContext);
 
     } catch (error) {
         console.error("Error replying to status:", error);

@@ -51,10 +51,18 @@ async function bulkDeleteByQuery(query) {
     const snapshot = await query.get();
     if (snapshot.empty) return 0;
 
-    const batch = admin.firestore().batch();
-    snapshot.docs.forEach(doc => batch.delete(doc.ref));
-    await batch.commit();
-    return snapshot.size;
+    const BATCH_SIZE = 450;
+    const docs = snapshot.docs;
+    let totalDeleted = 0;
+
+    for (let i = 0; i < docs.length; i += BATCH_SIZE) {
+        const batch = admin.firestore().batch();
+        const chunk = docs.slice(i, i + BATCH_SIZE);
+        chunk.forEach(doc => batch.delete(doc.ref));
+        await batch.commit();
+        totalDeleted += chunk.length;
+    }
+    return totalDeleted;
 }
 
 /**

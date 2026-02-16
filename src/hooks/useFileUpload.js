@@ -4,6 +4,11 @@ import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { v4 as uuidv4 } from 'uuid';
 import imageCompression from 'browser-image-compression';
 
+/**
+ * @deprecated Use FileUploadContext instead. This hook duplicates upload logic
+ * that is already centralized in FileUploadContext.jsx. Migrate callers to
+ * useContext(FileUploadContext) and remove this file.
+ */
 export const useFileUpload = () => {
     const [uploads, setUploads] = useState({});
     const uploadTasksRef = useRef({});

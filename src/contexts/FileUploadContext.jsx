@@ -12,9 +12,7 @@ export const FileUploadProvider = ({ children }) => {
     const [uploads, setUploads] = useState({});
     const uploadTasksRef = useRef({});
 
-    const startUpload = useCallback(async (file, path, metadata = {}) => {
-        const uploadId = uuidv4();
-
+    const startUpload = useCallback(async (file, path, metadata = {}, uploadId = uuidv4()) => {
         // Initial state: Compressing
         setUploads(prev => ({
             ...prev,
@@ -32,20 +30,40 @@ export const FileUploadProvider = ({ children }) => {
         }));
 
         let processedFile = file;
+        let dimensions = null;
 
-        // Compress if it's an image
+        // Detect dimensions and compress if it's an image
         if (file.type.startsWith('image/')) {
             try {
+                dimensions = await new Promise((resolve) => {
+                    const img = new Image();
+                    img.onload = () => resolve({ width: img.width, height: img.height });
+                    img.onerror = () => resolve(null);
+                    img.src = URL.createObjectURL(file);
+                });
+
                 const options = {
                     maxSizeMB: 1,
-                    maxWidthOrHeight: 1920,
-                    useWebWorker: true
+                    maxWidthOrHeight: 1600,
+                    useWebWorker: true,
+                    initialQuality: 0.8
                 };
                 processedFile = await imageCompression(file, options);
             } catch (error) {
-                console.warn("Compression failed, using original file", error);
+                console.warn("Compression / Dimension check failed", error);
             }
         }
+
+        // Before starting, check if it was cancelled during compression
+        let isCancelled = false;
+        setUploads(prev => {
+            if (!prev[uploadId] || prev[uploadId].status === 'cancelled') {
+                isCancelled = true;
+            }
+            return prev;
+        });
+
+        if (isCancelled) return { uploadId, uploadTask: null };
 
         const storageRef = ref(storage, path);
         const uploadTask = uploadBytesResumable(storageRef, processedFile, metadata);
@@ -58,8 +76,10 @@ export const FileUploadProvider = ({ children }) => {
             ...prev,
             [uploadId]: {
                 ...prev[uploadId],
-                fileSize: processedFile.size, // Update with compressed size
-                status: 'uploading'
+                fileSize: processedFile.size,
+                status: 'uploading',
+                width: dimensions?.width,
+                height: dimensions?.height
             }
         }));
 
@@ -70,42 +90,58 @@ export const FileUploadProvider = ({ children }) => {
                 const now = Date.now();
                 const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
 
-                if (now - lastUpdate > 300 || progress === 0 || progress >= 100) {
+                // Emit at most every 200ms or on key events to reduce flickering
+                if (now - lastUpdate > 200 || progress === 0 || progress >= 100) {
                     lastUpdate = now;
-                    setUploads(prev => ({
-                        ...prev,
-                        [uploadId]: {
-                            ...prev[uploadId],
-                            progress,
-                            status: snapshot.state === 'paused' ? 'paused' : 'uploading'
-                        }
-                    }));
+                    setUploads(prev => {
+                        // Don't update if already removed or cancelled
+                        if (!prev[uploadId]) return prev;
+                        return {
+                            ...prev,
+                            [uploadId]: {
+                                ...prev[uploadId],
+                                progress,
+                                status: snapshot.state === 'paused' ? 'paused' : 'uploading'
+                            }
+                        };
+                    });
                 }
             },
             (error) => {
                 console.error("Upload error:", error);
-                setUploads(prev => ({
-                    ...prev,
-                    [uploadId]: {
-                        ...prev[uploadId],
-                        status: 'error',
-                        error: error.message
-                    }
-                }));
-                // Keep task ref for retry if needed? For now delete.
+                setUploads(prev => {
+                    if (!prev[uploadId]) return prev;
+                    return {
+                        ...prev,
+                        [uploadId]: {
+                            ...prev[uploadId],
+                            status: error.code === 'storage/canceled' ? 'cancelled' : 'error',
+                            error: error.message
+                        }
+                    };
+                });
                 delete uploadTasksRef.current[uploadId];
             },
             async () => {
-                const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-                setUploads(prev => ({
-                    ...prev,
-                    [uploadId]: {
-                        ...prev[uploadId],
-                        progress: 100,
-                        status: 'completed',
-                        url: downloadURL
-                    }
-                }));
+                try {
+                    const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+                    setUploads(prev => {
+                        if (!prev[uploadId]) return prev;
+                        return {
+                            ...prev,
+                            [uploadId]: {
+                                ...prev[uploadId],
+                                progress: 100,
+                                status: 'completed',
+                                url: downloadURL
+                            }
+                        };
+                    });
+                } catch (e) {
+                    console.error("Failed to get download URL", e);
+                } finally {
+                    delete uploadTasksRef.current[uploadId];
+                }
             }
         );
 

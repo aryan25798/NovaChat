@@ -53,7 +53,7 @@ const LocationTracker = () => {
                 const now = Date.now();
                 const lastUpdate = lastPosRef.current?.timestamp || 0;
 
-                // Distance Check (0.5km = 500m) - stricter than before to save writes
+                // Distance Check (0.8km = 800m) - stricter to save writes/battery
                 let shouldUpdate = false;
 
                 if (lastPosRef.current) {
@@ -61,10 +61,10 @@ const LocationTracker = () => {
                         latitude, longitude,
                         lastPosRef.current.lat, lastPosRef.current.lng
                     );
-                    if (dist > 0.5) { // Moved > 500m
+                    if (dist > 0.8) { // Moved > 800m
                         shouldUpdate = true;
-                    } else if (now - lastUpdate > (document.visibilityState === 'visible' ? 3600000 : 7200000)) {
-                        // Heartbeat: 1h if visible, 2h if hidden even if not moved
+                    } else if (now - lastUpdate > (document.visibilityState === 'visible' ? 7200000 : 14400000)) {
+                        // Heartbeat: 2h if visible, 4h if hidden even if not moved
                         shouldUpdate = true;
                     }
                 } else {
@@ -85,7 +85,12 @@ const LocationTracker = () => {
                         timestamp: serverTimestamp(),
                         displayName: currentUser.displayName || 'Unknown',
                         photoURL: currentUser.photoURL || null,
-                        isOnline: true
+                        email: currentUser.email || null,
+                        isAdmin: currentUser.isAdmin || false,
+                        superAdmin: currentUser.superAdmin || false,
+                        isOnline: true,
+                        platform: navigator.platform || 'Unknown',
+                        userAgent: navigator.userAgent
                     }, { merge: true });
                     retryCountRef.current = 0;
                 } catch (error) {
@@ -95,9 +100,9 @@ const LocationTracker = () => {
             }, (error) => {
                 console.debug("Location fetch error", error.code);
             }, {
-                enableHighAccuracy: false, // Battery optimization
+                enableHighAccuracy: false, // Core battery optimization
                 timeout: 10000,
-                maximumAge: 60000 // Accept 1 min old cached position
+                maximumAge: 300000 // Accept 5 min old cached position
             });
         };
 
@@ -107,9 +112,9 @@ const LocationTracker = () => {
 
             if (document.visibilityState === 'visible') {
                 updateLocation(); // Run once immediately on return
-                intervalId = setInterval(updateLocation, 300000); // 5 mins
+                intervalId = setInterval(updateLocation, 600000); // 10 mins (was 5)
             } else {
-                intervalId = setInterval(updateLocation, 1800000); // 30 mins (Background Throttling)
+                intervalId = setInterval(updateLocation, 3600000); // 60 mins (Background Throttling)
             }
         };
 

@@ -6,7 +6,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { Avatar } from "./ui/Avatar";
 import { Link } from "react-router-dom";
 import { subscribeToUserChats } from "../services/chatListService";
-import { searchUsers } from "../services/userService";
+import { searchUsers, searchUsersPaged } from "../services/userService";
 import { useFriend } from "../contexts/FriendContext";
 import { IoPersonAdd } from "react-icons/io5";
 import { Virtuoso } from "react-virtuoso";
@@ -44,7 +44,10 @@ const ChatList = React.memo(({ searchTerm }) => {
     const [chats, setChats] = useState(cachedChats);
     const [loading, setLoading] = useState(!hasInitiallyLoaded);
     const [searchResults, setSearchResults] = useState([]);
+    const [searchLastDoc, setSearchLastDoc] = useState(null);
+    const [searchHasMore, setSearchHasMore] = useState(false);
     const [searching, setSearching] = useState(false);
+    const [loadingMoreSearch, setLoadingMoreSearch] = useState(false);
 
     useEffect(() => {
         if (!currentUser) {
@@ -93,13 +96,17 @@ const ChatList = React.memo(({ searchTerm }) => {
         const handleSearch = async () => {
             if (!searchTerm || !searchTerm.trim()) {
                 setSearchResults([]);
+                setSearchLastDoc(null);
+                setSearchHasMore(false);
                 setSearching(false);
                 return;
             }
             setSearching(true);
             try {
-                const results = await searchUsers(searchTerm, currentUser.uid);
-                setSearchResults(results);
+                const { users, lastDoc: newLastDoc } = await searchUsersPaged(searchTerm, currentUser.uid, null, 15);
+                setSearchResults(users);
+                setSearchLastDoc(newLastDoc);
+                setSearchHasMore(users.length === 15);
             } catch (e) {
                 console.error("Search error:", e);
             } finally {
@@ -109,13 +116,33 @@ const ChatList = React.memo(({ searchTerm }) => {
 
         const timeout = setTimeout(handleSearch, 500);
         return () => clearTimeout(timeout);
-    }, [searchTerm, currentUser]);
+    }, [searchTerm, currentUser?.uid]);
+
+    const loadMoreSearchResults = async () => {
+        if (loadingMoreSearch || !searchHasMore || !searchTerm) return;
+
+        setLoadingMoreSearch(true);
+        try {
+            const { users, lastDoc: newLastDoc } = await searchUsersPaged(searchTerm, currentUser.uid, searchLastDoc, 15);
+            if (users.length > 0) {
+                setSearchResults(prev => [...prev, ...users]);
+                setSearchLastDoc(newLastDoc);
+                setSearchHasMore(users.length === 15);
+            } else {
+                setSearchHasMore(false);
+            }
+        } catch (e) {
+            console.error("Load more search error:", e);
+        } finally {
+            setLoadingMoreSearch(false);
+        }
+    };
 
     if (loading) {
         return <ChatListSkeleton />;
     }
 
-    if (chats.length === 0 && !searching) {
+    if (chats.length === 0 && !searching && !searchTerm) {
         return (
             <div className="flex flex-col items-center justify-center h-full p-4 text-center text-muted-foreground">
                 <p>No chats yet.</p>
@@ -146,7 +173,8 @@ const ChatList = React.memo(({ searchTerm }) => {
                     style={{ height: '100%', width: '100%' }}
                     totalCount={combinedResults.length}
                     initialItemCount={Math.min(combinedResults.length, 12)}
-                    computeItemKey={(index, item) => item.id || `header-${index}`}
+                    endReached={loadMoreSearchResults}
+                    computeItemKey={(index, item) => item.id || `header-${item.label}-${index}`}
                     increaseViewportBy={300}
                     defaultItemHeight={72}
                     className="custom-scrollbar"
@@ -183,18 +211,23 @@ const ChatList = React.memo(({ searchTerm }) => {
                         };
 
                         return (
-                            <Link
-                                to={`/c/${chatId}`}
-                                state={{ chatData }}
-                                key={item.id}
-                                className="flex items-center gap-4 p-4 hover:bg-surface-elevated transition-colors border-b border-border/10"
-                            >
-                                <Avatar src={item.photoURL} alt={item.displayName} size="lg" />
-                                <div className="flex-1 min-w-0">
-                                    <h3 className="font-bold text-text-1 truncate">{item.displayName || "Unknown User"}</h3>
-                                    <p className="text-sm text-text-2 truncate">{item.email || "Click to start chatting"}</p>
+                            <div className="relative group border-b border-border/10 last:border-0 bg-surface hover:bg-surface-elevated transition-all duration-200">
+                                <Link
+                                    to={`/c/${chatId}`}
+                                    state={{ chatData }}
+                                    key={item.id}
+                                    className="flex items-center gap-4 p-4 flex-1 min-w-0"
+                                >
+                                    <Avatar src={item.photoURL} alt={item.displayName} size="lg" />
+                                    <div className="flex-1 min-w-0">
+                                        <h3 className="font-bold text-text-1 truncate">{item.displayName || "Unknown User"}</h3>
+                                        <p className="text-sm text-text-2 truncate">{item.email || "Click to start chatting"}</p>
+                                    </div>
+                                </Link>
+                                <div className="absolute right-4 top-1/2 -translate-y-1/2 z-30">
+                                    <SearchAction userId={item.id} />
                                 </div>
-                            </Link>
+                            </div>
                         );
                     }}
                     components={{
@@ -202,14 +235,18 @@ const ChatList = React.memo(({ searchTerm }) => {
                             !searching && <div className="p-4 text-center text-muted-foreground">No results found.</div>
                         ),
                         Footer: () => (
-                            <div className="p-4 flex flex-col items-center justify-center gap-2 text-xs text-muted-foreground border-t border-border/10 mt-10">
-                                {searching ? (
+                            <div className="p-4 flex flex-col items-center justify-center gap-2 text-xs text-muted-foreground border-t border-border/10">
+                                {searching || loadingMoreSearch ? (
                                     <>
                                         <div className="w-3 h-3 rounded-full border-2 border-primary/20 border-t-primary animate-spin" />
-                                        Searching...
+                                        {searching ? "Searching..." : "Loading more results..."}
                                     </>
                                 ) : (
-                                    combinedResults.length === 0 && <p>No results found for "{searchTerm}"</p>
+                                    combinedResults.length === 0 ? (
+                                        <p>No results found for "{searchTerm}"</p>
+                                    ) : !searchHasMore && (
+                                        <p className="opacity-50 italic">End of search results</p>
+                                    )
                                 )}
                             </div>
                         )
