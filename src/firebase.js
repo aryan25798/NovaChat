@@ -48,49 +48,46 @@ import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager
  * Automatically detects storage health and falls back to Memory-Only mode if IndexedDB is deadlocked.
  */
 const STORAGE_KEY = 'DISABLE_FIREBASE_PERSISTENCE';
-const RECOVERY_KEY = 'FIREBASE_RECOVERY_ATTEMPT';
 
-// Auto-sense: If we were previously forced into memory mode, keep it for stability
-// RECOVERY: We are force-enabling persistence to fix "slow loading" issues.
-// Checks for deadlock will need to be more sophisticated than a permanent flag.
-if (localStorage.getItem(STORAGE_KEY) === 'true') {
-    console.warn("[Firebase] Resetting persistence flag to fix slow loading.");
-    localStorage.removeItem(STORAGE_KEY);
-}
-let usePersistence = true;
+// [SAFEGUARD] If we hit a BloomFilter error previously, clear it the next time we load
+// but start in Memory mode for this specific load to be safe.
+let forceMemoryOnly = localStorage.getItem(STORAGE_KEY) === 'true';
 
-// Fallback logic for high-scale environments
 let db;
 try {
-    db = initializeFirestore(app, {
-        localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
-    });
+    if (forceMemoryOnly) {
+        console.warn("[Firebase] Starting in Memory-Only mode due to previous corruption.");
+        db = initializeFirestore(app, { localCache: memoryLocalCache() });
+    } else {
+        db = initializeFirestore(app, {
+            localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+        });
+    }
 } catch (error) {
     const errStr = error.toString().toLowerCase();
-    const isBloomError = errStr.includes("bloomfilter") || errStr.includes("bitset");
+    const isBloomError = errStr.includes("bloomfilter") || errStr.includes("bitset") || errStr.includes("filter");
 
-    console.error(`[Firebase] Persistence Initialization Failed (${isBloomError ? 'BLOOM_FILTER_ERROR' : 'GENERIC_ERROR'}):`, error);
+    console.error(`[Firebase] Persistence Initialization Failed:`, error);
 
-    // [HEALING] If it's a BloomFilter error, we MUST force memory mode to prevent infinite crash loops
     if (isBloomError) {
-        console.warn("[Firebase] Detected corrupted BloomFilter cache. Forcing Memory-Only mode for safety.");
+        console.warn("[Firebase] PROACTIVE RECOVERY: BloomFilter corruption detected. Clearing IndexedDB...");
         localStorage.setItem(STORAGE_KEY, 'true');
+
+        // Attempt immediate clear
+        try {
+            const recoveryDb = initializeFirestore(app, { localCache: memoryLocalCache() }, "recovery");
+            clearIndexedDbPersistence(recoveryDb).catch(e => console.error("Cache Clear Failed:", e));
+        } catch (e) { }
     }
 
-    // Self-Healing: Attempt to clear the corrupted cache
-    try {
-        const tempDb = initializeFirestore(app, { localCache: memoryLocalCache() });
-        clearIndexedDbPersistence(tempDb).catch(e => console.warn("Failed to clear persistence:", e));
-        terminate(tempDb);
-    } catch (e) { }
-
-    // Fallback to memory for this session
-    db = initializeFirestore(app, {
-        localCache: memoryLocalCache()
-    });
+    // Safety fallback: Always provide at least a memory-based instance
+    if (!db) {
+        db = initializeFirestore(app, { localCache: memoryLocalCache() });
+    }
 }
 export { db };
 
+const usePersistence = !forceMemoryOnly;
 console.log(`[Firebase] Adaptive Engine: Persistence=${usePersistence ? 'ENABLED' : 'DISABLED (Memory-Only Fallback)'}`);
 
 /**

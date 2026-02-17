@@ -203,14 +203,29 @@ export function NotificationProvider({ children }) {
 
                         if (currentToken) {
                             console.log("[FCM-Flow] TOKEN ACQUIRED SUCCESSFULLY!");
-                            console.groupCollapsed("FCM Token Payload");
-                            console.log(currentToken);
-                            console.groupEnd();
                             break;
                         }
                     } catch (e) {
                         retries--;
+                        const errStr = e.message?.toLowerCase() || e.toString().toLowerCase();
                         console.error("[FCM-Flow] getToken Failure:", e.message || e);
+
+                        // [HEALING] If push service error, try to clear subscription state
+                        if (errStr.includes('push service error') || errStr.includes('aborterror')) {
+                            console.warn("[FCM-Flow] Detected Push Service Error. Attempting to clear stale subscriptions...");
+                            try {
+                                const subscription = await swRegistration.pushManager.getSubscription();
+                                if (subscription) {
+                                    console.log("[FCM-Flow] Found stale subscription. Unsubscribing...");
+                                    await subscription.unsubscribe();
+                                }
+                                // Also try to unregister and re-register as a last resort in next retry?
+                                // For now, unsubscribing is usually enough.
+                            } catch (subErr) {
+                                console.warn("[FCM-Flow] Failed to clear stale subscription:", subErr);
+                            }
+                        }
+
                         if (retries === 0) throw e;
                         await new Promise(r => setTimeout(r, 2000));
                     }
@@ -246,15 +261,29 @@ export function NotificationProvider({ children }) {
                 console.warn("[FCM-Flow] Permission NOT granted.");
             }
         } catch (error) {
-            const errStr = error.toString();
+            const errStr = error.toString().toLowerCase();
             console.warn("[FCM-Flow] Setup Error:", error);
 
-            // Catch 500, 429, or persistent errors to trip circuit breaker
-            if (errStr.includes('500') || errStr.includes('429') || errStr.includes('Quota exceeded')) {
-                console.group("FCM CRITICAL ERROR");
-                console.error("FCM Error (Circuit Breaker Activated):", errStr);
-                console.groupEnd();
+            // 1. Detect Ad-blocker / Blocked Service
+            const isBlocked = errStr.includes('blocked_by_client') ||
+                errStr.includes('failed to fetch') ||
+                errStr.includes('extension');
 
+            const isPushServiceError = errStr.includes('push service error') ||
+                errStr.includes('aborterror') ||
+                errStr.includes('not found');
+
+            if (isBlocked) {
+                console.group("FCM BLOCKED");
+                console.error("FCM Error (Likely Ad-blocker):", errStr);
+                console.groupEnd();
+                toast.error("Firebase is being blocked by a browser extension. Please disable your Ad-blocker for this site.", { duration: 6000 });
+            } else if (isPushServiceError) {
+                console.group("FCM PUSH SERVICE ERROR");
+                console.error("FCM Error (Push Service):", errStr);
+                console.groupEnd();
+                toast.error("Browser Push Service failed. Try refreshing or check if notifications are allowed in your browser settings.", { duration: 6000 });
+            } else if (errStr.includes('500') || errStr.includes('429') || errStr.includes('quota exceeded')) {
                 globalFcmErrorBackoff = true; // Trip global breaker
                 sessionStorage.setItem(SESSION_BACKOFF_KEY, 'true'); // Trip session breaker
             }
@@ -350,7 +379,8 @@ export function NotificationProvider({ children }) {
         };
     }, [currentUser?.uid]); // Only depend on User UID, not activeChatId
 
-    // 3. Firestore Notifications (New)
+    // 3. Firestore Notifications (Fallback & Direct)
+    const processedNotifIds = useRef(new Set());
     useEffect(() => {
         if (!currentUser) return;
 
@@ -358,6 +388,40 @@ export function NotificationProvider({ children }) {
             setNotifications(data);
             const unread = data.filter(n => !n.isRead).length;
             setUnreadCount(unread);
+
+            // [NEW] Local Notification Trigger
+            data.forEach(notif => {
+                // If it's a new, unread notification that we haven't processed this session
+                if (!notif.isRead && !processedNotifIds.current.has(notif.id)) {
+                    processedNotifIds.current.add(notif.id);
+
+                    // Check if it's very recent (within last 30 seconds) to avoid old alerts on login
+                    const createdAt = notif.createdAt?.toMillis ? notif.createdAt.toMillis() : Date.now();
+                    const age = Date.now() - createdAt;
+
+                    if (age < 30000) {
+                        // 1. Show Toast (Always)
+                        toast(notif.body, {
+                            icon: '🔔',
+                            duration: 4000,
+                            position: 'top-center'
+                        });
+
+                        // 2. Show System Notification (If browser allows & Tab is hidden)
+                        if (Notification.permission === 'granted' && document.visibilityState !== 'visible') {
+                            try {
+                                new Notification(notif.title, {
+                                    body: notif.body,
+                                    icon: '/nova-icon.png',
+                                    tag: notif.id // Deduplicate at OS level
+                                });
+                            } catch (e) {
+                                console.warn("[NotificationFallback] Browser blocked system notification:", e);
+                            }
+                        }
+                    }
+                }
+            });
         });
 
         return () => unsubscribe();

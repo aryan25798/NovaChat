@@ -79,7 +79,8 @@ export default defineConfig(({ mode }) => {
               form_factor: "narrow",
               label: "Mobile"
             }
-          ]
+          ],
+          gcm_sender_id: '103953800507'
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,mp3}'],

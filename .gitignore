@@ -16,6 +16,8 @@ dist-ssr
 .env.*.local
 functions/.env
 public/firebase-messaging-sw.js
+src/firebase-messaging-sw.js
+
 
 # Editor directories and files
 .vscode/*

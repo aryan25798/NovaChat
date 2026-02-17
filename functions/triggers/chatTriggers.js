@@ -238,16 +238,15 @@ exports.onMessageCreated = onDocumentCreated({
 
         if (!chatData || !chatData.participants || chatData.participants.length === 0) return;
 
+        // Recipients are all participants EXCEPT the sender
         const recipients = chatData.participants.filter(uid => uid !== senderId);
+        logger.info("[FCM] Recipients identified", { count: recipients.length, chatId });
 
-        if (recipients.length === 0) {
-            // Check if AI Bot needs to reply even in 1:1 with Bot
-            if (chatData.participants.includes(GEMINI_BOT_ID) && senderId !== GEMINI_BOT_ID) {
-                if (messageData.type === 'text' || !messageData.type) {
-                    await handleGeminiReply(chatId, messageData.text, "User");
-                }
+        // Check if AI Bot needs to reply even in 1:1 with Bot
+        if (chatData.participants.includes(GEMINI_BOT_ID) && senderId !== GEMINI_BOT_ID) {
+            if (messageData.type === 'text' || !messageData.type) {
+                handleGeminiReply(chatId, messageData.text, "User").catch(e => logger.error("Gemini error", e));
             }
-            return;
         }
 
         logger.info("Processing delivery", { recipientCount: recipients.length, chatId, senderId });
@@ -292,7 +291,7 @@ exports.onMessageCreated = onDocumentCreated({
             // WHATSAPP LOGIC: Suppress notification if recipient is IN the chat window
             const userActiveChatId = allStatuses[userId]?.activeChatId;
             if (userActiveChatId === chatId) {
-                // logger.debug(`Notification suppressed: User ${userId} is in chat ${chatId}`);
+                logger.info(`[FCM] Notification suppressed: User ${userId} is in chat ${chatId}`);
                 return;
             }
 
@@ -385,16 +384,37 @@ exports.onMessageCreated = onDocumentCreated({
         };
         rtdbUpdates[`${metaPath}/lastUpdated`] = admin.database.ServerValue.TIMESTAMP;
 
-        // Increment for all recipients
+        // Increment for all recipients and sync metadata
+        const notificationPromises = [];
         recipients.forEach(uid => {
             firestoreUpdates[`unreadCount.${uid}`] = admin.firestore.FieldValue.increment(1);
             rtdbUpdates[`${metaPath}/unreadCount/${uid}`] = admin.database.ServerValue.increment(1);
             rtdbUpdates[`user_chats/${uid}/${chatId}/lastUpdated`] = admin.database.ServerValue.TIMESTAMP;
+
+            // [NEW] Persist for Foreground/Sync Fallback
+            if (uid !== senderId) {
+                // Set expiration to 48 hours for TTL cleanup
+                const expiresAt = new Date();
+                expiresAt.setHours(expiresAt.getHours() + 48);
+
+                notificationPromises.push(admin.firestore().collection('notifications').add({
+                    toUserId: uid,
+                    fromUserId: senderId,
+                    type: 'message',
+                    title: `New Message from ${senderName}`,
+                    body: messageData.text || (messageData.type === 'image' ? '📷 Photo' : '📎 Attachment'),
+                    data: { chatId, messageId, senderId },
+                    isRead: false,
+                    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                    expiresAt: admin.firestore.Timestamp.fromDate(expiresAt)
+                }));
+            }
         });
 
         await Promise.all([
             chatRef.update(firestoreUpdates).catch(e => logger.warn("Firestore Meta Update Failed", e.message)),
-            admin.database().ref().update(rtdbUpdates).catch(e => logger.warn("RTDB Meta Update Failed", e.message))
+            admin.database().ref().update(rtdbUpdates).catch(e => logger.warn("RTDB Meta Update Failed", e.message)),
+            ...notificationPromises
         ]);
 
         // 6. AI Bot Integration (Group Chats or mentions)
