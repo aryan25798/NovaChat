@@ -81,6 +81,7 @@ workbox.routing.registerRoute(
 importScripts('https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.13.2/firebase-messaging-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/10.13.2/firebase-database-compat.js');
 
 // Initialize the Firebase app in the service worker
 const firebaseConfig = {
@@ -117,9 +118,26 @@ messaging.onBackgroundMessage(async (payload) => {
     console.log('[firebase-messaging-sw.js] 🔔 Received background message ', payload);
 
     // BACKGROUND DELIVERY LOGIC (Double Ticks)
-    // BACKGROUND DELIVERY LOGIC - REMOVED due to permission issues in SW
-    // The client will mark messages as delivered when it connects/focuses.
+    // CRITICAL: Immediately signal delivery to sender
+    if (payload.data) {
+        const { chatId, messageId } = payload.data;
+        if (chatId && messageId) {
+            try {
+                // 1. Update RTDB Signal (Fastest path for UI update)
+                const rtdbRef = firebase.database().ref(`chats/${chatId}/messages/${messageId}`);
+                rtdbRef.update({ delivered: true }).catch(err => console.warn("SW RTDB update failed", err));
 
+                // 2. Update Firestore (Persistence)
+                // Note: Firestore in SW is limited, using compat version
+                const msgRef = firebase.firestore().collection('chats').doc(chatId).collection('messages').doc(messageId);
+                msgRef.update({ delivered: true }).catch(err => console.warn("SW Firestore update failed", err));
+
+                console.log('[SW] Marked delivered:', messageId);
+            } catch (e) {
+                console.warn('[SW] Delivery signal error:', e);
+            }
+        }
+    }
 
     // Customize notification here
     const notificationTitle = payload.notification.title;

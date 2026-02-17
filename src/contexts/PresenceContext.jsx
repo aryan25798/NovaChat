@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { rtdb, auth, db } from "../firebase";
-import { ref, onValue, onDisconnect, set, serverTimestamp as rtdbServerTimestamp } from "firebase/database";
+import { ref, onValue, onDisconnect, set, update, serverTimestamp as rtdbServerTimestamp } from "firebase/database";
 import { doc, updateDoc, serverTimestamp as firestoreServerTimestamp } from "firebase/firestore"; // Sync to Firestore for querying
 import { useAuth } from "./AuthContext";
 import { listenerManager } from "../utils/ListenerManager";
@@ -19,7 +19,7 @@ export function PresenceProvider({ children }) {
     const presenceListeners = useRef(new Map()); // Map<userId, { count: number, unsubscribe: function, lastData: object }>
     const callbacks = useRef(new Map()); // Map<userId, Set<callback>>
 
-    // Update active chat in RTDB for notification suppression
+    // Update active chat in RTDB for notification suppression (Cloud Functions check this)
     const updateActiveChat = useCallback((chatId) => {
         const normalizedId = chatId || null;
         if (lastSentActiveChatId.current === normalizedId) return;
@@ -29,11 +29,29 @@ export function PresenceProvider({ children }) {
 
         if (currentUser) {
             const userStatusDatabaseRef = ref(rtdb, '/status/' + currentUser.uid);
-            set(userStatusDatabaseRef, {
-                state: 'online',
-                last_changed: rtdbServerTimestamp(),
-                activeChatId: normalizedId
-            }).catch(e => console.debug("Active chat sync fail:", e));
+            // MERGE update properly to avoid overwriting 'state' or 'last_changed'
+            // We use update() instead of set() to be safe, although set() was used before.
+            // set() replaces the node. If we want to keep state/last_changed, we should likely update.
+            // But wait, the previous code used set() with state and last_changed included.
+            // Let's keep it robust.
+
+            /* 
+               CRITICAL FOR NOTIFICATIONS: 
+               The 'activeChatId' field is checked by Cloud Functions (chatTriggers.js).
+               If matched, push notification is suppressed.
+            */
+            updateDoc(doc(db, "users", currentUser.uid), { activeChatId: normalizedId }).catch(() => null); // Redundancy for Firestore-based checks if any
+
+            // Primary RTDB update
+            const updates = { activeChatId: normalizedId };
+            // If we are setting it, we are likely online/active
+            if (normalizedId) {
+                updates.state = 'online';
+                updates.last_changed = rtdbServerTimestamp();
+            }
+
+            // Using update to avoid wiping other presence data if it exists
+            update(userStatusDatabaseRef, updates).catch(e => console.debug("Active chat sync fail:", e));
         }
     }, [currentUser]);
 
