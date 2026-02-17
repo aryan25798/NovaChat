@@ -5,9 +5,12 @@ import { cn } from "../lib/utils";
 import { Avatar } from "./ui/Avatar";
 import { useAuth } from "../contexts/AuthContext";
 
+import { useNotification } from "../contexts/NotificationContext";
+
 const NavRail = () => {
     const location = useLocation();
     const { currentUser } = useAuth();
+    const { unreadCount } = useNotification();
 
     const navItems = [
         { icon: BsChatText, label: "Chats", path: "/" },
@@ -18,13 +21,18 @@ const NavRail = () => {
     return (
         <div className="hidden md:flex flex-col items-center w-[76px] h-full bg-surface-elevated/95 backdrop-blur-2xl border-r border-border/50 pt-8 pb-4 z-40 shrink-0 shadow-[2px_0_10px_-2px_rgba(0,0,0,0.05)]">
             <Link to="/profile" className="mb-8 relative group">
-                <div className="absolute -inset-1 bg-gradient-to-br from-primary to-secondary rounded-full opacity-0 group-hover:opacity-20 blurtransition-opacity duration-300" />
+                <div className="absolute -inset-1 bg-gradient-to-br from-primary to-secondary rounded-full opacity-0 group-hover:opacity-20 transition-opacity duration-300" />
                 <Avatar
                     src={currentUser?.photoURL}
                     alt="Profile"
                     size="md"
                     className="border-2 border-surface shadow-sm transition-transform group-hover:scale-105"
                 />
+                {unreadCount > 0 && (
+                    <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white shadow-sm ring-2 ring-surface">
+                        {unreadCount > 99 ? '99+' : unreadCount}
+                    </span>
+                )}
             </Link>
 
             <div className="flex-1 flex flex-col gap-3 w-full px-3">

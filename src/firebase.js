@@ -60,11 +60,36 @@ if (localStorage.getItem(STORAGE_KEY) === 'true') {
 let usePersistence = true;
 
 // Fallback logic for high-scale environments
-export const db = initializeFirestore(app, {
-    localCache: usePersistence
-        ? persistentLocalCache({ tabManager: persistentMultipleTabManager() })
-        : memoryLocalCache()
-});
+let db;
+try {
+    db = initializeFirestore(app, {
+        localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+    });
+} catch (error) {
+    const errStr = error.toString().toLowerCase();
+    const isBloomError = errStr.includes("bloomfilter") || errStr.includes("bitset");
+
+    console.error(`[Firebase] Persistence Initialization Failed (${isBloomError ? 'BLOOM_FILTER_ERROR' : 'GENERIC_ERROR'}):`, error);
+
+    // [HEALING] If it's a BloomFilter error, we MUST force memory mode to prevent infinite crash loops
+    if (isBloomError) {
+        console.warn("[Firebase] Detected corrupted BloomFilter cache. Forcing Memory-Only mode for safety.");
+        localStorage.setItem(STORAGE_KEY, 'true');
+    }
+
+    // Self-Healing: Attempt to clear the corrupted cache
+    try {
+        const tempDb = initializeFirestore(app, { localCache: memoryLocalCache() });
+        clearIndexedDbPersistence(tempDb).catch(e => console.warn("Failed to clear persistence:", e));
+        terminate(tempDb);
+    } catch (e) { }
+
+    // Fallback to memory for this session
+    db = initializeFirestore(app, {
+        localCache: memoryLocalCache()
+    });
+}
+export { db };
 
 console.log(`[Firebase] Adaptive Engine: Persistence=${usePersistence ? 'ENABLED' : 'DISABLED (Memory-Only Fallback)'}`);
 

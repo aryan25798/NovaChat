@@ -192,6 +192,7 @@ exports.onMessageCreated = onDocumentCreated({
 }, async (event) => {
     const messageData = event.data.data();
     const chatId = event.params.chatId;
+    const messageId = event.params.messageId;
     const senderId = messageData.senderId;
 
     logger.info("New message created", { chatId, senderId, messageType: messageData.type });
@@ -301,6 +302,7 @@ exports.onMessageCreated = onDocumentCreated({
             const uniqueTokens = [...new Set(tokens)];
 
             uniqueTokens.forEach(token => {
+                logger.debug(`[FCM] Enqueuing notification for User: ${userId}, Token: ${token.slice(0, 10)}...`);
                 messagesToSend.push({
                     token: token,
                     notification: {
@@ -317,7 +319,7 @@ exports.onMessageCreated = onDocumentCreated({
                         headers: {
                             Urgency: 'high'
                         },
-                        fcmOptions: { link: `https://whatsappclone-50b5b.web.app/chat/${chatId}` },
+                        fcmOptions: { link: `https://whatsappclone-50b5b.web.app/c/${chatId}` },
                         notification: {
                             icon: 'https://whatsappclone-50b5b.web.app/nova-icon.png',
                             badge: 'https://whatsappclone-50b5b.web.app/nova-icon.png',
@@ -333,28 +335,69 @@ exports.onMessageCreated = onDocumentCreated({
                             clickAction: 'FLUTTER_NOTIFICATION_CLICK'
                         }
                     },
-                    data: { chatId, senderId, type: 'message' }
+                    data: { chatId, messageId, senderId, type: 'message' }
                 });
             });
         });
 
         // 4. Send Notifications (Batched)
         if (messagesToSend.length > 0) {
+            logger.info(`[FCM] Attempting to send ${messagesToSend.length} notifications for chat ${chatId}`);
             const BATCH_SIZE = 500;
             for (let i = 0; i < messagesToSend.length; i += BATCH_SIZE) {
                 const chunk = messagesToSend.slice(i, i + BATCH_SIZE);
                 try {
                     const response = await admin.messaging().sendEach(chunk);
+                    logger.info(`[FCM] Batch result: success=${response.successCount}, failure=${response.failureCount}`);
                     if (response.failureCount > 0) {
-                        logger.warn(`FCM Batch had ${response.failureCount} failures`);
+                        response.responses.forEach((resp, idx) => {
+                            if (!resp.success) {
+                                logger.error(`[FCM] Error for token ${chunk[idx].token.slice(0, 10)}...:`, resp.error);
+                            }
+                        });
                     }
-                } catch (e) {
-                    logger.error("FCM Batch Send Error", e);
+                } catch (sendErr) {
+                    logger.error("[FCM] Critical batch send failure:", sendErr);
                 }
             }
+        } else {
+            logger.info(`[FCM] No notifications to send for chat ${chatId}`);
         }
 
-        // 5. AI Bot Integration (Group Chats or mentions)
+        // 5. Atomic Metadata Sync (Firestore & RTDB)
+        const chatRef = admin.firestore().collection('chats').doc(chatId);
+        const firestoreUpdates = {
+            'lastMessage.text': messageData.text || (messageData.type === 'image' ? '📷 Photo' : '📎 Attachment'),
+            'lastMessage.senderId': senderId,
+            'lastMessage.timestamp': admin.firestore.FieldValue.serverTimestamp(),
+            lastMessageTimestamp: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        };
+
+        const rtdbUpdates = {};
+        const metaPath = `chats/${chatId}/meta`;
+        rtdbUpdates[`${metaPath}/lastMessage`] = {
+            text: messageData.text || (messageData.type === 'image' ? '📷 Photo' : '📎 Attachment'),
+            senderId: senderId,
+            senderName: senderName,
+            timestamp: admin.database.ServerValue.TIMESTAMP,
+            type: messageData.type || 'text'
+        };
+        rtdbUpdates[`${metaPath}/lastUpdated`] = admin.database.ServerValue.TIMESTAMP;
+
+        // Increment for all recipients
+        recipients.forEach(uid => {
+            firestoreUpdates[`unreadCount.${uid}`] = admin.firestore.FieldValue.increment(1);
+            rtdbUpdates[`${metaPath}/unreadCount/${uid}`] = admin.database.ServerValue.increment(1);
+            rtdbUpdates[`user_chats/${uid}/${chatId}/lastUpdated`] = admin.database.ServerValue.TIMESTAMP;
+        });
+
+        await Promise.all([
+            chatRef.update(firestoreUpdates).catch(e => logger.warn("Firestore Meta Update Failed", e.message)),
+            admin.database().ref().update(rtdbUpdates).catch(e => logger.warn("RTDB Meta Update Failed", e.message))
+        ]);
+
+        // 6. AI Bot Integration (Group Chats or mentions)
         if (chatData.participants.includes(GEMINI_BOT_ID) && senderId !== GEMINI_BOT_ID) {
             if (messageData.type === 'text' || !messageData.type) {
                 await handleGeminiReply(chatId, messageData.text, senderName);

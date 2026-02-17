@@ -43,6 +43,8 @@ const ChatPage = () => {
                 }
             }
 
+            if (speculatedId) updateActiveChat(speculatedId);
+
             // 1. If we have state, use it immediately
             if (location.state?.chatData) {
                 const data = location.state.chatData;
@@ -179,7 +181,6 @@ const ChatPage = () => {
             }
         };
 
-        if (id) updateActiveChat(id);
         resolveChat();
 
         return () => {

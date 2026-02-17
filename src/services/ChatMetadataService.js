@@ -25,14 +25,27 @@ export const ChatMetadataService = {
         updates[`${metaPath}/lastMessage`] = {
             text: messageData.text || (messageData.type === 'image' ? '📷 Image' : '📎 Attachment'),
             senderId: messageData.senderId,
+            senderName: messageData.senderName || 'User',
             timestamp: timestamp,
             type: messageData.type || 'text',
             isOptimistic: false
         };
         updates[`${metaPath}/lastUpdated`] = timestamp;
 
-        // 2. Update OWN "Active Chats" list (Allowed)
-        // We do NOT update others; Cloud Functions handles fan-out to valid recipients.
+        // 2. Optimistic Unread Counts for RECIPIENTS (Private Chats Only)
+        // [HYBRID RESPONSIVENESS] We perform a client-side increment for the recipient 
+        // to show the badge "in a sec". Cloud Functions will reinforce this for everyone.
+        if (participantIds && auth.currentUser && chatId.includes('_')) {
+            participantIds.forEach(uid => {
+                if (uid !== auth.currentUser.uid) {
+                    updates[`chats/${chatId}/meta/unreadCount/${uid}`] = increment(1);
+                }
+            });
+        }
+
+        // 3. Update OWN "Active Chats" list (Allowed)
+        // We do NOT update others; Cloud Functions handles fan-out to valid recipients if needed.
+        // But since we rely on Firestore for the list, this is just for redundant safety.
         if (auth.currentUser) {
             updates[`user_chats/${auth.currentUser.uid}/${chatId}/lastUpdated`] = timestamp;
         }
@@ -62,11 +75,11 @@ export const ChatMetadataService = {
      */
     subscribeToChatMeta: (chatId, callback) => {
         const metaRef = ref(rtdb, `chats/${chatId}/meta`);
-        const listener = onValue(metaRef, (snapshot) => {
+        const unsubscribe = onValue(metaRef, (snapshot) => {
             const data = snapshot.val();
             callback(data || {});
         });
-        return () => off(metaRef, 'value', listener);
+        return unsubscribe;
     },
 
     /**
@@ -88,7 +101,7 @@ export const ChatMetadataService = {
         let debounceTimer = null;
         chatIds.forEach(chatId => {
             const r = ref(rtdb, `chats/${chatId}/meta`);
-            const l = onValue(r, (snap) => {
+            const unsubscribe = onValue(r, (snap) => {
                 results[chatId] = snap.val();
 
                 // PERFORMANCE: Debounce aggregate callback to prevent render storms
@@ -97,11 +110,11 @@ export const ChatMetadataService = {
                     callback({ ...results });
                 }, 50); // 50ms aggregation window
             });
-            listeners.push({ ref: r, fn: l });
+            listeners.push(unsubscribe);
         });
 
         return () => {
-            listeners.forEach(({ ref, fn }) => off(ref, 'value', fn));
+            listeners.forEach(unsub => unsub());
         };
     }
 };

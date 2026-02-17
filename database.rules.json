@@ -29,8 +29,8 @@
                     },
                     "unreadCount": {
                         "$uid": {
-                            ".write": "auth != null && auth.uid == $uid",
-                            ".validate": "newData.val() == 0"
+                            ".write": "auth != null && (auth.uid == $uid || ($chatId.contains('_') && ($chatId.beginsWith(auth.uid + '_') || $chatId.endsWith('_' + auth.uid))))",
+                            ".validate": "newData.val() == 0 || (auth.uid != $uid && newData.val() == (data.exists() ? data.val() : 0) + 1)"
                         }
                     }
                 },
@@ -55,9 +55,8 @@
         },
         "calls": {
             "$callId": {
-                ".read": "auth != null && (data.child('callerId').val() === auth.uid || data.child('receiverId').val() === auth.uid || auth.token.isAdmin === true)",
-                ".write": "auth != null && ((!data.exists() && newData.child('callerId').val() === auth.uid) || (data.child('callerId').val() === auth.uid || data.child('receiverId').val() === auth.uid))",
-                ".validate": "newData.hasChildren(['callerId', 'receiverId'])"
+                ".read": "auth != null",
+                ".write": "auth != null"
             }
         }
     }

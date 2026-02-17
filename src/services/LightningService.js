@@ -50,7 +50,8 @@ class LightningSyncService {
     subscribeToTyping(chatId, callback) {
         if (!chatId) return () => { };
         const typingRef = ref(rtdb, `chats/${chatId}/typing`);
-        const listener = onValue(typingRef, (snapshot) => {
+        // onValue returns the unsubscribe function directly in Modular SDK
+        const unsubscribe = onValue(typingRef, (snapshot) => {
             const data = snapshot.val() || {};
             const activeTypers = Object.entries(data)
                 .filter(([_, ts]) => ts && (Date.now() - ts < 10000))
@@ -59,7 +60,7 @@ class LightningSyncService {
         }, (error) => {
             console.warn("[RTDB Typing Sub] Error:", error);
         });
-        return () => off(typingRef, "value", listener);
+        return unsubscribe;
     }
 
     // --- INSTANT DELIVERY SIGNALING (Optimized v1.5.0) ---
@@ -84,7 +85,8 @@ class LightningSyncService {
     subscribeToSignals(chatId, callback) {
         if (!chatId) return () => { };
         const signalsRef = ref(rtdb, `chats/${chatId}/signals`);
-        const listener = onChildAdded(signalsRef, (snapshot) => {
+        // onChildAdded returns the unsubscribe function directly
+        const unsubscribe = onChildAdded(signalsRef, (snapshot) => {
             const data = snapshot.val();
             if (data) {
                 // Remap short keys to app-logic keys
@@ -98,7 +100,10 @@ class LightningSyncService {
         }, (error) => {
             console.warn("[RTDB Signals Sub] Error:", error);
         });
-        return () => off(signalsRef, "child_added", listener);
+
+        return () => {
+            unsubscribe();
+        };
     }
 
     // --- STATUS UPDATES (Ticks) ---
@@ -119,12 +124,13 @@ class LightningSyncService {
     subscribeToStatusSignals(chatId, callback) {
         if (!chatId) return () => { };
         const statusRef = ref(rtdb, `chats/${chatId}/status`);
-        const listener = onValue(statusRef, (snapshot) => {
+        // onValue returns the unsubscribe function directly
+        const unsubscribe = onValue(statusRef, (snapshot) => {
             callback(snapshot.val() || {});
         }, (error) => {
             console.warn("[RTDB Status Sub] Error:", error);
         });
-        return () => off(statusRef, "value", listener);
+        return unsubscribe;
     }
 
     cleanup(chatId) {

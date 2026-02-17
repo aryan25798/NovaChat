@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useRef, useCallback, useMemo } from 'react';
-import { getMessagingInstance, db, auth, installations, getId } from '../firebase';
+import { rtdb, getMessagingInstance, db, auth, installations, getId } from '../firebase';
 import { getToken, onMessage } from 'firebase/messaging';
+import { ref, update } from 'firebase/database';
 import { doc, updateDoc, arrayUnion, getDoc } from 'firebase/firestore';
 import { useAuth } from './AuthContext';
 import { PresenceContext } from './PresenceContext';
@@ -31,14 +32,17 @@ export function NotificationProvider({ children }) {
     const requestPermission = useCallback(async (options = {}) => {
         const { force = false } = options;
         const now = Date.now();
-        const THROTTLE_MS = 5 * 60 * 1000; // 5 minutes
+        const THROTTLE_MS = 10 * 1000; // 10 seconds (reduced for debugging)
         const LAST_ATTEMPT_KEY = 'nova_fcm_last_attempt';
-
-        console.log(`[FCM-Flow] Initiating registration check (Force: ${force})`);
 
         // Check Notification Permission early
         if (typeof window !== 'undefined' && 'Notification' in window) {
             console.log(`[FCM-Flow] Current Permission State: ${Notification.permission}`);
+            if (Notification.permission === 'denied') {
+                console.error("[FCM-Flow] Permission DENIED by browser settings.");
+                toast.error("Notifications are blocked in your browser settings. Please enable them to receive messages.");
+                return;
+            }
         }
 
         // Guard: Check global and session backoff (DISABLED PER USER REQUEST TO FIND ROOT CAUSE)
@@ -112,7 +116,9 @@ export function NotificationProvider({ children }) {
         console.log(`[FCM-Flow] Project ID: ${import.meta.env.VITE_FIREBASE_PROJECT_ID}`);
         try {
             const apiKey = import.meta.env.VITE_FIREBASE_API_KEY || "MISSING";
+            const vapidStatus = rawVapidKey ? (isFallback ? "Fallback" : "Injected") : "MISSING";
             console.log(`[FCM-Flow] API Identity: ${apiKey.substring(0, 6)}...${apiKey.substring(apiKey.length - 4)}`);
+            console.log(`[FCM-Flow] VAPID Key status: ${vapidStatus}`);
         } catch (e) { }
 
         // Mark attempt time
@@ -217,19 +223,22 @@ export function NotificationProvider({ children }) {
                         const userSnap = await getDoc(userRef);
 
                         if (userSnap.exists()) {
-                            const currentTokens = userSnap.data().fcmTokens || [];
+                            const data = userSnap.data();
+                            const currentTokens = data.fcmTokens || [];
 
-                            // SCALABILITY HARDENING: Prune tokens to prevent document bloat
-                            // We keep the 5 most recent tokens.
-                            let updatedTokens = [...new Set([currentToken, ...currentTokens])];
-                            if (updatedTokens.length > 5) {
-                                updatedTokens = updatedTokens.slice(0, 5);
+                            // If fcmToken (singular) exists, include it for migration/backward compatibility
+                            if (data.fcmToken && !currentTokens.includes(data.fcmToken)) {
+                                currentTokens.push(data.fcmToken);
                             }
 
-                            console.log("[FCM-Flow] Syncing pruned tokens to Firestore");
-                            await updateDoc(userRef, {
-                                fcmTokens: updatedTokens
-                            });
+                            if (!currentTokens.includes(currentToken)) {
+                                console.log("[FCM-Flow] Syncing NEW token to Firestore");
+                                let updatedTokens = [currentToken, ...currentTokens];
+                                if (updatedTokens.length > 5) updatedTokens = updatedTokens.slice(0, 5);
+                                await updateDoc(userRef, { fcmTokens: updatedTokens });
+                            } else {
+                                console.log("[FCM-Flow] Token already synced to Firestore.");
+                            }
                         }
                     }
                 }
@@ -286,7 +295,7 @@ export function NotificationProvider({ children }) {
             // Notice we omit activeChatId from dependencies to avoid re-running this effect.
             // We use activeChatIdRef inside the callback.
             const unsubscribe = onMessage(msg, async (payload) => {
-                console.log('Foreground Message:', payload);
+                console.log('[NotificationContext] Foreground Message Received:', payload);
 
                 const incomingChatId = payload.data?.chatId;
 
@@ -302,6 +311,24 @@ export function NotificationProvider({ children }) {
                     if (chatSnap.exists()) {
                         const isMuted = chatSnap.data().mutedBy?.[currentUser.uid];
                         if (isMuted) return;
+                    }
+                }
+
+                // SIGNAL DELIVERY (Double Tick) - identical to Service Worker logic
+                // If we are here, we are NOT in the active chat (or it would be suppressed above),
+                // so we acknowledge receipt so the sender gets double ticks.
+                if (incomingChatId && payload.data?.messageId) {
+                    const msgId = payload.data.messageId;
+                    try {
+                        // 1. RTDB Update (Fast)
+                        const rtdbRef = ref(rtdb, `chats/${incomingChatId}/messages/${msgId}`);
+                        update(rtdbRef, { delivered: true }).catch(err => console.warn("Foreground RTDB update failed", err));
+
+                        // 2. Firestore Update (Persistence) - Only if needed, but good for consistency
+                        const msgRef = doc(db, 'chats', incomingChatId, 'messages', msgId);
+                        updateDoc(msgRef, { delivered: true }).catch(err => console.warn("Foreground Firestore update failed", err));
+                    } catch (e) {
+                        console.error("Delivery signal error:", e);
                     }
                 }
 

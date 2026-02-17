@@ -48,17 +48,22 @@ export const subscribeToUserChats = (userId, callback, limitCount = 30, componen
 
         const mergedChats = Array.from(firestoreData.values()).map(chat => {
             const meta = rtdbData[chat.id];
-            if (meta) {
-                const userUnread = meta.unreadCount?.[userId] || 0;
-                return {
-                    ...chat,
-                    lastMessage: meta.lastMessage || chat.lastMessage,
-                    lastMessageTimestamp: meta.lastUpdated ? (new Date(meta.lastUpdated)) : chat.lastMessageTimestamp,
-                    unreadCount: { ...chat.unreadCount, [userId]: userUnread },
-                    _source: 'hybrid'
-                };
-            }
-            return chat;
+
+            // Combine Firestore base with RTDB dynamic meta
+            const userUnread = meta?.unreadCount?.[userId] !== undefined
+                ? meta.unreadCount[userId]
+                : (chat.unreadCount?.[userId] || 0);
+
+            return {
+                ...chat,
+                lastMessage: meta?.lastMessage || chat.lastMessage,
+                lastMessageTimestamp: meta?.lastUpdated ? (new Date(meta.lastUpdated)) : chat.lastMessageTimestamp,
+                unreadCount: {
+                    ...(chat.unreadCount || {}),
+                    [userId]: userUnread
+                },
+                _source: meta ? 'hybrid' : 'firestore'
+            };
         });
 
         mergedChats.sort((a, b) => {

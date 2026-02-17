@@ -19,45 +19,42 @@ export function PresenceProvider({ children }) {
     const presenceListeners = useRef(new Map()); // Map<userId, { count: number, unsubscribe: function, lastData: object }>
     const callbacks = useRef(new Map()); // Map<userId, Set<callback>>
 
-    // Update active chat in RTDB for notification suppression (Cloud Functions check this)
+    // State for visibility to trigger re-renders/effects
+    const [isVisible, setIsVisible] = useState(document.visibilityState === 'visible');
+
+    // Update active chat state (called by ChatWindow)
     const updateActiveChat = useCallback((chatId) => {
-        const normalizedId = chatId || null;
-        if (lastSentActiveChatId.current === normalizedId) return;
+        setActiveChatId(chatId || null);
+    }, []);
 
-        setActiveChatId(normalizedId);
-        lastSentActiveChatId.current = normalizedId;
+    // Sync Active Chat to RTDB (Visibility Aware)
+    useEffect(() => {
+        if (!currentUser) return;
 
-        if (currentUser) {
-            const userStatusDatabaseRef = ref(rtdb, '/status/' + currentUser.uid);
-            // MERGE update properly to avoid overwriting 'state' or 'last_changed'
-            // We use update() instead of set() to be safe, although set() was used before.
-            // set() replaces the node. If we want to keep state/last_changed, we should likely update.
-            // But wait, the previous code used set() with state and last_changed included.
-            // Let's keep it robust.
+        const effectiveChatId = isVisible ? activeChatId : null;
 
-            /* 
-               CRITICAL FOR NOTIFICATIONS: 
-               The 'activeChatId' field is checked by Cloud Functions (chatTriggers.js).
-               If matched, push notification is suppressed.
-            */
-            updateDoc(doc(db, "users", currentUser.uid), { activeChatId: normalizedId }).catch(() => null); // Redundancy for Firestore-based checks if any
+        // Dedup: Don't write if same value
+        if (lastSentActiveChatId.current === effectiveChatId) return;
+        lastSentActiveChatId.current = effectiveChatId;
 
-            // Primary RTDB update
-            const updates = { activeChatId: normalizedId };
-            // If we are setting it, we are likely online/active
-            if (normalizedId) {
-                updates.state = 'online';
-                updates.last_changed = rtdbServerTimestamp();
-            }
+        const userStatusDatabaseRef = ref(rtdb, '/status/' + currentUser.uid);
 
-            // Using update to avoid wiping other presence data if it exists
-            update(userStatusDatabaseRef, updates).catch(e => console.debug("Active chat sync fail:", e));
+        // Firestore Sync (Debounced ideally, but direct for now)
+        // We only really care about Firestore for "Online" status usually, 
+        // but syncing activeChatId there doesn't hurt if we want to debug.
+        if (effectiveChatId) {
+            updateDoc(doc(db, "users", currentUser.uid), { activeChatId: effectiveChatId }).catch(() => null);
         }
-    }, [currentUser]);
 
-    // Activity tracking to prevent "Online" when user is idle for too long?
-    // For now, let's keep it simple: If the tab is open and connected, they are Online.
-    // Enhanced: "Idle" status could be added later.
+        const updates = { activeChatId: effectiveChatId };
+        if (effectiveChatId) {
+            updates.state = 'online';
+            updates.last_changed = rtdbServerTimestamp();
+        }
+
+        update(userStatusDatabaseRef, updates).catch(e => console.debug("Active chat sync fail:", e));
+
+    }, [currentUser, activeChatId, isVisible]);
 
     useEffect(() => {
         if (!currentUser) return;
@@ -78,64 +75,45 @@ export function PresenceProvider({ children }) {
         const connectedRef = ref(rtdb, '.info/connected');
         const listenerKey = `presence-${currentUser.uid}`;
 
-        // HEARTBEAT LOGIC: Update Firestore location timestamp every 60 minutes (Cost Optimization for 10k users)
-        // This ensures the "Freshness Filter" on the map doesn't hide recently active users
-        // while minimizing Firestore write costs at scale.
         const heartbeat = async () => {
             if (auth.currentUser && document.visibilityState === 'visible') {
                 const LAST_HEARTBEAT_KEY = `last_heartbeat_${currentUser.uid}`;
                 const lastHb = parseInt(localStorage.getItem(LAST_HEARTBEAT_KEY) || '0');
                 const now = Date.now();
 
-                // Throttle: Only update Firestore if > 1 hour has passed
+                const updates = { activeChatId: activeChatId }; // Keep active chat alive
+                update(userStatusDatabaseRef, updates).catch(() => { });
+
                 if (now - lastHb > 60 * 60 * 1000) {
                     updateDoc(doc(db, "user_locations", currentUser.uid), {
                         isOnline: true,
                         timestamp: firestoreServerTimestamp()
-                    }).catch(e => {
-                        console.debug("Heartbeat fail (expected if offline):", e);
-                        // If doc missing, set it (self-healing)
-                        if (e.code === 'not-found') {
-                            // We might need setDoc here but avoiding imports to keep it simple, 
-                            // usually user_locations is created on signup.
-                        }
-                    });
-                    updateDoc(userStatusFirestoreRef, { isOnline: true }).catch(e => console.debug("Map sync fail:", e));
+                    }).catch(() => { });
+                    updateDoc(userStatusFirestoreRef, { isOnline: true }).catch(() => { });
                     localStorage.setItem(LAST_HEARTBEAT_KEY, now.toString());
                 }
             }
         };
 
-        // Check heartbeat every 5 minutes, but only write to DB if 1 hour elapsed (checked inside heartbeat)
         const heartbeatInterval = setInterval(heartbeat, 5 * 60 * 1000);
 
         const handleVisibilityChange = () => {
-            if (document.visibilityState === 'visible') {
-                heartbeat(); // Attempt heartbeat on return
-            }
+            const visible = document.visibilityState === 'visible';
+            setIsVisible(visible); // Triggers the sync effect above which handles activeChatId logic
+            if (visible) heartbeat();
         };
-        document.addEventListener('visibilitychange', handleVisibilityChange);
 
-        // Initial check
+        document.addEventListener('visibilitychange', handleVisibilityChange);
         heartbeat();
 
         const unsubscribe = onValue(connectedRef, async (snapshot) => {
-            if (snapshot.val() === false) {
-                return;
-            }
+            if (snapshot.val() === false) return;
 
-            // If we are currently connected, we add a listener to set us as offline if we lose connection
-            // RTDB is cheap and handles presence efficiently - KEEP THIS.
+            // On Disconnect: Set offline (this nukes activeChatId implicitly if we used set, 
+            // but we use update now? No, onDisconnect().set() replaces activeChatId with nothing?
+            // Yes, isOfflineForDatabase only has state/last_changed. So activeChatId is removed. GOOD.
             await onDisconnect(userStatusDatabaseRef).set(isOfflineForDatabase);
-
-            // We set our status to online in RTDB
             set(userStatusDatabaseRef, isOnlineForDatabase);
-
-            // --- SYNC TO user_locations for Admin Map ---
-            // REMOVED: Immediate Firestore write on every generic reconnect. 
-            // We rely on the throttled 'heartbeat' for Firestore 'Online' status.
-            // This prevents write storms during mass-reconnect events.
-            // ---------------------------------------------
         });
 
         listenerManager.subscribe(listenerKey, unsubscribe);
@@ -145,21 +123,12 @@ export function PresenceProvider({ children }) {
             document.removeEventListener('visibilitychange', handleVisibilityChange);
             listenerManager.unsubscribe(listenerKey);
 
-            // We set offline in RTDB manually (Fast)
             if (auth.currentUser) {
-                set(userStatusDatabaseRef, isOfflineForDatabase).catch(err => {
-                    console.debug("Presence cleanup suppressed (already signed out)");
-                });
-
-                // --- SYNC TO user_locations for Admin Map (THROTTLED) ---
-                // CRITICAL CANCELLATION: We DO NOT write to Firestore on disconnect.
-                // This saves 50% of write costs. 
-                // The "Online" status in Firestore will basically mean "Seen in last hour".
-                // Real-time status should be checked via RTDB if needed.
-                // ---------------------------------------------
+                set(userStatusDatabaseRef, isOfflineForDatabase).catch(() => { });
             }
         };
-    }, [currentUser?.uid]);
+    }, [currentUser?.uid]); // Reduced dependencies to avoid re-subscription loop
+
 
 
     // Real-time hook for a specific user's presence (Optimized: Centralized pooling)
