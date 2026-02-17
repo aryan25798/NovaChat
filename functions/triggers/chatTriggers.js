@@ -8,7 +8,13 @@ const GEMINI_BOT_ID = "gemini_bot_v1";
 
 // Helper for Gemini
 async function handleGeminiReply(chatId, userText, senderName) {
-    const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // Set via: firebase functions:secrets:set GEMINI_API_KEY
+    // In Gen 2 functions, process.env should be populated if secrets are set.
+    const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+    if (!GEMINI_API_KEY) {
+        logger.error("Skipping Gemini Reply: GEMINI_API_KEY is missing. Ensure it is set via 'firebase functions:secrets:set GEMINI_API_KEY'");
+        return;
+    }
 
     // Need to initialize gemini properly or fetch key safely. 
     // In original code it was accessing process.env directly inside the function.
