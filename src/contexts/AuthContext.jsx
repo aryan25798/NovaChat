@@ -126,13 +126,16 @@ export function AuthProvider({ children }) {
         try {
             googleProvider.setCustomParameters({ prompt: 'select_account' });
 
+            // If user explicitly prefers redirect (via sessionStorage flag)
             if (preferRedirect) {
+                console.log('[Auth] Using redirect flow (user preference)');
                 await signInWithRedirect(auth, googleProvider);
-                return null;
+                return 'redirect';
             }
 
+            // TRY POPUP FIRST for all devices (works on modern mobile + desktop)
+            // On mobile Chrome/Safari, this opens the Google page in a new tab
             try {
-                // RACE CONDITION FIX: Wrap popup in timeout to detect COOP hangs/blocks
                 const popupPromise = signInWithPopup(auth, googleProvider);
                 const timeoutPromise = new Promise((_, reject) =>
                     setTimeout(() => reject(new Error('AUTH_POPUP_TIMEOUT')), 60000)
@@ -141,14 +144,22 @@ export function AuthProvider({ children }) {
                 const result = await Promise.race([popupPromise, timeoutPromise]);
                 return result;
             } catch (popupError) {
-                // STOP SILENCING ERRORS. THROW IT.
-                console.error("[Auth] Popup failed:", popupError);
-                throw popupError;
+                console.error("[Auth] Popup failed:", popupError.code || popupError.message);
 
-                /* 
-                // FALLBACK DISABLED FOR DEBUGGING
-                if (popupError.message === 'AUTH_POPUP_TIMEOUT') { ... } 
-                */
+                // If popup was blocked or timed out, fall back to redirect
+                if (
+                    popupError.code === 'auth/popup-blocked' ||
+                    popupError.code === 'auth/operation-not-supported-in-this-environment' ||
+                    popupError.message === 'AUTH_POPUP_TIMEOUT'
+                ) {
+                    console.log("[Auth] Popup unavailable, falling back to redirect...");
+                    // Remember preference so next attempt goes straight to redirect
+                    try { sessionStorage.setItem('nova_auth_prefer_redirect', 'true'); } catch (_) { }
+                    await signInWithRedirect(auth, googleProvider);
+                    return 'redirect';
+                }
+
+                throw popupError;
             }
         } catch (error) {
             console.error("Google Login Error:", error.code, error.message);
@@ -225,11 +236,18 @@ export function AuthProvider({ children }) {
             console.warn("Cleanup warning:", e);
         }
 
-        // 4. Clear Storage Synchronously 
+        // 4. NUCLEAR CACHE CLEAR: Wipe ALL caches (localStorage, sessionStorage, SW caches, IndexedDB)
         try {
-            localStorage.clear();
-            sessionStorage.clear();
-        } catch (e) { console.error(e); }
+            await clearAllCaches();
+            console.debug('All caches cleared successfully.');
+        } catch (e) {
+            console.warn("Cache clear warning (non-blocking):", e);
+            // Fallback: at minimum clear storage synchronously
+            try {
+                localStorage.clear();
+                sessionStorage.clear();
+            } catch (_) { /* ignore */ }
+        }
 
         // 5. Short delay to allow `signOut` network packet to potentially leave
         setTimeout(() => {

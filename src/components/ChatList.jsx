@@ -8,6 +8,7 @@ import { Link } from "react-router-dom";
 import { subscribeToUserChats } from "../services/chatListService";
 import { searchUsers, searchUsersPaged } from "../services/userService";
 import { useFriend } from "../contexts/FriendContext";
+import { useChat } from "../contexts/ChatContext";
 import { IoPersonAdd } from "react-icons/io5";
 import { Virtuoso } from "react-virtuoso";
 import { cn } from "../lib/utils";
@@ -35,46 +36,20 @@ const SearchAction = React.memo(({ userId }) => {
     );
 });
 
-// Persistent cache for chat list to prevent "white flash" on re-mount
-let cachedChats = [];
-let hasInitiallyLoaded = false;
-
 const ChatList = React.memo(({ searchTerm }) => {
     const { currentUser } = useAuth();
-    const [chats, setChats] = useState(cachedChats);
-    const [loading, setLoading] = useState(!hasInitiallyLoaded);
+    // Use Global Context instead of fragile local cache
+    const { chats, loading } = useChat();
+
+    // Local search state
     const [searchResults, setSearchResults] = useState([]);
     const [searchLastDoc, setSearchLastDoc] = useState(null);
     const [searchHasMore, setSearchHasMore] = useState(false);
     const [searching, setSearching] = useState(false);
     const [loadingMoreSearch, setLoadingMoreSearch] = useState(false);
 
-    useEffect(() => {
-        if (!currentUser) {
-            // Clear cache on logout to prevent data leakage/stale state
-            cachedChats = [];
-            hasInitiallyLoaded = false;
-            setChats([]);
-            setLoading(false);
-            return;
-        }
+    // Subscription moved to ChatContext
 
-        const unsubscribe = subscribeToUserChats(currentUser.uid, (chatData) => {
-            const filteredChats = chatData.filter(chat => {
-                const clearedAt = chat.clearedAt?.[currentUser.uid]?.toDate?.() || 0;
-                const lastMsgTime = chat.lastMessageTimestamp?.toDate?.() || null;
-                const isHidden = chat.hiddenBy?.includes(currentUser.uid);
-                // Allow chats with pending (null) timestamps to show up
-                return (!lastMsgTime || lastMsgTime > clearedAt) && !isHidden;
-            });
-            cachedChats = filteredChats;
-            setChats(filteredChats);
-            setLoading(false);
-            hasInitiallyLoaded = true;
-        }, 30, 'ChatList');
-
-        return () => unsubscribe();
-    }, [currentUser?.uid]);
 
     // Filter AND Sort existing chats locally
     const filteredChats = useMemo(() => {

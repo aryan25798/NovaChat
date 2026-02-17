@@ -16,7 +16,40 @@ export function StatusProvider({ children }) {
     const friendContext = useFriend();
     const friends = friendContext ? friendContext.friends : [];
 
-    // 1. Subscribe to My Status
+    // 0. Viewed Status Tracking (Local Persistence)
+    const [viewedIds, setViewedIds] = useState(() => {
+        try {
+            const saved = localStorage.getItem('nova_viewed_statuses');
+            return new Set(saved ? JSON.parse(saved) : []);
+        } catch (e) { return new Set(); }
+    });
+
+    // Use ref to avoid stale closure in markAsViewed callback
+    const viewedIdsRef = React.useRef(viewedIds);
+    React.useEffect(() => { viewedIdsRef.current = viewedIds; }, [viewedIds]);
+
+    const markAsViewed = useCallback((ownerId, statusId) => {
+        if (!statusId || viewedIdsRef.current.has(statusId)) return;
+
+        setViewedIds(prev => {
+            if (prev.has(statusId)) return prev; // Double-check inside setter
+            const next = new Set(prev).add(statusId);
+            try {
+                // Cap localStorage to last 500 entries to prevent unbounded growth
+                const arr = Array.from(next);
+                const trimmed = arr.length > 500 ? arr.slice(-500) : arr;
+                localStorage.setItem('nova_viewed_statuses', JSON.stringify(trimmed));
+            } catch (e) { /* quota exceeded — silently degrade */ }
+            return next;
+        });
+
+        // Fire and forget server update
+        if (currentUser?.uid) {
+            import('../services/statusService').then(({ markStatusAsViewed }) => {
+                markStatusAsViewed(ownerId, statusId, currentUser.uid);
+            }).catch(() => { /* silent */ });
+        }
+    }, [currentUser]);
     useEffect(() => {
         if (!currentUser) {
             setMyStatus(null);
@@ -123,8 +156,10 @@ export function StatusProvider({ children }) {
     const value = useMemo(() => ({
         statuses,
         myStatus,
-        addStatus
-    }), [statuses, myStatus, addStatus]);
+        addStatus,
+        viewedIds,
+        markAsViewed
+    }), [statuses, myStatus, addStatus, viewedIds, markAsViewed]);
 
     return (
         <StatusContext.Provider value={value}>

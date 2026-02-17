@@ -14,7 +14,8 @@ import {
     subscribeToCandidates,
     setLocalDescription,
     getCallDoc,
-    cleanupSignaling
+    cleanupSignaling,
+    waitForOffer
 } from "../services/callService";
 
 const CallContext = React.createContext();
@@ -283,11 +284,20 @@ export function CallProvider({ children }) {
             const callId = callState.id;
             const peer = await initPeerConnection(callId, false);
 
-            const callData = await getCallDoc(callId);
-            if (!callData) return;
+            // Wait for offer using realtime RTDB listener (not polling)
+            // This is instant — as soon as the caller writes the offer, we get it
+            const offer = await waitForOffer(callId);
+
+            if (!offer || !offer.type || !offer.sdp) {
+                console.error("[CallContext] No valid offer received. Cannot answer.");
+                endCall(true);
+                return;
+            }
+
+            console.log("[CallContext] Offer received, setting remote description...");
 
             // Set Remote Description (Offer)
-            await peer.setRemoteDescription(new RTCSessionDescription(callData.offer));
+            await peer.setRemoteDescription(new RTCSessionDescription(offer));
             processIceBuffer(peer);
 
             // Create Answer
@@ -298,7 +308,10 @@ export function CallProvider({ children }) {
             await setLocalDescription(callId, answer, 'answer');
             await updateCallStatus(callId, 'connected');
 
-            setCallState(prev => prev ? { ...prev, status: 'connected', startTime: Date.now(), chatId: callData.chatId } : null);
+            // Fetch full call data for chatId
+            const callData = await getCallDoc(callId);
+
+            setCallState(prev => prev ? { ...prev, status: 'connected', startTime: Date.now(), chatId: callData?.chatId } : null);
 
             // Listen for Candidates and End
             const unsubCandidates = subscribeToCandidates(callId, 'callee', (candidateData) => {

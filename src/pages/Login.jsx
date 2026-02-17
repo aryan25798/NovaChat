@@ -12,6 +12,7 @@ export default function Login() {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [loading, setLoading] = useState(false);
+    const [redirecting, setRedirecting] = useState(false);
     const [status, setStatus] = useState({ error: "" });
 
     React.useEffect(() => {
@@ -26,6 +27,11 @@ export default function Login() {
         setStatus({ error: "" });
         try {
             const result = await loginWithGoogle();
+            if (result === 'redirect') {
+                // User is being redirected to Google — show visual feedback
+                setRedirecting(true);
+                return; // Don't setLoading(false), page will navigate away
+            }
             // If result is null, login was silently cancelled (e.g. duplicate popup)
             if (!result) {
                 setLoading(false);
@@ -126,7 +132,7 @@ export default function Login() {
                                 className="w-full group relative flex items-center justify-center gap-3 px-8 py-4 bg-surface border border-border hover:bg-surface-elevated hover:border-primary/30 text-foreground font-medium rounded-xl transition-all duration-300 shadow-sm hover:shadow-lg hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
                             >
                                 <FaGoogle className="text-xl text-foreground/80 group-hover:text-primary transition-colors duration-300" />
-                                <span>{loading ? "Connecting..." : "Continue with Google"}</span>
+                                <span>{redirecting ? "Redirecting to Google..." : loading ? "Connecting..." : "Continue with Google"}</span>
                             </button>
 
                             <div className="relative">

@@ -162,7 +162,7 @@ export function useChatLogic(chat, currentUser) {
     };
 
     // 5. Memoization Logic (The "Engine")
-    const processMessages = useMemo(() => {
+    const sortedMessages = useMemo(() => {
         const uniqueMap = new Map();
         const clearedAt = chat?.clearedAt?.[currentUser.uid]?.toMillis?.() || 0;
 
@@ -179,19 +179,22 @@ export function useChatLogic(chat, currentUser) {
         signalMessages.forEach(process);
         pendingQueue.forEach(process); // Queue can override
 
-        const sorted = Array.from(uniqueMap.values()).sort((a, b) => {
+        return Array.from(uniqueMap.values()).sort((a, b) => {
             const tA = getMillis(a.timestamp);
             const tB = getMillis(b.timestamp);
             return tA !== tB ? tA - tB : a.id.localeCompare(b.id);
         });
+    }, [messages, historyMessages, serverResults, signalMessages, pendingQueue, chat?.clearedAt, currentUser.uid]);
 
-        // WhatsApp Style: Calculate tail/header grouping
-        return sorted.map((msg, i) => {
-            const nextMsg = sorted[i + 1];
+    // 6. Display Logic (Tails & Groups)
+    // Separating this allows us to only re-run tail calculation if the sorted list changes
+    const processMessages = useMemo(() => {
+        return sortedMessages.map((msg, i) => {
+            const nextMsg = sortedMessages[i + 1];
             const showTail = !nextMsg || nextMsg.senderId !== msg.senderId || nextMsg.type === 'call_log';
             return { ...msg, showTail };
         });
-    }, [messages, historyMessages, serverResults, signalMessages, pendingQueue, chat?.clearedAt, currentUser.uid]);
+    }, [sortedMessages]);
 
     // Prune pending queue
     useEffect(() => {

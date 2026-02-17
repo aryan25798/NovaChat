@@ -1,6 +1,6 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { postStatus } from "../services/statusService";
-import { useFileUpload } from "../hooks/useFileUpload";
+import { useFileUpload } from "../contexts/FileUploadContext";
 import UploadProgress from "./chat/UploadProgress";
 
 export default function StatusCreator({ onClose }) {

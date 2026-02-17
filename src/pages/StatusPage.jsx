@@ -7,21 +7,32 @@ import StatusViewer from "../components/status/StatusViewer";
 import StatusCreator from "../components/status/StatusCreator";
 import { formatDistanceToNow } from "date-fns";
 
+// Safe timestamp extractor — handles Firestore Timestamps, Dates, and raw numbers
+const safeDate = (ts) => {
+    if (!ts) return new Date();
+    if (typeof ts.toDate === 'function') return ts.toDate();
+    if (ts instanceof Date) return ts;
+    if (typeof ts === 'number') return new Date(ts);
+    return new Date();
+};
+
 const StatusPage = () => {
-    const { statuses, myStatus } = useStatus(); // removed addStatus from here, used in Creator
+    const { statuses, myStatus, viewedIds } = useStatus();
     const [viewingGroup, setViewingGroup] = useState(null);
     const [showCreator, setShowCreator] = useState(false);
     const [showMuted, setShowMuted] = useState(false);
+    const [showViewed, setShowViewed] = useState(true);
 
-    // Mock Viewed/Muted logic (would normally come from statusService/Context)
-    // For MVP, we'll assume all updates in 'statuses' are "Recent" unless marked viewed locally
-    // Since complex viewed/muted persistence is out of scope for this step, we'll just list them.
+    // Filter Logic — guarded against undefined IDs
+    const recentUpdates = statuses.filter(group => {
+        if (!group?.statuses?.length) return false;
+        return group.statuses.some(s => s?.id && !viewedIds.has(s.id));
+    });
 
-    // In a real app, `statuses` would be split into `recent`, `viewed`, `muted`.
-    // The `useStatus` hook currently returns `statuses` which are "active recent updates".
-
-    // Check if duplicate StatusViewer is an issue:
-    // We are using the one imported from '../components/status/StatusViewer'
+    const viewedUpdates = statuses.filter(group => {
+        if (!group?.statuses?.length) return false;
+        return group.statuses.every(s => s?.id && viewedIds.has(s.id));
+    });
 
     return (
         <div className="flex flex-col h-full bg-background md:max-w-md md:mx-auto md:border-x md:border-border relative">
@@ -47,7 +58,7 @@ const StatusPage = () => {
                     <div className="flex-1">
                         <h3 className="font-semibold text-foreground">My Status</h3>
                         <p className="text-sm text-muted-foreground">
-                            {myStatus ? formatDistanceToNow(myStatus.statuses[0].timestamp.toDate()) : "Tap to add status update"}
+                            {myStatus ? formatDistanceToNow(safeDate(myStatus.statuses[0]?.timestamp)) : "Tap to add status update"}
                         </p>
                     </div>
                 </div>
@@ -57,29 +68,61 @@ const StatusPage = () => {
                 </div>
 
                 {/* Recent Updates */}
-                {statuses.length === 0 ? (
-                    <div className="p-8 text-center text-muted-foreground text-sm">
-                        No recent updates from your contacts.
+                {recentUpdates.length === 0 ? (
+                    <div className="p-4 text-center text-muted-foreground text-sm italic opacity-60">
+                        No new updates
                     </div>
                 ) : (
-                    statuses.map((group) => (
+                    recentUpdates.map((group) => (
                         <div
                             key={group.user.uid}
                             className="p-4 flex items-center gap-4 cursor-pointer hover:bg-muted transition-colors"
                             onClick={() => setViewingGroup(group)}
                         >
                             <div className="relative">
-                                {/* Ring indicating unread status */}
+                                {/* Ring indicating unread status - Green */}
                                 <Avatar src={group.user.photoURL} size="lg" className="border-2 border-whatsapp-teal p-[2px]" />
                             </div>
                             <div className="flex-1">
                                 <h3 className="font-semibold text-foreground">{group.user.displayName}</h3>
                                 <p className="text-sm text-muted-foreground">
-                                    {formatDistanceToNow(group.statuses[group.statuses.length - 1].timestamp?.toDate() || new Date())}
+                                    {formatDistanceToNow(safeDate(group.statuses[group.statuses.length - 1]?.timestamp))}
                                 </p>
                             </div>
                         </div>
                     ))
+                )}
+
+                {/* Viewed Updates (Accordion) */}
+                {viewedUpdates.length > 0 && (
+                    <div className="mt-2">
+                        <div
+                            className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-muted/50 bg-muted/10"
+                            onClick={() => setShowViewed(!showViewed)}
+                        >
+                            <span className="text-sm font-bold text-muted-foreground uppercase">Viewed updates</span>
+                            {showViewed ? <IoChevronUp className="text-muted-foreground" /> : <IoChevronDown className="text-muted-foreground" />}
+                        </div>
+
+                        {showViewed && viewedUpdates.map((group) => (
+                            <div
+                                key={group.user.uid}
+                                className="p-4 flex items-center gap-4 cursor-pointer hover:bg-muted transition-colors opacity-75"
+                                onClick={() => setViewingGroup(group)}
+                            >
+                                <div className="relative">
+                                    {/* Gray Ring for Viewed */}
+                                    <Avatar src={group.user.photoURL} size="lg" className="border-2 border-border p-[2px]" />
+                                </div>
+                                <div className="flex-1">
+                                    <h3 className="font-semibold text-foreground">{group.user.displayName}</h3>
+                                    <p className="text-sm text-muted-foreground">
+                                        {formatDistanceToNow(safeDate(group.statuses[group.statuses.length - 1]?.timestamp))}
+                                    </p>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
                 )}
 
                 {/* Muted Updates (Accordion) */}

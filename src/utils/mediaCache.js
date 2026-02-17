@@ -66,6 +66,17 @@ export const revokeMediaURL = (objectURL) => {
 };
 
 /**
+ * Purges all active object URLs and clears the memory cache.
+ * Call this when switching chats or unmounting the chat window to prevent memory leaks.
+ */
+export const purgeMemoryCache = () => {
+    activeObjectURLs.forEach(url => URL.revokeObjectURL(url));
+    activeObjectURLs.clear();
+    memoryCache.clear();
+    console.log("[MediaCache] Memory cache purged.");
+};
+
+/**
  * Downloads and caches a media file.
  * @param {string} url - The remote URL
  * @returns {Promise<string>} - The local Object URL

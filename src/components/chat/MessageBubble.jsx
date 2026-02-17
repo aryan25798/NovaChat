@@ -127,10 +127,10 @@ const MessageBubble = ({ message, isOwn, onMediaClick, onCancelUpload }) => {
                 <div
                     className="relative rounded-lg overflow-hidden mb-1 bg-black/5 dark:bg-black/20 cursor-pointer group"
                     style={{
-                        aspectRatio: (message.width && message.height) ? `${message.width} / ${message.height}` : 'auto',
-                        minHeight: (message.width && message.height) ? 'auto' : '150px',
+                        aspectRatio: (message.width && message.height) ? `${message.width} / ${message.height}` : '4 / 3',
+                        minHeight: 'auto',
                         maxHeight: '350px',
-                        width: (message.width && message.height) && (message.width < message.height) ? 'fit-content' : '100%'
+                        width: '100%'
                     }}
                     onClick={handleMediaClick}
                 >
@@ -174,8 +174,8 @@ const MessageBubble = ({ message, isOwn, onMediaClick, onCancelUpload }) => {
                 <div
                     className="relative rounded-lg overflow-hidden mb-1 bg-black/5 dark:bg-black/20 cursor-pointer group"
                     style={{
-                        aspectRatio: (message.width && message.height) ? `${message.width} / ${message.height}` : 'auto',
-                        minWidth: '200px',
+                        aspectRatio: (message.width && message.height) ? `${message.width} / ${message.height}` : '4 / 3',
+                        width: '100%',
                         maxHeight: '350px'
                     }}
                     onClick={handleMediaClick}

@@ -23,7 +23,7 @@ import MessageList from "./chat/MessageList";
 import MessageInput from "./chat/MessageInput";
 import ContactInfoPanel from "./ContactInfoPanel";
 import FullScreenMedia from "./FullScreenMedia";
-import { preCacheMedia } from "../utils/mediaCache";
+import { preCacheMedia, purgeMemoryCache } from "../utils/mediaCache";
 import MediaPreviewModal from "./chat/MediaPreviewModal";
 import { useChatLogic } from "../hooks/useChatLogic";
 
@@ -72,10 +72,16 @@ export default function ChatWindow({ chat, setChat }) {
         });
     }, [messages, searchQuery]);
 
-    // Active Chat Reporting
+    // Active Chat Reporting & Cleanup
     useEffect(() => {
         if (chat?.id) updateActiveChat(chat.id);
-        return () => updateActiveChat(null);
+
+        // Cleanup function
+        return () => {
+            updateActiveChat(null);
+            // PURGE MEMORY CACHE to prevent leaks from ObjectURLs
+            purgeMemoryCache();
+        };
     }, [chat?.id, updateActiveChat]);
 
     // Context & Presence

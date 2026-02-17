@@ -1,6 +1,6 @@
 rules_version = '2';
-// @deployed 2026-02-10
-// @version 1.0.0 (Production)
+// @deployed 2026-02-17
+// @version 1.1.0 (Hardened - Fixed)
 // status: ACTIVE
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -29,18 +29,6 @@ service cloud.firestore {
       return isSignedIn() && (request.auth.token.get('isAdmin', false) == true || isGod());
     }
 
-    // Check if the user is a participant of a specific chat
-    // Private chat IDs use canonical format: [uid1, uid2].sort().join('_')
-    // Group chats use the participants array on the document
-    function isParticipant(cid) {
-      return isSignedIn() && (
-        // 1. Structural: check if UID appears in the chat ID (covers private + gemini chats)
-        (cid.split('_')[0] == request.auth.uid || cid.split('_')[1] == request.auth.uid) ||
-        // 2. Authoritative: check participants array for group chats
-        (resource != null && request.auth.uid in resource.data.get('participants', []))
-      );
-    }
-
     // Optimized Friend Check (Authoritative)
     function isFriendOf(uid) {
       return isSignedIn() && (
@@ -59,13 +47,12 @@ service cloud.firestore {
     }
 
     // Helper: Check if user is a member of the chat (fetching parent doc if needed)
+    // STRENGTHENED: Removed structural ID checks. Now strictly authoritative.
     function isChatMember(chatId) {
       return isSignedIn() && (
-        // 1. Authoritative: Check parent doc participants
-        (exists(/databases/$(database)/documents/chats/$(chatId)) && 
-         request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants) ||
-        // 2. Structural fallback: allow if ID matches the user's UID (for private chats)
-        isParticipant(chatId)
+        // Authoritative: Check parent doc participants
+        exists(/databases/$(database)/documents/chats/$(chatId)) && 
+        (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants)
       );
     }
 
@@ -112,19 +99,19 @@ service cloud.firestore {
 
     // 3. Chats Collection
     match /chats/{chatId} {
+      // READ: Check participants array directly on the resource (Free read)
       allow read: if (isSignedIn() && (
         (isAdmin() || isGod()) || 
-        (resource == null) || 
-        (request.auth.uid in resource.data.participants) ||
-        isParticipant(chatId)
+        (resource.data.participants != null && request.auth.uid in resource.data.participants)
       )) && isNotBanned();
       
+      // CREATE: Check if user is adding themselves to participants
       allow create: if isSignedIn() && isNotBanned() && 
         request.auth.uid in request.resource.data.participants;
       
+      // UPDATE: Check existing participants
       allow update: if (isSignedIn() && (
-         (request.auth.uid in resource.data.participants) ||
-         isParticipant(chatId) || isAdmin() || isGod()
+         (request.auth.uid in resource.data.participants) || isAdmin() || isGod()
       )) && (
         // Standard updates: block protected fields unless rate-limited
         (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastMessageTimestamp', 'participants', 'id', 'type', 'chatRole'])) ||
@@ -139,6 +126,7 @@ service cloud.firestore {
       allow delete: if isAdmin();
       
       match /messages/{messageId} {
+        // Subcollection access uses the helper (which uses get())
         allow read: if (isAdmin() || isGod() || isChatMember(chatId)) && isNotBanned();
         
         allow create: if (isChatMember(chatId) || isAdmin() || isGod()) && isNotBanned();
@@ -258,8 +246,12 @@ service cloud.firestore {
        // Only the owner can write their location
        allow write: if isSignedIn() && request.auth.uid == userId;
        
-       // Only the owner OR Admin/God can read
-       allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+       // Only the owner OR Admin/God OR Friends can read
+       allow read: if isSignedIn() && (
+         request.auth.uid == userId || 
+         isAdmin() || 
+         isFriendOf(userId)
+       );
     }
 
     // 8. Announcements (Admin Broadcasts — public reads, shown on login page)

@@ -22,6 +22,7 @@ export default function ContactInfoPanel({ user, chat, onClose, isOpen }) {
     const [mediaItems, setMediaItems] = useState({ media: [], links: [], docs: [] });
     const [showMediaTabs, setShowMediaTabs] = useState(false);
     const [mediaTab, setMediaTab] = useState('media');
+    const [lightboxItem, setLightboxItem] = useState(null);
 
     // State for full user profile (to get email/about if missing in props)
     const [fullUser, setFullUser] = useState(user);
@@ -535,7 +536,7 @@ export default function ContactInfoPanel({ user, chat, onClose, isOpen }) {
                         </div>
                     </motion.div>
 
-                    {/* Media Tabs Slide-over */}
+                    {/* Media Tabs Slide-over — Full overlay on all devices */}
                     <AnimatePresence>
                         {showMediaTabs && (
                             <motion.div
@@ -543,78 +544,173 @@ export default function ContactInfoPanel({ user, chat, onClose, isOpen }) {
                                 animate={{ x: 0 }}
                                 exit={{ x: '100%' }}
                                 transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-                                className="fixed inset-0 lg:static z-[80] lg:z-10 flex flex-col bg-surface overflow-hidden"
+                                className="fixed inset-0 z-[80] flex flex-col bg-surface overflow-hidden"
                             >
                                 <div className="h-16 px-4 flex items-center gap-4 bg-surface-elevated/80 backdrop-blur-md border-b border-border/50 shrink-0">
                                     <Button variant="ghost" size="icon" onClick={() => setShowMediaTabs(false)} className="text-text-2 hover:text-text-1">
                                         <FaArrowLeft />
                                     </Button>
-                                    <h3 className="text-[16px] font-medium text-text-1">Media</h3>
+                                    <h3 className="text-[16px] font-medium text-text-1">Media, Links and Docs</h3>
                                 </div>
 
-                                <div className="flex-1 overflow-y-auto p-4">
-                                    <div className="flex gap-4 border-b border-border/30 mb-4">
+                                <div className="flex-1 overflow-y-auto">
+                                    {/* Tab Buttons with counts */}
+                                    <div className="flex border-b border-border/30 sticky top-0 bg-surface z-10">
                                         {['media', 'docs', 'links'].map(tab => (
                                             <button
                                                 key={tab}
                                                 onClick={() => setMediaTab(tab)}
                                                 className={cn(
-                                                    "pb-2 text-sm font-medium capitalize transition-colors relative",
+                                                    "flex-1 py-3 text-sm font-medium capitalize transition-colors relative text-center",
                                                     mediaTab === tab ? "text-primary" : "text-text-2 hover:text-text-1"
                                                 )}
                                             >
-                                                {tab}
+                                                {tab} ({mediaItems[tab]?.length || 0})
                                                 {mediaTab === tab && (
-                                                    <motion.div layoutId="activeTab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
+                                                    <motion.div layoutId="mediaActiveTab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
                                                 )}
                                             </button>
                                         ))}
                                     </div>
 
-                                    {mediaTab === 'media' && (
-                                        <div className="grid grid-cols-3 gap-2">
-                                            {mediaItems.media.map(m => (
-                                                <div key={m.id} className="aspect-square relative group overflow-hidden rounded-lg bg-surface-elevated">
-                                                    {m.type === 'video' ? (
-                                                        <video src={m.videoUrl || m.fileUrl} className="w-full h-full object-cover" />
-                                                    ) : (
-                                                        <img src={m.mediaUrl || m.imageUrl || m.fileUrl} alt="media" className="w-full h-full object-cover" />
-                                                    )}
-                                                </div>
-                                            ))}
-                                            {mediaItems.media.length === 0 && <p className="text-text-2 text-sm col-span-3 text-center py-8">No media shared</p>}
-                                        </div>
-                                    )}
-
-                                    {mediaTab === 'docs' && (
-                                        <div className="space-y-2">
-                                            {mediaItems.docs.map(m => (
-                                                <div key={m.id} className="flex items-center gap-3 p-3 rounded-lg bg-surface-elevated/50 border border-border/30">
-                                                    <div className="w-10 h-10 rounded-lg bg-red-500/10 flex items-center justify-center text-red-500">
-                                                        <FaFileAlt />
+                                    <div className="p-4">
+                                        {mediaTab === 'media' && (
+                                            <div className="grid grid-cols-3 gap-1.5">
+                                                {mediaItems.media.map(m => {
+                                                    const src = m.mediaUrl || m.imageUrl || m.fileUrl;
+                                                    return (
+                                                        <div
+                                                            key={m.id}
+                                                            className="aspect-square relative group overflow-hidden rounded-md bg-surface-elevated cursor-pointer hover:opacity-90 transition-opacity"
+                                                            onClick={() => setLightboxItem(m)}
+                                                        >
+                                                            {m.type === 'video' ? (
+                                                                <>
+                                                                    <video src={m.videoUrl || m.fileUrl} className="w-full h-full object-cover" preload="metadata" />
+                                                                    <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                                                                        <div className="w-8 h-8 rounded-full bg-white/80 flex items-center justify-center">
+                                                                            <div className="w-0 h-0 border-t-[6px] border-b-[6px] border-l-[10px] border-t-transparent border-b-transparent border-l-black/70 ml-1" />
+                                                                        </div>
+                                                                    </div>
+                                                                </>
+                                                            ) : (
+                                                                <img src={src} alt="media" className="w-full h-full object-cover" loading="lazy" />
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                                {mediaItems.media.length === 0 && (
+                                                    <div className="col-span-3 text-center py-12">
+                                                        <p className="text-text-2 text-sm">No media shared yet</p>
                                                     </div>
-                                                    <div className="flex-1 min-w-0">
-                                                        <p className="text-sm font-medium text-text-1 truncate">{m.fileName || 'Document'}</p>
-                                                        <p className="text-xs text-text-2">{m.fileSize ? (m.fileSize / 1024).toFixed(1) + ' KB' : 'Unknown size'}</p>
-                                                    </div>
-                                                </div>
-                                            ))}
-                                            {mediaItems.docs.length === 0 && <p className="text-text-2 text-sm text-center py-8">No documents shared</p>}
-                                        </div>
-                                    )}
+                                                )}
+                                            </div>
+                                        )}
 
-                                    {mediaTab === 'links' && (
-                                        <div className="space-y-2">
-                                            {mediaItems.links.map(m => (
-                                                <div key={m.id} className="p-3 rounded-lg bg-surface-elevated/50 border border-border/30">
-                                                    <a href={m.url} target="_blank" rel="noopener noreferrer" className="text-primary text-sm hover:underline break-all block">
-                                                        {m.url}
-                                                    </a>
-                                                    <p className="text-xs text-text-2 mt-1">{format(m.timestamp?.toDate ? m.timestamp.toDate() : new Date(), 'MMM d, yyyy')}</p>
-                                                </div>
-                                            ))}
-                                            {mediaItems.links.length === 0 && <p className="text-text-2 text-sm text-center py-8">No links shared</p>}
-                                        </div>
+                                        {mediaTab === 'docs' && (
+                                            <div className="space-y-2">
+                                                {mediaItems.docs.map(m => {
+                                                    const docUrl = m.fileUrl || m.mediaUrl;
+                                                    return (
+                                                        <a
+                                                            key={m.id}
+                                                            href={docUrl}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            download={m.fileName}
+                                                            className="flex items-center gap-3 p-3 rounded-lg bg-surface-elevated/50 border border-border/30 hover:bg-surface-elevated transition-colors cursor-pointer group"
+                                                        >
+                                                            <div className="w-10 h-10 rounded-lg bg-red-500/10 flex items-center justify-center text-red-500 group-hover:bg-red-500/20 transition-colors">
+                                                                <FaFileAlt />
+                                                            </div>
+                                                            <div className="flex-1 min-w-0">
+                                                                <p className="text-sm font-medium text-text-1 truncate">{m.fileName || 'Document'}</p>
+                                                                <p className="text-xs text-text-2">{m.fileSize ? (m.fileSize / 1024 / 1024).toFixed(2) + ' MB' : 'Unknown size'}</p>
+                                                            </div>
+                                                            <FaExternalLinkAlt className="text-text-2 text-xs opacity-0 group-hover:opacity-100 transition-opacity" />
+                                                        </a>
+                                                    );
+                                                })}
+                                                {mediaItems.docs.length === 0 && (
+                                                    <div className="text-center py-12">
+                                                        <p className="text-text-2 text-sm">No documents shared yet</p>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {mediaTab === 'links' && (
+                                            <div className="space-y-2">
+                                                {mediaItems.links.map((m, idx) => {
+                                                    const ts = m.timestamp?.toDate ? m.timestamp.toDate() : (typeof m.timestamp === 'number' ? new Date(m.timestamp) : new Date());
+                                                    return (
+                                                        <a
+                                                            key={`${m.id}-${idx}`}
+                                                            href={m.url}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            className="block p-3 rounded-lg bg-surface-elevated/50 border border-border/30 hover:bg-surface-elevated transition-colors group"
+                                                        >
+                                                            <div className="flex items-center gap-2">
+                                                                <FaExternalLinkAlt className="text-primary text-xs shrink-0" />
+                                                                <span className="text-primary text-sm hover:underline break-all">{m.url}</span>
+                                                            </div>
+                                                            <p className="text-xs text-text-2 mt-1.5 ml-5">{format(ts, 'MMM d, yyyy')}</p>
+                                                        </a>
+                                                    );
+                                                })}
+                                                {mediaItems.links.length === 0 && (
+                                                    <div className="text-center py-12">
+                                                        <p className="text-text-2 text-sm">No links shared yet</p>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+
+                    {/* Media Lightbox */}
+                    <AnimatePresence>
+                        {lightboxItem && (
+                            <motion.div
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0 }}
+                                className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-md flex flex-col"
+                                onClick={() => setLightboxItem(null)}
+                            >
+                                <div className="h-14 px-4 flex items-center justify-between shrink-0">
+                                    <p className="text-white/70 text-sm">
+                                        {lightboxItem.timestamp?.toDate
+                                            ? format(lightboxItem.timestamp.toDate(), 'MMM d, yyyy h:mm a')
+                                            : ''}
+                                    </p>
+                                    <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        onClick={() => setLightboxItem(null)}
+                                        className="text-white/70 hover:text-white"
+                                    >
+                                        <FaTimes className="text-xl" />
+                                    </Button>
+                                </div>
+                                <div className="flex-1 flex items-center justify-center p-4" onClick={e => e.stopPropagation()}>
+                                    {lightboxItem.type === 'video' ? (
+                                        <video
+                                            src={lightboxItem.videoUrl || lightboxItem.fileUrl}
+                                            controls
+                                            autoPlay
+                                            className="max-w-full max-h-full object-contain rounded-lg"
+                                        />
+                                    ) : (
+                                        <img
+                                            src={lightboxItem.mediaUrl || lightboxItem.imageUrl || lightboxItem.fileUrl}
+                                            alt="Full size"
+                                            className="max-w-full max-h-full object-contain rounded-lg"
+                                        />
                                     )}
                                 </div>
                             </motion.div>

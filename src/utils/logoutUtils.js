@@ -37,6 +37,61 @@ export async function clearAllCaches(dbInstance) {
     clearAllStorage();
     await clearServiceWorkerCaches();
     await unregisterServiceWorkers();
+    await clearAllIndexedDB();
+}
+
+/**
+ * Clears ALL IndexedDB databases (Firestore cache, Firebase heartbeat, messaging, etc.)
+ * Uses indexedDB.databases() API where available, with fallback to known DB names.
+ */
+async function clearAllIndexedDB() {
+    const knownDbs = [
+        'firebase-heartbeat-database',
+        'firebaseLocalStorageDb',
+        'firebase-messaging-database',
+        'firebase-installations-database',
+    ];
+
+    // Discover all IndexedDB databases (Chrome 71+, Edge 79+, not Safari)
+    if (window.indexedDB && typeof window.indexedDB.databases === 'function') {
+        try {
+            const allDbs = await window.indexedDB.databases();
+            allDbs.forEach(dbInfo => {
+                if (dbInfo.name && !knownDbs.includes(dbInfo.name)) {
+                    knownDbs.push(dbInfo.name);
+                }
+            });
+        } catch (e) {
+            console.debug('Could not enumerate IndexedDB databases:', e);
+        }
+    }
+
+    const deletePromises = knownDbs.map(name => {
+        return new Promise((resolve) => {
+            if (!name) return resolve();
+            try {
+                const req = window.indexedDB.deleteDatabase(name);
+                req.onsuccess = () => {
+                    console.debug(`IndexedDB deleted: ${name}`);
+                    resolve();
+                };
+                req.onerror = () => {
+                    console.debug(`IndexedDB delete failed: ${name}`);
+                    resolve();
+                };
+                req.onblocked = () => {
+                    console.debug(`IndexedDB delete blocked: ${name}`);
+                    resolve();
+                };
+            } catch (e) {
+                console.debug(`IndexedDB delete error for ${name}:`, e);
+                resolve();
+            }
+        });
+    });
+
+    await Promise.all(deletePromises);
+    console.debug(`IndexedDB cleanup complete (${knownDbs.length} databases processed).`);
 }
 
 /**

@@ -95,3 +95,53 @@ exports.cleanupCallSignaling = onDocumentUpdated("calls/{callId}", async (event)
         ]);
     }
 });
+
+/**
+ * getTurnCredentials — Returns TURN/STUN ICE server configuration.
+ * Uses Metered.ca API for production-grade TURN relay servers.
+ * Falls back to free STUN-only if API fails.
+ */
+exports.getTurnCredentials = onCall(async (request) => {
+    if (!request.auth) {
+        throw new HttpsError('unauthenticated', 'Must be logged in to get TURN credentials.');
+    }
+
+    try {
+        // Use Metered.ca REST API to get TURN credentials
+        const METERED_API_KEY = process.env.METERED_API_KEY || 'd41fcd80c99fb8ab4c8fc16f2048aeb6dd74';
+        const response = await axios.get(
+            `https://whatsappclone.metered.live/api/v1/turn/credentials?apiKey=${METERED_API_KEY}`
+        );
+
+        if (response.data && Array.isArray(response.data) && response.data.length > 0) {
+            return response.data;
+        }
+
+        // If Metered returns empty, use static TURN config
+        return getStaticIceServers();
+    } catch (error) {
+        logger.warn('TURN credential fetch failed, using fallback STUN:', error.message);
+        return getStaticIceServers();
+    }
+});
+
+function getStaticIceServers() {
+    return [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' },
+        { urls: 'stun:stun.metered.ca:80' },
+        {
+            urls: 'turn:open-relay.metered.ca:443',
+            username: '89ec9d93e35a525ff4a39969',
+            credential: 'INLzksr+TacbOH9J'
+        },
+        {
+            urls: 'turn:open-relay.metered.ca:443?transport=tcp',
+            username: '89ec9d93e35a525ff4a39969',
+            credential: 'INLzksr+TacbOH9J'
+        }
+    ];
+}

@@ -264,12 +264,12 @@ exports.onMessageCreated = onDocumentCreated({
         const [userDocsResult, ...statusSnapshots] = await Promise.all([
             Promise.all(fetchPromises),
             // Fetch only the specific users' presence instead of the entire status node
-            ...recipientIds.map(uid => admin.database().ref(`status/${uid}`).get())
+            ...recipients.map(uid => admin.database().ref(`status/${uid}`).get())
         ]);
 
         const userDocs = userDocsResult.flat();
         const allStatuses = {};
-        recipientIds.forEach((uid, i) => {
+        recipients.forEach((uid, i) => {
             if (statusSnapshots[i].exists()) {
                 allStatuses[uid] = statusSnapshots[i].val();
             }

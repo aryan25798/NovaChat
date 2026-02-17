@@ -6,6 +6,7 @@ import { AuthProvider } from './contexts/AuthContext'
 import { CallProvider } from './contexts/CallContext'
 import { PresenceProvider } from './contexts/PresenceContext'
 import { ThemeProvider } from './contexts/ThemeContext'
+import { ChatProvider } from './contexts/ChatContext'
 
 
 
@@ -51,7 +52,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       <ThemeProvider>
         <CallProvider>
           <PresenceProvider>
-            <App />
+            <ChatProvider>
+              <App />
+            </ChatProvider>
           </PresenceProvider>
         </CallProvider>
       </ThemeProvider>

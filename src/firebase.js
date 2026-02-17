@@ -27,8 +27,12 @@ if (true) {
         });
         alert(`MISSING CONFIG: ${missingKeys.join(', ')}. Check .env file.`);
     } else {
-        console.log("Firebase config verified.");
+        const maskedKey = firebaseConfig.apiKey
+            ? `${firebaseConfig.apiKey.substring(0, 8)}...${firebaseConfig.apiKey.substring(firebaseConfig.apiKey.length - 4)}`
+            : "MISSING";
+        console.log(`Firebase config verified. API Key: ${maskedKey}`);
     }
+
 }
 
 const app = initializeApp(firebaseConfig);

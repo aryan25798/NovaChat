@@ -11,7 +11,7 @@ import {
     getDoc,
     setDoc
 } from "firebase/firestore";
-import { ref, set, onValue, push, onChildAdded, remove, get, off } from "firebase/database";
+import { ref, set, onValue, push, onChildAdded, remove, get, off, onDisconnect } from "firebase/database";
 import { listenerManager } from "../utils/ListenerManager";
 
 // --- Signaling & Call Management (Hybrid: Firestore for Status/History, RTDB for Signaling) ---
@@ -41,7 +41,7 @@ export const createCallDoc = async (caller, receiver, type, chatId) => {
     });
 
     // 3. Register Disconnect Cleanup (Safe Signaling)
-    rtdb.ref(`calls/${callId}`).onDisconnect().remove();
+    onDisconnect(ref(rtdb, `calls/${callId}`)).remove();
 
     return callId;
 };
@@ -158,6 +158,47 @@ export const getCallDoc = async (callId) => {
     return { ...fsData, ...rtdbData };
 };
 
+/**
+ * Wait for the offer to appear in RTDB using a realtime listener.
+ * Returns a promise that resolves with the offer object once it's available.
+ * Times out after 15 seconds if no offer arrives.
+ */
+export const waitForOffer = (callId) => {
+    return new Promise((resolve, reject) => {
+        const offerRef = ref(rtdb, `calls/${callId}/offer`);
+        let resolved = false;
+
+        const timeout = setTimeout(() => {
+            if (!resolved) {
+                resolved = true;
+                off(offerRef, 'value', listener);
+                console.error("[CallService] waitForOffer timed out after 15s");
+                resolve(null);
+            }
+        }, 15000);
+
+        const listener = onValue(offerRef, (snapshot) => {
+            const data = snapshot.val();
+            if (data && data.type && data.sdp) {
+                if (!resolved) {
+                    resolved = true;
+                    clearTimeout(timeout);
+                    off(offerRef, 'value', listener);
+                    console.log("[CallService] Offer received via realtime listener");
+                    resolve(data);
+                }
+            }
+        }, (error) => {
+            if (!resolved) {
+                resolved = true;
+                clearTimeout(timeout);
+                console.error("[CallService] waitForOffer error:", error);
+                resolve(null);
+            }
+        });
+    });
+};
+
 export const cleanupSignaling = async (callId) => {
     if (!callId) return;
     try {
@@ -171,9 +212,7 @@ export const cleanupSignaling = async (callId) => {
 // HELPER: Integrated Disconnect Watchdog
 export const registerDisconnectCleanup = (callId) => {
     if (!callId) return;
-    const rtdbRef = ref(rtdb, `calls/${callId}`);
     // This ensures if the tab crashes/closes, the RINGING and CANDIDATES are purged
     // Firestore status will still be 'missed' or 'ended' via client-side logic + triggers
-    const disconnectRef = ref(rtdb, `calls/${callId}`);
-    return rtdb.ref(`calls/${callId}`).onDisconnect().remove();
+    return onDisconnect(ref(rtdb, `calls/${callId}`)).remove();
 };
