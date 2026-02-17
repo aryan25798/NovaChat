@@ -85,13 +85,13 @@ importScripts('https://www.gstatic.com/firebasejs/10.13.2/firebase-database-comp
 
 // Initialize the Firebase app in the service worker
 const firebaseConfig = {
-    apiKey: "__VITE_FIREBASE_API_KEY__",
-    authDomain: "__VITE_FIREBASE_AUTH_DOMAIN__",
-    projectId: "__VITE_FIREBASE_PROJECT_ID__",
-    storageBucket: "__VITE_FIREBASE_STORAGE_BUCKET__",
-    messagingSenderId: "__VITE_FIREBASE_MESSAGING_SENDER_ID__",
-    appId: "__VITE_FIREBASE_APP_ID__",
-    databaseURL: "__VITE_FIREBASE_DATABASE_URL__"
+    apiKey: "AIzaSyDINn3KvxCX4FHQm_NG4pMsCAxeCcJeDqw",
+    authDomain: "whatsappclone-50b5b.firebaseapp.com",
+    projectId: "whatsappclone-50b5b",
+    storageBucket: "whatsappclone-50b5b.firebasestorage.app",
+    messagingSenderId: "662334343258",
+    appId: "1:662334343258:web:a1b7a9fe49563c9aeaf063",
+    databaseURL: "https://whatsappclone-50b5b-default-rtdb.firebaseio.com"
 };
 
 if (!firebaseConfig.apiKey) {

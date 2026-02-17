@@ -172,10 +172,10 @@ export const waitForOffer = (callId) => {
             if (!resolved) {
                 resolved = true;
                 off(offerRef, 'value', listener);
-                console.error("[CallService] waitForOffer timed out after 15s");
+                console.error("[CallService] waitForOffer timed out after 30s");
                 resolve(null);
             }
-        }, 15000);
+        }, 30000);
 
         const listener = onValue(offerRef, (snapshot) => {
             const data = snapshot.val();
