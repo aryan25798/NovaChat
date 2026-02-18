@@ -167,23 +167,27 @@ export const waitForOffer = (callId) => {
     return new Promise((resolve, reject) => {
         const offerRef = ref(rtdb, `calls/${callId}/offer`);
         let resolved = false;
+        let unsubscribe;
 
         const timeout = setTimeout(() => {
             if (!resolved) {
                 resolved = true;
-                off(offerRef, 'value', listener);
+                if (unsubscribe) unsubscribe();
                 console.error("[CallService] waitForOffer timed out after 30s");
                 resolve(null);
             }
         }, 30000);
 
-        const listener = onValue(offerRef, (snapshot) => {
+        unsubscribe = onValue(offerRef, (snapshot) => {
             const data = snapshot.val();
             if (data && data.type && data.sdp) {
                 if (!resolved) {
                     resolved = true;
                     clearTimeout(timeout);
-                    off(offerRef, 'value', listener);
+                    // Use a small timeout to ensure unsubscribe is defined if this fires synchronously
+                    if (unsubscribe) unsubscribe();
+                    else setTimeout(() => unsubscribe && unsubscribe(), 0);
+
                     console.log("[CallService] Offer received via realtime listener");
                     resolve(data);
                 }

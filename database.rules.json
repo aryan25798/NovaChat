@@ -55,7 +55,7 @@
         },
         "calls": {
             "$callId": {
-                ".read": "auth != null && (data.child('callerId').val() === auth.uid || data.child('receiverId').val() === auth.uid)",
+                ".read": "auth != null && (data.child('callerId').val() === auth.uid || data.child('receiverId').val() === auth.uid || !data.exists())",
                 ".write": "auth != null && (newData.child('callerId').val() === auth.uid || newData.child('receiverId').val() === auth.uid || data.child('callerId').val() === auth.uid || data.child('receiverId').val() === auth.uid || !data.exists())"
             }
         }

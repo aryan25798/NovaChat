@@ -50,14 +50,24 @@ export function CallProvider({ children }) {
     const remoteVideoRef = useRef();
     const pc = useRef(null);
     const stream = useRef(null);
+    const remoteStream = useRef(null); // NEW: Store remote stream independently of UI
     const listeners = useRef([]);
-    const iceBuffer = useRef([]); // Buffer for candidates received before remoteDescription
+    const iceBuffer = useRef([]);
 
     // Cleanup helper
     const clearListeners = () => {
         listeners.current.forEach(unsub => unsub());
         listeners.current = [];
     };
+
+    // Ensure remote stream is attached when UI becomes ready
+    useEffect(() => {
+        if (callState?.status === 'connected' && remoteVideoRef.current && remoteStream.current) {
+            console.log("[CallContext] Attaching late remote stream to video element");
+            remoteVideoRef.current.srcObject = remoteStream.current;
+            remoteVideoRef.current.play().catch(e => console.warn("Auto-play blocked:", e));
+        }
+    }, [callState?.status]);
 
     // 1. Listen for Incoming Calls
     useEffect(() => {
@@ -128,6 +138,9 @@ export function CallProvider({ children }) {
             stream.current = null;
         }
 
+        // Reset remote stream
+        remoteStream.current = null;
+
         // Get media
         let localStream;
         try {
@@ -156,27 +169,40 @@ export function CallProvider({ children }) {
             throw err;
         }
 
+        console.log("[CallContext] getUserMedia success");
+
         stream.current = localStream;
         if (localVideoRef.current) localVideoRef.current.srcObject = localStream;
 
         const iceServers = await getIceServers();
+        console.log("[CallContext] Configured ICE Servers:", iceServers);
+
         const peer = new RTCPeerConnection({
             iceServers,
             iceCandidatePoolSize: 10
         });
+        console.log("[CallContext] PeerConnection initialized");
         pc.current = peer;
 
         localStream.getTracks().forEach(track => peer.addTrack(track, localStream));
 
         peer.ontrack = (event) => {
+            console.log("[CallContext] ontack fired. Tracks:", event.streams[0].getTracks());
+            remoteStream.current = event.streams[0];
+
             if (remoteVideoRef.current) {
+                console.log("[CallContext] Attaching remote stream immediately");
                 remoteVideoRef.current.srcObject = event.streams[0];
+                remoteVideoRef.current.play().catch(e => console.warn("Auto-play blocked:", e));
+            } else {
+                console.log("[CallContext] remoteVideoRef is null, stream buffered in ref");
             }
         };
 
         // Network robustness
         peer.oniceconnectionstatechange = () => {
             const state = peer.iceConnectionState;
+            console.log(`[CallContext] ICE Connection State Changed: ${state}`);
             setCallState(prev => prev ? { ...prev, connectionState: state } : null);
 
             if (state === 'failed' || state === 'disconnected') {
@@ -187,8 +213,15 @@ export function CallProvider({ children }) {
         // ICE Candidates
         peer.onicecandidate = (e) => {
             if (e.candidate) {
+                console.log("[CallContext] Generated Local ICE Candidate");
                 addCandidate(callId, isCaller ? 'caller' : 'callee', e.candidate);
+            } else {
+                console.log("[CallContext] Local ICE Candidate Gathering Complete");
             }
+        };
+
+        peer.onconnectionstatechange = () => {
+            console.log(`[CallContext] Peer Connection State: ${peer.connectionState}`);
         };
 
         return peer;
@@ -198,6 +231,7 @@ export function CallProvider({ children }) {
         if (!peer || !peer.remoteDescription) return;
         console.log(`[CallContext] Processing ${iceBuffer.current.length} buffered ICE candidates`);
         iceBuffer.current.forEach(candidate => {
+            console.log("[CallContext] Adding buffered candidate");
             peer.addIceCandidate(new RTCIceCandidate(candidate)).catch(e =>
                 console.warn("[CallContext] Buffered ICE error:", e)
             );
@@ -213,6 +247,8 @@ export function CallProvider({ children }) {
         }
         console.log("[CallContext] startCall called for:", otherUser?.uid, "Type:", type);
         try {
+            // Ensure audio context is ready (user gesture)
+            await soundService.ensureAudioContext();
             soundService.play('dialing', true); // Play Dialing Sound
             console.log("[CallContext] Dialing sound started");
 
@@ -248,6 +284,7 @@ export function CallProvider({ children }) {
 
                 if (data?.answer && !peer.currentRemoteDescription) {
                     soundService.stop(); // Stop dialing
+                    console.log("[CallContext] Answer received, setting remote description");
                     const rtcDesc = new RTCSessionDescription(data.answer);
                     await peer.setRemoteDescription(rtcDesc);
                     setCallState(prev => prev ? { ...prev, status: 'connected', startTime: Date.now() } : null);
@@ -260,9 +297,11 @@ export function CallProvider({ children }) {
             });
 
             const unsubCandidates = subscribeToCandidates(callId, 'caller', (candidateData) => {
+                console.log("[CallContext] Received Remote Candidate (Callee)");
                 if (peer.remoteDescription) {
                     peer.addIceCandidate(new RTCIceCandidate(candidateData)).catch(e => console.warn("ICE Error:", e));
                 } else {
+                    console.log("[CallContext] Buffering Remote Candidate");
                     iceBuffer.current.push(candidateData);
                 }
             });
@@ -279,6 +318,7 @@ export function CallProvider({ children }) {
     const answerCall = async () => {
         try {
             if (!callState || callState.status === 'connected') return;
+            await soundService.ensureAudioContext(); // Ensure audio is ready
             soundService.stop(); // Stop Ringtone
 
             const callId = callState.id;
@@ -315,9 +355,11 @@ export function CallProvider({ children }) {
 
             // Listen for Candidates and End
             const unsubCandidates = subscribeToCandidates(callId, 'callee', (candidateData) => {
+                console.log("[CallContext] Received Remote Candidate (Caller)");
                 if (peer.remoteDescription) {
                     peer.addIceCandidate(new RTCIceCandidate(candidateData)).catch(e => console.warn("ICE Error:", e));
                 } else {
+                    console.log("[CallContext] Buffering Remote Candidate");
                     iceBuffer.current.push(candidateData);
                 }
             });

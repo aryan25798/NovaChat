@@ -11,13 +11,22 @@ class SoundService {
         }
     }
 
+    async ensureAudioContext() {
+        this.init();
+        if (this.audioCtx.state === 'suspended') {
+            try {
+                await this.audioCtx.resume();
+                console.log("[SoundService] AudioContext resumed");
+            } catch (e) {
+                console.warn("[SoundService] Failed to resume AudioContext:", e);
+            }
+        }
+    }
+
     play(type, loop = false) {
         this.init();
+        this.ensureAudioContext(); // Try to resume, but don't blocking wait for immediate start
         this.stop(); // Stop any pending sounds
-
-        if (this.audioCtx.state === 'suspended') {
-            this.audioCtx.resume();
-        }
 
         const playTone = () => {
             const oscillator = this.audioCtx.createOscillator();
