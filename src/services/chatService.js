@@ -33,7 +33,7 @@ const deleteChatFn = httpsCallable(functions, 'deleteChat');
  * @param {function} onUnreadUpdate - Optional callback when unread messages are detected
  * @returns {function} unsubscribe function
  */
-export const subscribeToMessages = (chatId, currentUserId, callback, updateReadStatus = true, limitCount = 20) => {
+export const subscribeToMessages = (chatId, currentUserId, callback, updateReadStatus = true, limitCount = 20, onError = null) => {
     if (!chatId) return () => { };
 
     const listenerKey = `messages-${chatId}`;
@@ -116,6 +116,7 @@ export const subscribeToMessages = (chatId, currentUserId, callback, updateReadS
         }
     }, (error) => {
         listenerManager.handleListenerError(error, `Messages-${chatId}`);
+        if (typeof onError === 'function') onError(error);
     }, { includeMetadataChanges: true }); // Re-enabled for native optimism
 
     listenerManager.subscribe(listenerKey, unsubscribe);

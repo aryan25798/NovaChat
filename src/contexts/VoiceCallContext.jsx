@@ -285,11 +285,22 @@ export const VoiceCallProvider = ({ children }) => {
     const answerCall = async () => {
         if (!callState) return;
         try {
-            await soundService.ensureAudioContext();
+            // STEP 1: Fast UNLOCK of audio (doesn't wait for resume completion)
+            soundService.ensureAudioContext().catch(e => console.debug("Sync Audio Unlock ignored", e));
             soundService.stop();
 
-            const peer = await initPeerConnection(callState.id, false);
-            const offer = await waitForOffer(callState.id);
+            // STEP 2: Parallelize Media & Signaling (Crucial for Mobile Gesture timeout)
+            console.log("[VoiceCall] Answering: Triggering media and signaling in parallel...");
+            const [peer, offer] = await Promise.all([
+                initPeerConnection(callState.id, false),
+                waitForOffer(callState.id)
+            ]);
+
+            if (!peer || !offer) {
+                console.error("[VoiceCall] Failed to initialize peer or fetch offer.");
+                endCall(true);
+                return;
+            }
 
             await peer.setRemoteDescription(new RTCSessionDescription(offer));
             const answer = await peer.createAnswer();

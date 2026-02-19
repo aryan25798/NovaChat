@@ -677,17 +677,22 @@ export function CallProvider({ children }) {
     const answerCall = async () => {
         try {
             if (!callState || callState.status === 'connected') return;
-            await soundService.ensureAudioContext(); // Ensure audio is ready
-            soundService.stop(); // Stop Ringtone
+
+            // STEP 1: Fast UNLOCK of audio
+            soundService.ensureAudioContext().catch(e => console.debug("Sync Audio Unlock ignored", e));
+            soundService.stop();
 
             const callId = callState.id;
-            const peer = await initPeerConnection(callId, false);
 
-            // Wait for offer using realtime RTDB listener (not polling)
-            const offer = await waitForOffer(callId);
+            // STEP 2: Parallelize Media & Signaling
+            console.log("[CallContext] Answering: Triggering media and signaling in parallel...");
+            const [peer, offer] = await Promise.all([
+                initPeerConnection(callId, false),
+                waitForOffer(callId)
+            ]);
 
-            if (!offer || !offer.type || !offer.sdp) {
-                console.error("[CallContext] No valid offer received. Cannot answer.");
+            if (!peer || !offer || !offer.type || !offer.sdp) {
+                console.error("[CallContext] No valid offer or peer received. Cannot answer.");
                 endCall(true);
                 return;
             }
@@ -695,7 +700,6 @@ export function CallProvider({ children }) {
             console.log("[CallContext] Offer received, setting remote description...");
 
             // Set Remote Description (Offer)
-            // Ensure we are in the right state to accept an offer (usually 'stable' or 'have-remote-offer' if renegotiating)
             if (peer.signalingState === 'stable') {
                 await peer.setRemoteDescription(new RTCSessionDescription(offer));
                 processIceBuffer(peer);
@@ -905,17 +909,21 @@ export function CallProvider({ children }) {
             const currentVideoTrack = stream.current.getVideoTracks()[0];
             if (!currentVideoTrack) return;
 
+            // PRESERVE AUDIO: Keep the existing audio track
+            const currentAudioTrack = stream.current.getAudioTracks()[0];
+
             const currentFacingMode = currentVideoTrack.getSettings().facingMode;
+            // On some mobile browsers, facingMode might be undefined or empty in settings
+            // We'll toggle based on a local ref or just try the other one
             const newFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
 
-            console.log(`[CallContext] Switching camera to: ${newFacingMode}`);
+            console.log(`[CallContext] Switching camera from ${currentFacingMode} to: ${newFacingMode}`);
 
             const newConstraints = {
                 video: {
-                    facingMode: { exact: newFacingMode },
+                    facingMode: newFacingMode, // Try without 'exact' first for better compatibility
                     width: { ideal: 1280 },
-                    height: { ideal: 720 },
-                    frameRate: { ideal: 60, min: 30 }
+                    height: { ideal: 720 }
                 }
             };
 
@@ -923,40 +931,51 @@ export function CallProvider({ children }) {
             try {
                 newStream = await navigator.mediaDevices.getUserMedia(newConstraints);
             } catch (err) {
-                // Fallback to non-exact if exact fails (some browsers/devices don't support 'exact')
-                console.warn("Exact facingMode failed, trying loose constraint");
-                newStream = await navigator.mediaDevices.getUserMedia({
-                    video: {
-                        facingMode: newFacingMode,
-                        width: { ideal: 1280 },
-                        height: { ideal: 720 }
-                    }
-                });
+                console.warn("[CallContext] Standard switch failed, trying with exact facingMode...");
+                try {
+                    newStream = await navigator.mediaDevices.getUserMedia({
+                        video: { facingMode: { exact: newFacingMode } }
+                    });
+                } catch (err2) {
+                    console.error("[CallContext] All camera switch attempts failed:", err2);
+                    throw new Error("Could not access " + newFacingMode + " camera.");
+                }
             }
 
             const newVideoTrack = newStream.getVideoTracks()[0];
 
             // 1. Replace track in PeerConnection (smooth switch for remote)
             if (pc.current) {
-                const sender = pc.current.getSenders().find(s => s.track.kind === 'video');
+                const sender = pc.current.getSenders().find(s => s.track?.kind === 'video');
                 if (sender) {
                     await sender.replaceTrack(newVideoTrack);
+                    console.log("[CallContext] Remote track replaced successfully");
                 }
             }
 
-            // 2. Update Local Stream (for self-view)
-            currentVideoTrack.stop(); // Stop old track
-            stream.current = newStream;
-            setActiveLocalStream(newStream); // Trigger UI update
+            // 2. Stop OLD video track ONLY
+            currentVideoTrack.stop();
 
-            // Re-attach to ref if needed (useEffect handles this but good to be explicit)
-            if (localVideoRef.current) {
-                localVideoRef.current.srcObject = newStream;
+            // 3. Construct NEW stream preserving the original audio track
+            const combinedStream = new MediaStream([newVideoTrack]);
+            if (currentAudioTrack) {
+                combinedStream.addTrack(currentAudioTrack);
             }
+
+            // 4. Update Internal State
+            stream.current = combinedStream;
+            setActiveLocalStream(combinedStream);
+
+            // 5. Update UI Ref
+            if (localVideoRef.current) {
+                localVideoRef.current.srcObject = combinedStream;
+            }
+
+            console.log("[CallContext] Switch camera complete. Audio preserved:", !!currentAudioTrack);
 
         } catch (err) {
             console.error("Error switching camera:", err);
-            alert("Could not switch camera. " + err.message);
+            alert("Could not switch camera: " + err.message);
         }
     };
 

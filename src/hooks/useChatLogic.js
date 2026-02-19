@@ -57,6 +57,11 @@ export function useChatLogic(chat, currentUser) {
             });
             setLoading(false);
             setHasMoreMessages(newMessages.length >= 20); // Heuristic
+        }, true, 20, (error) => {
+            // Error callback: Ensure we stop shimmering if snapshot fails (e.g. Permission Denied on ghost chat)
+            if (!isMounted) return;
+            console.debug("[useChatLogic] Subscription failed/blocked:", error.message);
+            setLoading(false);
         });
 
         return () => {

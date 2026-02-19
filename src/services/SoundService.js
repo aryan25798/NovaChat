@@ -20,17 +20,28 @@ class SoundService {
 
     async ensureAudioContext() {
         this.init();
-        // Only attempt to resume if we think we might be allowed, or if we want to risk the warning.
-        // If state is suspended and we haven't unlocked, it will likely fail for ringtones (no interaction).
+        if (!this.audioCtx) return;
+
+        // If context is closed, re-init
+        if (this.audioCtx.state === 'closed') {
+            this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+
         if (this.audioCtx.state === 'suspended') {
             try {
-                await this.audioCtx.resume();
-                console.log("[SoundService] AudioContext resumed");
+                // We don't necessarily 'await' this indefinitely if it blocks
+                const resumePromise = this.audioCtx.resume();
                 this.unlocked = true;
+                await Promise.race([
+                    resumePromise,
+                    new Promise(resolve => setTimeout(resolve, 500)) // 500ms safety timeout
+                ]);
+                console.log("[SoundService] AudioContext resume attempt complete");
             } catch (e) {
-                // Squelch error - it's expected if no interaction yet
-                console.debug("[SoundService] Autoplay prevented (waiting for interaction)");
+                console.debug("[SoundService] Autoplay prevented or resume failed:", e);
             }
+        } else {
+            this.unlocked = true;
         }
     }
 

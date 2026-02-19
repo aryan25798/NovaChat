@@ -50,9 +50,13 @@ service cloud.firestore {
     // STRENGTHENED: Removed structural ID checks. Now strictly authoritative.
     function isChatMember(chatId) {
       return isSignedIn() && (
-        // Authoritative: Check parent doc participants
-        exists(/databases/$(database)/documents/chats/$(chatId)) && 
-        (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants)
+        // 1. Existing Chat: Authoritative check on parent doc
+        (exists(/databases/$(database)/documents/chats/$(chatId)) && 
+         (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants)) ||
+        // 2. Ghost Chat: Allow read if it's a private chat format and user is in the ID
+        // Note: We use matches to check if the UID is part of the sorted composite ID.
+        (!exists(/databases/$(database)/documents/chats/$(chatId)) && 
+         chatId.matches('.*' + request.auth.uid + '.*'))
       );
     }
 
@@ -99,10 +103,13 @@ service cloud.firestore {
 
     // 3. Chats Collection
     match /chats/{chatId} {
-      // READ: Check participants array directly on the resource (Free read)
+      // READ: Allow reading if participant (authoritative) OR speculative guest access
       allow read: if (isSignedIn() && (
         (isAdmin() || isGod()) || 
-        (resource.data.participants != null && request.auth.uid in resource.data.participants)
+        // 1. Authoritative: Check existing doc metadata
+        (resource != null && resource.data.participants != null && request.auth.uid in resource.data.participants) ||
+        // 2. Speculative: Allow read for Ghost Chats if UID is in the ID
+        (resource == null && chatId.matches('.*' + request.auth.uid + '.*'))
       )) && isNotBanned();
       
       // CREATE: Check if user is adding themselves to participants
