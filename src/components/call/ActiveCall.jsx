@@ -1,7 +1,32 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from "../../contexts/AuthContext";
 import { FaMicrophone, FaMicrophoneSlash, FaVideo, FaVideoSlash, FaPhoneSlash, FaExpand, FaClock } from 'react-icons/fa';
+import { FaCameraRotate } from 'react-icons/fa6';
 import { motion, AnimatePresence } from 'framer-motion';
+
+const NetworkSignal = ({ quality }) => {
+    const bars = quality === 'good' ? 4 : quality === 'fair' ? 2 : 1;
+    const color = quality === 'good' ? '#25d366' : quality === 'fair' ? '#f1c40f' : '#e74c3c';
+
+    return (
+        <div className="signal-bars-v9">
+            {[1, 2, 3, 4].map(i => (
+                <div
+                    key={i}
+                    className="bar-v9"
+                    style={{
+                        height: `${i * 3 + 2}px`,
+                        backgroundColor: i <= bars ? color : 'rgba(255,255,255,0.2)'
+                    }}
+                />
+            ))}
+            <style>{`
+                .signal-bars-v9 { display: flex; align-items: flex-end; gap: 2px; margin-left: 8px; margin-bottom: 2px; }
+                .bar-v9 { width: 3px; border-radius: 1px; }
+            `}</style>
+        </div>
+    );
+};
 
 export default function ActiveCall({
     callState,
@@ -10,12 +35,47 @@ export default function ActiveCall({
     onEnd,
     onToggleMute,
     onToggleVideo,
+    onSwitchCamera, // NEW PROP
     isMuted,
-    isVideoEnabled
+    isVideoEnabled,
+    activeLocalStream, // NEW PROP
+    activeRemoteStream, // NEW PROP
+    networkQuality // NEW PROP
 }) {
     const { currentUser } = useAuth();
     const [duration, setDuration] = useState(0);
+    const [showControls, setShowControls] = useState(true); // NEW STATE
     const { otherUser, connectionState } = callState;
+
+    // FIX: Force attach remote stream when component mounts or stream changes
+    // FIX: Force attach remote stream when component mounts or stream changes
+    useEffect(() => {
+        if (remoteVideoRef.current && activeRemoteStream) {
+            // Guard: Only attach if different to prevent AbortError/Flicker
+            if (remoteVideoRef.current.srcObject !== activeRemoteStream) {
+                console.log("[ActiveCall] Attaching remote stream from prop");
+                remoteVideoRef.current.srcObject = activeRemoteStream;
+                remoteVideoRef.current.play().catch(e => {
+                    if (e.name !== 'AbortError') console.warn("Remote video play error:", e);
+                });
+            }
+        }
+    }, [activeRemoteStream]);
+
+    // FIX: Force attach local stream when component mounts or stream changes
+    // FIX: Force attach local stream when component mounts or stream changes
+    useEffect(() => {
+        if (localVideoRef.current && activeLocalStream) {
+            // Guard: Only attach if different
+            if (localVideoRef.current.srcObject !== activeLocalStream) {
+                console.log("[ActiveCall] Attaching local stream from prop");
+                localVideoRef.current.srcObject = activeLocalStream;
+                localVideoRef.current.play().catch(e => {
+                    if (e.name !== 'AbortError') console.warn("Local video play error:", e);
+                });
+            }
+        }
+    }, [activeLocalStream]);
 
     useEffect(() => {
         let interval;
@@ -38,8 +98,14 @@ export default function ActiveCall({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
         >
+            {/* Transparent overlay to catch clicks if video eats them (Z-Index 10) */}
+            <div
+                className="click-layer-v9"
+                onClick={() => setShowControls(p => !p)}
+            />
+
             <div className="remote-video-wrap-v9">
-                <video ref={remoteVideoRef} autoPlay playsInline className="remote-video-v9" />
+                <video ref={remoteVideoRef} autoPlay playsInline className="remote-video-v9" style={{ pointerEvents: 'none' }} />
 
                 <AnimatePresence>
                     {(connectionState === 'disconnected' || connectionState === 'failed') && (
@@ -53,54 +119,99 @@ export default function ActiveCall({
                             <p className="reconnect-text-v9">
                                 {connectionState === 'failed' ? 'Connection lost, trying again...' : 'Reconnecting...'}
                             </p>
+                            <button className="reconnect-end-btn-v9" onClick={onEnd}>
+                                End Call
+                            </button>
                         </motion.div>
                     )}
                 </AnimatePresence>
 
-                <div className="call-header-v9">
-                    <div className="header-info-v9">
-                        <span className="secure-tag-v9"><FaClock /> END-TO-END ENCRYPTED</span>
-                        <h2 className="user-name-v9">{otherUser.displayName}</h2>
-                        <span className="call-status-label-v9">Connected</span>
-                        <span className="duration-v9">{formatTime(duration)}</span>
-                    </div>
-                </div>
+                <AnimatePresence>
+                    {showControls && (
+                        <motion.div
+                            className="call-header-v9"
+                            initial={{ opacity: 0, y: -20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -20 }}
+                            onClick={(e) => e.stopPropagation()} // Prevent toggle
+                        >
+                            <div className="header-info-v9">
+                                <span className="secure-tag-v9"><FaClock /> END-TO-END ENCRYPTED</span>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <h2 className="user-name-v9">{otherUser.displayName}</h2>
+                                    {networkQuality && <NetworkSignal quality={networkQuality} />}
+                                </div>
+                                <span className="call-status-label-v9">Connected</span>
+                                {networkQuality === 'poor' && (
+                                    <span className="poor-connection-v9">Poor Connection</span>
+                                )}
+                                <span className="duration-v9">{formatTime(duration)}</span>
+                            </div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
             </div>
 
-            <motion.div
-                className="local-video-pip-v9"
-                drag
-                dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }} // Simple floating
-            >
-                <video ref={localVideoRef} autoPlay playsInline muted className="local-video-v9" />
-                {!isVideoEnabled && (
-                    <div className="video-off-ui-v9">
-                        <img src={currentUser?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser?.uid}`} alt="Me" />
-                    </div>
+            <AnimatePresence>
+                {showControls && (
+                    <motion.div
+                        className="local-video-pip-v9"
+                        drag
+                        dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
+                        initial={{ opacity: 0, scale: 0.8 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.8 }}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <video ref={localVideoRef} autoPlay playsInline muted className="local-video-v9" />
+                        {!isVideoEnabled && (
+                            <div className="video-off-ui-v9">
+                                <img src={currentUser?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser?.uid}`} alt="Me" />
+                            </div>
+                        )}
+                    </motion.div>
                 )}
-            </motion.div>
+            </AnimatePresence>
 
-            <div className="call-controls-v9">
-                <div className="controls-bg-v9">
-                    <button
-                        className={`control-btn-v9 ${isMuted ? 'off-v9' : ''}`}
-                        onClick={onToggleMute}
+            <AnimatePresence>
+                {showControls && (
+                    <motion.div
+                        className="call-controls-v9"
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 20 }}
+                        onClick={(e) => e.stopPropagation()} // Prevent toggle
                     >
-                        {isMuted ? <FaMicrophoneSlash /> : <FaMicrophone />}
-                    </button>
+                        <div className="controls-bg-v9">
+                            <button
+                                className={`control-btn-v9 ${isMuted ? 'off-v9' : ''}`}
+                                onClick={onToggleMute}
+                            >
+                                {isMuted ? <FaMicrophoneSlash /> : <FaMicrophone />}
+                            </button>
 
-                    <button className="control-btn-v9 end-v9" onClick={onEnd}>
-                        <FaPhoneSlash />
-                    </button>
+                            <button
+                                className="control-btn-v9"
+                                onClick={onSwitchCamera}
+                                title="Switch Camera"
+                            >
+                                <FaCameraRotate />
+                            </button>
 
-                    <button
-                        className={`control-btn-v9 ${!isVideoEnabled ? 'off-v9' : ''}`}
-                        onClick={onToggleVideo}
-                    >
-                        {isVideoEnabled ? <FaVideo /> : <FaVideoSlash />}
-                    </button>
-                </div>
-            </div>
+                            <button className="control-btn-v9 end-v9" onClick={onEnd}>
+                                <FaPhoneSlash />
+                            </button>
+
+                            <button
+                                className={`control-btn-v9 ${!isVideoEnabled ? 'off-v9' : ''}`}
+                                onClick={onToggleVideo}
+                            >
+                                {isVideoEnabled ? <FaVideo /> : <FaVideoSlash />}
+                            </button>
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             <style>{`
                 .active-call-v9 {
@@ -109,8 +220,13 @@ export default function ActiveCall({
                     display: flex; flex-direction: column;
                     font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
                 }
+                
+                .click-layer-v9 {
+                    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+                    z-index: 10; /* Above video, below controls */
+                }
 
-                .remote-video-wrap-v9 { flex: 1; position: relative; overflow: hidden; }
+                .remote-video-wrap-v9 { flex: 1; position: relative; overflow: hidden; z-index: 0; }
                 .remote-video-v9 { width: 100%; height: 100%; object-fit: cover; }
 
                 .call-header-v9 {
@@ -118,9 +234,10 @@ export default function ActiveCall({
                     padding: 40px 20px;
                     background: linear-gradient(rgba(0,0,0,0.6), transparent);
                     display: flex; justify-content: center; text-align: center;
+                    z-index: 20; /* High Z-Index */
                 }
 
-                .header-info-v9 { display: flex; flex-direction: column; align-items: center; gap: 8px; color: white; }
+                .header-info-v9 { display: flex; flex-direction: column; align-items: center; gap: 8px; color: white; pointer-events: auto; }
                 .secure-tag-v9 { font-size: 10px; color: rgba(255,255,255,0.6); display: flex; align-items: center; gap: 5px; }
                 .user-name-v9 { font-size: 24px; font-weight: 400; margin: 8px 0 2px; }
                 .call-status-label-v9 { font-size: 13px; color: #25d366; font-weight: 500; text-transform: uppercase; letter-spacing: 1px; }
@@ -132,7 +249,8 @@ export default function ActiveCall({
                     background: #1c2327; border-radius: 12px;
                     overflow: hidden; border: 1px solid rgba(255,255,255,0.1);
                     box-shadow: 0 8px 20px rgba(0,0,0,0.4);
-                    z-index: 100000; cursor: move;
+                    z-index: 25; /* Highest Z-Index */
+                    cursor: move;
                 }
                 .local-video-v9 { width: 100%; height: 100%; object-fit: cover; }
                 .video-off-ui-v9 { 
@@ -146,6 +264,7 @@ export default function ActiveCall({
                     position: absolute; bottom: 40px; left: 0; right: 0;
                     display: flex; justify-content: center;
                     padding: 0 20px;
+                    z-index: 20; /* High Z-Index */
                 }
 
                 .controls-bg-v9 {
@@ -184,8 +303,25 @@ export default function ActiveCall({
                 .reconnect-text-v9 {
                     font-size: 16px; font-weight: 500; color: rgba(255,255,255,0.9);
                     margin-top: 10px; text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                    margin-bottom: 20px;
+                }
+                .reconnect-end-btn-v9 {
+                    background: #f15c6d; color: white; border: none;
+                    padding: 8px 16px; border-radius: 20px;
+                    font-weight: 600; cursor: pointer;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+                    transition: background 0.2s;
+                    z-index: 101; /* Ensure clickable */
+                }
+                .reconnect-end-btn-v9:hover { background: #d94452; }
+
+                .poor-connection-v9 { 
+                    font-size: 12px; color: #f1c40f; 
+                    background: rgba(0,0,0,0.6); padding: 4px 10px; 
+                    border-radius: 12px; margin: 4px 0; 
+                    font-weight: 500;
                 }
             `}</style>
-        </motion.div>
+        </motion.div >
     );
 }

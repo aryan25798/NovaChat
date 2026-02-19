@@ -7,25 +7,10 @@ import { CallProvider } from './contexts/CallContext'
 import { PresenceProvider } from './contexts/PresenceContext'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { ChatProvider } from './contexts/ChatContext'
-
-
-
+import { VoiceCallProvider } from './contexts/VoiceCallContext'
 
 
 import { registerSW } from 'virtual:pwa-register';
-
-// Register PWA Service Worker
-/* 
-// Register PWA Service Worker (DISABLED: Using manual registration in NotificationContext for FCM consistency)
-const updateSW = registerSW({
-  onNeedRefresh() {
-    console.log('New content available, please refresh.');
-  },
-  onOfflineReady() {
-    console.log('App ready to work offline.');
-  },
-});
-*/
 
 // --- Service Worker Migration & Purge Logic (Legacy) ---
 if ('serviceWorker' in navigator) {
@@ -51,11 +36,13 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     <AuthProvider>
       <ThemeProvider>
         <CallProvider>
-          <PresenceProvider>
-            <ChatProvider>
-              <App />
-            </ChatProvider>
-          </PresenceProvider>
+          <VoiceCallProvider>
+            <PresenceProvider>
+              <ChatProvider>
+                <App />
+              </ChatProvider>
+            </PresenceProvider>
+          </VoiceCallProvider>
         </CallProvider>
       </ThemeProvider>
     </AuthProvider>

@@ -108,7 +108,6 @@ if (firebase.apps.length === 0) {
     firebase.initializeApp(firebaseConfig);
 }
 
-// Retrieve an instance of Firebase Messaging
 const messaging = firebase.messaging();
 
 // Initialize Firestore (Compat)
@@ -118,7 +117,6 @@ messaging.onBackgroundMessage(async (payload) => {
     console.log('[firebase-messaging-sw.js] 🔔 Received background message ', payload);
 
     // BACKGROUND DELIVERY LOGIC (Double Ticks)
-    // CRITICAL: Immediately signal delivery to sender
     if (payload.data) {
         const { chatId, messageId } = payload.data;
         if (chatId && messageId) {
@@ -128,7 +126,6 @@ messaging.onBackgroundMessage(async (payload) => {
                 rtdbRef.update({ delivered: true }).catch(err => console.warn("SW RTDB update failed", err));
 
                 // 2. Update Firestore (Persistence)
-                // Note: Firestore in SW is limited, using compat version
                 const msgRef = firebase.firestore().collection('chats').doc(chatId).collection('messages').doc(messageId);
                 msgRef.update({ delivered: true }).catch(err => console.warn("SW Firestore update failed", err));
 
@@ -139,14 +136,26 @@ messaging.onBackgroundMessage(async (payload) => {
         }
     }
 
-    // Customize notification here
-    const notificationTitle = payload.notification.title;
+    // CUSTOM NOTIFICATION DISPLAY (Data-Only Message Handling)
+    // Fallback to payload.notification if present (backward compat), otherwise use data
+    const notificationTitle = payload.notification?.title || payload.data?.title || "New Message";
+    const notificationBody = payload.notification?.body || payload.data?.body || "You have a new message";
+    const notificationIcon = payload.notification?.icon || payload.data?.icon || '/nova-icon.png';
+    const notificationBadge = payload.notification?.badge || payload.data?.badge || '/nova-icon.png';
+    const notificationTag = payload.notification?.tag || payload.data?.tag || (payload.data?.chatId ? `chat-${payload.data.chatId}` : 'general');
+    const notificationData = payload.data || {};
+
     const notificationOptions = {
-        body: payload.notification.body,
-        icon: '/nova-icon.png', // Updated to use the new PNG icon
-        badge: '/nova-icon.png',
-        tag: payload.notification.tag || 'general',
-        data: payload.data || {}
+        body: notificationBody,
+        icon: notificationIcon,
+        badge: notificationBadge,
+        tag: notificationTag,
+        data: notificationData,
+        renotify: true,
+        vibrate: [200, 100, 200],
+        actions: [
+            { action: 'open', title: 'Open' }
+        ]
     };
 
     return self.registration.showNotification(notificationTitle, notificationOptions);

@@ -41,7 +41,9 @@ export const createCallDoc = async (caller, receiver, type, chatId) => {
     });
 
     // 3. Register Disconnect Cleanup (Safe Signaling)
-    onDisconnect(ref(rtdb, `calls/${callId}`)).remove();
+    // REMOVED: onDisconnect so we don't lose metadata on network blips. 
+    // This allows reconnection (ICE Restart) to work because rules still verify callerId/receiverId.
+    // Cleanup is handled by 'ended' status or explicit endCall.
 
     return callId;
 };

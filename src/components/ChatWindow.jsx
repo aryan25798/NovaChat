@@ -7,12 +7,14 @@ import { doc, collection, getDoc } from "firebase/firestore";
 
 import { useAuth } from "../contexts/AuthContext";
 import { useCall } from "../contexts/CallContext";
+import { useVoiceCall } from "../contexts/VoiceCallContext";
 import { useNavigate } from "react-router-dom";
 import { sendMediaMessage, deleteMessage, addReaction, searchMessages, clearChat, hideChat } from "../services/chatService";
 import { usePresence } from "../contexts/PresenceContext";
 import { motion, AnimatePresence } from "framer-motion";
 import { useFileUpload } from "../contexts/FileUploadContext";
-import { getDownloadURL } from "firebase/storage";
+import { getDownloadURL, ref, uploadBytesResumable } from "firebase/storage";
+import { storage } from "../firebase";
 
 import { useFriend } from "../contexts/FriendContext";
 import { Button } from "./ui/Button";
@@ -55,7 +57,8 @@ export default function ChatWindow({ chat, setChat }) {
     const [stagedFile, setStagedFile] = useState(null);
     const [showMediaPreview, setShowMediaPreview] = useState(false);
 
-    const { startCall } = useCall();
+    const { startCall: startVideoCall } = useCall();
+    const { startCall: startVoiceCall } = useVoiceCall();
     const { getUserPresence, updateActiveChat } = usePresence();
     const navigate = useNavigate();
 
@@ -174,31 +177,46 @@ export default function ChatWindow({ chat, setChat }) {
         console.log("Cancel upload", uploadId);
     }, []);
 
-    const handleFileUpload = useCallback((file) => {
+    const handleFileUpload = useCallback((e) => {
+        const file = e.target?.files?.[0];
+        if (!file) return;
         setStagedFile(file);
         setShowMediaPreview(true);
     }, []);
 
+    const { startUpload } = useFileUpload();
+
     const handleSendStagedFile = useCallback(async (file, caption) => {
         setShowMediaPreview(false);
         setStagedFile(null);
-        // Implement actual send logic if needed, usually handled by MediaPreviewModal calling a prop or service
-        // But here verify usage. MediaPreviewModal likely calls sendMediaMessage directly or via prop.
-        // Checking usage... MediaPreview triggers onSend.
+
+        if (!chat?.id || !currentUser) return;
+
         try {
-            // Mock file data for now or impl
-            // Actually ChatWindow uses `handleSendStagedFile` to wrap `sendMediaMessage`
-            // logic is missing in original file, adding simplified version:
-            await sendMediaMessage(chat.id, currentUser, {
-                url: file.preview, // blocked by context usually
-                fileName: file.name,
-                fileSize: file.size,
-                fileType: file.type
+            const storagePath = `uploads/${chat.id}/${Date.now()}_${file.name}`;
+            const { uploadId, uploadTask } = await startUpload(file, storagePath, {
+                contentType: file.type
             });
+
+            // Listen for completion to send the final message
+            uploadTask.then(async (snapshot) => {
+                const downloadURL = await getDownloadURL(snapshot.ref);
+                await sendMediaMessage(chat.id, currentUser, {
+                    url: downloadURL,
+                    fileName: file.name,
+                    fileSize: file.size,
+                    fileType: file.type,
+                    width: file.width,
+                    height: file.height
+                });
+            }).catch(err => {
+                console.error("Upload failed in ChatWindow:", err);
+            });
+
         } catch (e) {
-            console.error(e);
+            console.error("Media send error:", e);
         }
-    }, [chat?.id, currentUser]);
+    }, [chat?.id, currentUser, startUpload]);
 
     // NOTE: Real implementation of handleSendStagedFile should probably use FileUploadContext 
     // but for now we fixing the CRASH/LOOP. 
@@ -337,7 +355,8 @@ export default function ChatWindow({ chat, setChat }) {
                 otherUser={otherUser}
                 presence={presence}
                 getStatusText={getStatusText}
-                startCall={startCall}
+                startVideoCall={startVideoCall}
+                startVoiceCall={startVoiceCall}
                 chat={chat}
                 onBack={handleBack}
                 onShowInfo={handleShowInfo}

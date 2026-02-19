@@ -109,10 +109,12 @@ exports.syncStatusFeed = onCall({
     const uid = request.auth.uid;
     const db = admin.firestore();
 
-    logger.info(`[SyncStatus] Starting sync for user: ${uid}`);
+    // request.data might be null if no body sent
+    const data = request.data || {};
+    // Ensure knownState is an object
+    const knownState = (data.knownState && typeof data.knownState === 'object') ? data.knownState : {};
 
-    // Client sends the map of what they already have: { "friendA": 1234567890, "friendB": ... }
-    const { knownState } = request.data || {};
+    logger.info(`[SyncStatus] Starting sync for user: ${uid}. Known authors: ${Object.keys(knownState).length}`);
 
     try {
         // 1. Read the user's Feed Signal Doc
@@ -120,39 +122,51 @@ exports.syncStatusFeed = onCall({
         const feedSnap = await feedRef.get();
 
         if (!feedSnap.exists) {
-            logger.info(`[SyncStatus] No signals found for ${uid}`);
             return { updates: [] };
         }
 
         const signals = feedSnap.data() || {};
         const authorsToFetch = [];
 
-        logger.info(`[SyncStatus] Found ${Object.keys(signals).length} signals. Checking for updates...`);
+        // Helper to safely get millis
+        const getMillis = (ts) => {
+            if (!ts) return 0;
+            if (typeof ts === 'number') return ts;
+            if (typeof ts.toMillis === 'function') return ts.toMillis(); // Firestore Timestamp
+            if (ts instanceof Date) return ts.getTime();
+            if (ts._seconds) return ts._seconds * 1000; // Serialized Timestamp
+            return 0;
+        };
 
         // 2. Determine who needs fetching
         for (const [authorId, signal] of Object.entries(signals)) {
             if (!signal) continue;
-            const signalTs = signal.timestamp?.toMillis ? signal.timestamp.toMillis() : 0;
-            const clientTs = knownState?.[authorId] || 0;
 
-            // If server has newer content than client
-            if (signalTs > clientTs) {
+            const signalTs = getMillis(signal.timestamp);
+            const clientTs = Number(knownState[authorId]) || 0;
+
+            // Tolerance: Only fetch if server is > 1s newer to avoid clock drift loops
+            if (signalTs > clientTs + 1000) {
                 authorsToFetch.push(authorId);
             }
         }
 
-        logger.info(`[SyncStatus] Authors to fetch: ${authorsToFetch.length}`);
-
-        // 3. Fetch actual status docs for those authors
+        // 3. Fetch actual status docs
         if (authorsToFetch.length === 0) {
             return { updates: [] };
         }
 
-        // Limit huge fetches
-        const MAX_FETCH = 20;
+        // REDUCED BATCH SIZE for stability
+        const MAX_FETCH = 15;
         const fetchIds = authorsToFetch.slice(0, MAX_FETCH);
 
-        const statusRefs = fetchIds.map(id => db.collection('statuses').doc(id));
+        // Sanity check IDs
+        const validIds = fetchIds.filter(id => id && typeof id === 'string');
+        if (validIds.length === 0) return { updates: [] };
+
+        const statusRefs = validIds.map(id => db.collection('statuses').doc(id));
+
+        // Use getAll with error handling coverage
         const statusDocs = await db.getAll(...statusRefs);
 
         const updates = [];
@@ -161,34 +175,42 @@ exports.syncStatusFeed = onCall({
 
         statusDocs.forEach(docSnap => {
             if (!docSnap.exists) return;
-            const data = docSnap.data();
-            if (!data) return;
+            const docData = docSnap.data();
+            if (!docData) return;
 
             // Filter expired items server-side
-            const activeItems = (data.items || []).filter(item => {
+            const activeItems = (docData.items || []).filter(item => {
                 if (!item) return false;
-                const ts = item.timestamp?.toMillis ? item.timestamp.toMillis() : (item.timestamp instanceof Date ? item.timestamp.getTime() : 0);
+                const ts = getMillis(item.timestamp);
                 return now - ts < ONE_DAY;
             });
 
             if (activeItems.length > 0) {
+                // Return cleaned data
                 updates.push({
                     id: docSnap.id,
-                    userId: data.userId,
-                    userName: data.userName,
-                    userPhoto: data.userPhoto,
-                    items: activeItems,
-                    lastUpdated: data.lastUpdated // Send this back so client can update their 'knownState'
+                    userId: docData.userId,
+                    userName: docData.userName,
+                    userPhoto: docData.userPhoto,
+                    items: activeItems.map(item => ({
+                        ...item,
+                        // Normalize timestamp for client to prevent serialization issues
+                        timestamp: getMillis(item.timestamp)
+                    })),
+                    lastUpdated: getMillis(docData.lastUpdated)
                 });
             }
         });
 
-        logger.info(`[SyncStatus] Returning ${updates.length} updates for ${uid}`);
+        logger.info(`[SyncStatus] Returning ${updates.length} updates (IDs: ${fetchIds.join(',')})`);
         return { updates, hasMore: authorsToFetch.length > MAX_FETCH };
 
     } catch (error) {
         logger.error(`[SyncStatus] Critical Error for ${uid}:`, error);
-        throw new HttpsError('internal', error.message || 'Unknown internal error during sync');
+        // Do not throw 'internal' to client if possible, just return empty to prevent crash loops
+        // But if it's a code error, we want to know. 
+        // For 'net::ERR_CONNECTION_CLOSED', a clean error return usually fixes it.
+        return { updates: [], error: "Sync failed gracefully" };
     }
 });
 

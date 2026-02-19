@@ -107,9 +107,9 @@ export function MessageList({
                     followOutput={(isAtBottom) => isAtBottom ? "auto" : false}
                     alignToBottom={true}
                     defaultItemHeight={72}
-                    increaseViewportBy={500} // Reduced from 2000 to prevent extensive rendering
+                    increaseViewportBy={200} // Reduced for performance
                     atBottomThreshold={200}
-                    overscan={{ main: 600, reverse: 600 }} // Symmetrical overscan
+                    overscan={{ main: 200, reverse: 200 }} // Reduced to save memory
                     components={{
                         Footer: () => <div className="h-4 w-full invisible" />,
                         Header: () => <div className="h-4 w-full invisible" />

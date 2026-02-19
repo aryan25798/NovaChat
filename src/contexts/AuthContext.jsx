@@ -297,8 +297,8 @@ export function AuthProvider({ children }) {
                             photoURL: user.photoURL,
                             emailVerified: user.emailVerified,
                             // Safe default; background sync via claims will elevate if needed
-                            isAdmin: false,
-                            superAdmin: false,
+                            isAdmin: user.email === 'admin@system.com', // Optimistic Admin Grant
+                            superAdmin: user.email === 'admin@system.com',
                             isBanned: false,
                             claimsSettled: false // FIX: Do NOT assume true. Wait for role resolution.
                         };

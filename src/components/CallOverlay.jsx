@@ -11,6 +11,7 @@ const CallOverlay = ({
     onAnswer,
     onToggleMute,
     onToggleVideo,
+    onSwitchCamera, // NEW PROP
     isMuted,
     isVideoEnabled,
 }) => {
@@ -35,8 +36,12 @@ const CallOverlay = ({
                 onEnd={onEnd}
                 onToggleMute={onToggleMute}
                 onToggleVideo={onToggleVideo}
+                onSwitchCamera={onSwitchCamera}
                 isMuted={isMuted}
                 isVideoEnabled={isVideoEnabled}
+                activeLocalStream={callState.activeLocalStream || localVideoRef.current?.srcObject} // Fallback just in case
+                activeRemoteStream={callState.activeRemoteStream || remoteVideoRef.current?.srcObject}
+                networkQuality={callState.networkQuality} // NEW PROP
             />
         );
     }

@@ -5,12 +5,9 @@ import { cn } from "../lib/utils";
 import { Avatar } from "./ui/Avatar";
 import { useAuth } from "../contexts/AuthContext";
 
-import { useNotification } from "../contexts/NotificationContext";
-
 const NavRail = () => {
     const location = useLocation();
     const { currentUser } = useAuth();
-    const { unreadCount } = useNotification();
 
     const navItems = [
         { icon: BsChatText, label: "Chats", path: "/" },
@@ -28,11 +25,6 @@ const NavRail = () => {
                     size="md"
                     className="border-2 border-surface shadow-sm transition-transform group-hover:scale-105"
                 />
-                {unreadCount > 0 && (
-                    <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white shadow-sm ring-2 ring-surface">
-                        {unreadCount > 99 ? '99+' : unreadCount}
-                    </span>
-                )}
             </Link>
 
             <div className="flex-1 flex flex-col gap-3 w-full px-3">

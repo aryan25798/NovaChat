@@ -4,7 +4,7 @@ const { logger } = require("firebase-functions");
 const admin = require('firebase-admin');
 const { recursiveDeleteCollection, bulkDeleteByQuery } = require('../utils/shared');
 
-const GEMINI_BOT_ID = "gemini_bot_v1";
+const GEMINI_BOT_ID = process.env.GEMINI_BOT_ID || "gemini_bot_v1";
 
 // Helper for Gemini
 async function handleGeminiReply(chatId, userText, senderName) {
@@ -304,7 +304,14 @@ exports.onMessageCreated = onDocumentCreated({
                 logger.debug(`[FCM] Enqueuing notification for User: ${userId}, Token: ${token.slice(0, 10)}...`);
                 messagesToSend.push({
                     token: token,
-                    notification: {
+                    // DATA-ONLY MESSAGE (Fix for background handling)
+                    // We remove the 'notification' key so the browser doesn't handle it automatically.
+                    // The SW will read 'title' and 'body' from 'data' and show the notification manually.
+                    data: {
+                        chatId,
+                        messageId,
+                        senderId,
+                        type: 'message',
                         title: `New Message from ${senderName}`,
                         body: messageData.type === 'image' ? '📷 Photo'
                             : messageData.type === 'video' ? '🎥 Video'
@@ -313,28 +320,20 @@ exports.onMessageCreated = onDocumentCreated({
                                         : (messageData.text || 'New message').length > 100
                                             ? (messageData.text || 'New message').substring(0, 97) + '...'
                                             : (messageData.text || 'New message'),
+                        icon: 'https://whatsappclone-50b5b.web.app/nova-icon.png',
+                        badge: 'https://whatsappclone-50b5b.web.app/nova-icon.png',
+                        click_action: `https://whatsappclone-50b5b.web.app/c/${chatId}`
                     },
                     webpush: {
                         headers: {
                             Urgency: 'high'
                         },
-                        fcmOptions: { link: `https://whatsappclone-50b5b.web.app/c/${chatId}` },
-                        notification: {
-                            icon: 'https://whatsappclone-50b5b.web.app/nova-icon.png',
-                            badge: 'https://whatsappclone-50b5b.web.app/nova-icon.png',
-                            tag: `chat-${chatId}`,
-                            renotify: true,
-                            vibrate: [200, 100, 200]
-                        }
+                        fcmOptions: { link: `https://whatsappclone-50b5b.web.app/c/${chatId}` }
                     },
                     android: {
                         priority: 'high',
-                        notification: {
-                            sound: 'default',
-                            clickAction: 'FLUTTER_NOTIFICATION_CLICK'
-                        }
-                    },
-                    data: { chatId, messageId, senderId, type: 'message' }
+                        ttl: 2419200 // 4 weeks
+                    }
                 });
             });
         });

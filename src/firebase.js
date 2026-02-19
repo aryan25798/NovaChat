@@ -13,6 +13,11 @@ const firebaseConfig = {
     databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL
 };
 
+// Debug: Check what key is actually being loaded
+console.log("[Firebase] Config Loaded. API Key:",
+    firebaseConfig.apiKey ? `${firebaseConfig.apiKey.slice(0, 5)}...` : "UNDEFINED");
+
+
 // Diagnostic Check for Production Builds
 // Diagnostic Check for ALL Builds
 if (true) {

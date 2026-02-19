@@ -7,12 +7,16 @@ export default function MediaPreviewModal({ file, onSend, onClose }) {
     const [caption, setCaption] = useState("");
     const [objectUrl, setObjectUrl] = useState(null);
     const [previewLoading, setPreviewLoading] = useState(true);
+    const [dimensions, setDimensions] = useState(null);
 
     const isImage = file?.type?.startsWith('image/');
     const isVideo = file?.type?.startsWith('video/');
 
     useEffect(() => {
-        if (!file) return;
+        if (!file || !(file instanceof Blob || file instanceof File)) {
+            console.error("Invalid file passed to MediaPreviewModal:", file);
+            return;
+        }
 
         const url = URL.createObjectURL(file);
         setObjectUrl(url);
@@ -25,6 +29,11 @@ export default function MediaPreviewModal({ file, onSend, onClose }) {
 
     const handleSend = () => {
         if (!file) return;
+        // Attach dimensions to file object (hacky but effective without changing prop signature too much)
+        if (dimensions) {
+            file.width = dimensions.width;
+            file.height = dimensions.height;
+        }
         onSend(file, caption);
     };
 
@@ -64,11 +73,11 @@ export default function MediaPreviewModal({ file, onSend, onClose }) {
                             animate={{ scale: 1, opacity: 1 }}
                             src={objectUrl}
                             alt="Preview"
-                            className={cn(
-                                "max-h-full max-w-full object-contain rounded-lg shadow-2xl transition-opacity duration-300",
-                                previewLoading ? "opacity-0" : "opacity-100"
-                            )}
-                            onLoad={() => setPreviewLoading(false)}
+                            className={`max-h-full max-w-full object-contain rounded-lg shadow-2xl transition-opacity duration-300 ${previewLoading ? "opacity-0" : "opacity-100"}`}
+                            onLoad={(e) => {
+                                setPreviewLoading(false);
+                                setDimensions({ width: e.target.naturalWidth, height: e.target.naturalHeight });
+                            }}
                         />
                     )}
 
@@ -79,11 +88,11 @@ export default function MediaPreviewModal({ file, onSend, onClose }) {
                             src={objectUrl}
                             controls
                             autoPlay
-                            className={cn(
-                                "max-h-full max-w-full rounded-lg shadow-2xl transition-opacity duration-300",
-                                previewLoading ? "opacity-0" : "opacity-100"
-                            )}
-                            onLoadedData={() => setPreviewLoading(false)}
+                            className={`max-h-full max-w-full rounded-lg shadow-2xl transition-opacity duration-300 ${previewLoading ? "opacity-0" : "opacity-100"}`}
+                            onLoadedData={(e) => {
+                                setPreviewLoading(false);
+                                setDimensions({ width: e.target.videoWidth, height: e.target.videoHeight });
+                            }}
                         />
                     )}
 

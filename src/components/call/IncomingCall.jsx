@@ -5,19 +5,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 export default function IncomingCall({ callState, onAnswer, onReject }) {
     const { otherUser } = callState;
 
-    React.useEffect(() => {
-        // Vibrate for incoming calls on supported devices
-        if (navigator.vibrate) {
-            navigator.vibrate([1000, 500, 1000, 500, 1000]);
-            const interval = setInterval(() => {
-                navigator.vibrate([1000, 500, 1000, 500, 1000]);
-            }, 6000);
-            return () => {
-                clearInterval(interval);
-                navigator.vibrate(0);
-            };
-        }
-    }, []);
+    // SoundService handles ringtone and vibration centrally with safety checks.
+    // Removed duplicate navigator.vibrate calls to fix browser intervention policies.
 
     return (
         <motion.div
@@ -41,7 +30,7 @@ export default function IncomingCall({ callState, onAnswer, onReject }) {
 
                 <h2 className="caller-name-v7">{otherUser.displayName}</h2>
                 <p className="call-status-v7">
-                    {callState.status === 'ringing' ? 'WhatsApp video call' : 'Connecting...'}
+                    {callState.status === 'ringing' ? `WhatsApp ${callState.type === 'video' ? 'video' : 'audio'} call` : 'Connecting...'}
                 </p>
             </div>
 

@@ -25,18 +25,46 @@ export function useCall() {
 }
 
 export const getIceServers = async () => {
+    // 1. Try Environment Variables (Fastest, Client-side)
+    const turnUser = import.meta.env.VITE_TURN_SERVER_USER;
+    const turnPwd = import.meta.env.VITE_TURN_SERVER_PWD;
+    const turnUrl = import.meta.env.VITE_TURN_SERVER_URL;
+
+    const iceServers = [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+        { urls: "stun:stun2.l.google.com:19302" },
+        { urls: "stun:stun.metered.ca:80" },
+        { urls: "stun:stun.wirlab.net:3478" },
+        { urls: "stun:stun.voipzooom.com:3478" }
+    ];
+
+    if (turnUser && turnPwd && turnUrl) {
+        console.log("[CallContext] Using Custom TURN credentials");
+        iceServers.unshift(
+            {
+                urls: turnUrl,
+                username: turnUser,
+                credential: turnPwd
+            },
+            {
+                urls: turnUrl + "?transport=tcp", // Force TCP for firewalls
+                username: turnUser,
+                credential: turnPwd
+            }
+        );
+        return iceServers;
+    }
+
+    // 2. Fallback to Cloud Function (Slower)
     try {
+        console.log("[CallContext] Fetching TURN credentials from Cloud Function...");
         const getCredentials = httpsCallable(functions, 'getTurnCredentials');
         const result = await getCredentials();
-        return result.data;
+        return [...result.data, ...iceServers];
     } catch (error) {
-        console.warn("Failed to fetch TURN credentials (using fallback STUN):", error);
-        return [
-            { urls: "stun:stun.l.google.com:19302" },
-            { urls: "stun:stun1.l.google.com:19302" },
-            { urls: "stun:stun2.l.google.com:19302" },
-            { urls: "stun:stun.metered.ca:80" }
-        ];
+        console.warn("Failed to fetch TURN credentials (using fallback STUN list):", error);
+        return iceServers;
     }
 };
 
@@ -50,9 +78,59 @@ export function CallProvider({ children }) {
     const remoteVideoRef = useRef();
     const pc = useRef(null);
     const stream = useRef(null);
-    const remoteStream = useRef(null); // NEW: Store remote stream independently of UI
+    // const remoteStream = useRef(null); // OLD: Ref based
+    const [activeRemoteStream, setActiveRemoteStream] = useState(null); // NEW: State based for immediate UI update
     const listeners = useRef([]);
     const iceBuffer = useRef([]);
+    const processingAnswer = useRef(false); // Lock for answer processing
+    const lastProcessedOfferSdp = useRef(null); // NEW: Deduplication for renegotiation loops
+    const isRestarting = useRef(false); // NEW: Lock for ICE Restart
+    const consecutiveGoodStats = useRef(0); // NEW: For smooth bitrate ramping
+
+    const [activeLocalStream, setActiveLocalStream] = useState(null); // Fix for preview
+    const [networkQuality, setNetworkQuality] = useState('good'); // 'good', 'fair', 'poor'
+    const statsInterval = useRef(null);
+
+    // HELPER: ICE Restart
+    const triggerIceRestart = async () => {
+        if (!pc.current || !callState || !callState.id) return;
+
+        // RACE FIX: Prevent double restart or restart during busy signaling
+        if (isRestarting.current) {
+            console.warn("[CallContext] ICE Restart skipped: Already in progress.");
+            return;
+        }
+        if (pc.current.signalingState !== 'stable') {
+            console.warn(`[CallContext] ICE Restart skipped: Signaling state is ${pc.current.signalingState}`);
+            return;
+        }
+
+        isRestarting.current = true; // LOCK
+        console.log("[CallContext] Triggering ICE Restart...");
+
+        try {
+            // 1. Create Offer with iceRestart
+            const offer = await pc.current.createOffer({ iceRestart: true });
+
+            // SOFT START: Use lower bitrate (1Mbps) for handshake reliability
+            if (callState.type === 'video') {
+                offer.sdp = setPreferredCodec(offer.sdp, 'video', 'VP9/90000');
+                offer.sdp = setMediaBitrate(offer.sdp, 'video', 1000);
+                offer.sdp = setMediaBitrate(offer.sdp, 'audio', 128);
+            }
+
+            // 2. Set Local
+            await pc.current.setLocalDescription(offer);
+
+            // 3. Send to RTDB (Signaling)
+            await setLocalDescription(callState.id, offer, 'offer');
+
+            console.log("[CallContext] ICE Restart Offer sent.");
+        } catch (e) {
+            console.error("ICE Restart failed:", e);
+            isRestarting.current = false; // UNLOCK on error
+        }
+    };
 
     // Cleanup helper
     const clearListeners = () => {
@@ -62,19 +140,89 @@ export function CallProvider({ children }) {
 
     // Ensure remote stream is attached when UI becomes ready
     useEffect(() => {
-        if (callState?.status === 'connected' && remoteVideoRef.current && remoteStream.current) {
-            console.log("[CallContext] Attaching late remote stream to video element");
-            remoteVideoRef.current.srcObject = remoteStream.current;
+        if (callState?.status === 'connected' && remoteVideoRef.current && activeRemoteStream) {
+            console.log("[CallContext] Attaching active remote stream to video element via Effect");
+            remoteVideoRef.current.srcObject = activeRemoteStream;
             remoteVideoRef.current.play().catch(e => console.warn("Auto-play blocked:", e));
         }
-    }, [callState?.status]);
+    }, [callState?.status, activeRemoteStream]);
+
+    // FIX: Ensure local stream is attached when UI becomes ready (ActiveCall mounts)
+    useEffect(() => {
+        if (callState && localVideoRef.current && stream.current) {
+            // Only attach if not already attached to avoid flickering
+            if (localVideoRef.current.srcObject !== stream.current) {
+                console.log("[CallContext] Re-attaching local stream to video element");
+                localVideoRef.current.srcObject = stream.current;
+                localVideoRef.current.play().catch(e => console.warn("Local auto-play error:", e));
+            }
+        }
+    }, [callState]); // Re-run when callState changes (e.g. view switching)
+
+    // HELPER: Force High Bitrate in SDP
+    const setMediaBitrate = (sdp, mediaType, bitrate) => {
+        const lines = sdp.split("\n");
+        let line = -1;
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].indexOf("m=" + mediaType) === 0) {
+                line = i;
+                break;
+            }
+        }
+        if (line === -1) return sdp; // Media type not found
+
+        // Skip to end of media section or start of next
+        line++;
+        while (lines[line] && lines[line].indexOf("m=") === -1 && lines[line].indexOf("c=") === -1) {
+            if (lines[line].indexOf("b=AS:") === 0) {
+                // Replace existing bandwidth line
+                lines[line] = "b=AS:" + bitrate;
+                return lines.join("\n");
+            }
+            line++;
+        }
+
+        // Add bandwidth line if not found
+        lines.splice(line, 0, "b=AS:" + bitrate);
+        return lines.join("\n");
+    };
+
+    // HELPER: Prefer H.264 Codec (Hardware Acceleration)
+    const setPreferredCodec = (sdp, type, codecFragment) => {
+        const sdpLines = sdp.split('\r\n');
+        const mLineIndex = sdpLines.findIndex(line => line.startsWith('m=' + type));
+        if (mLineIndex === -1) return sdp;
+
+        const mLine = sdpLines[mLineIndex];
+        const payloadTypes = mLine.split(' ').slice(3);
+
+        // Find the PT for the preferred codec (simple search)
+        // We look for "a=rtpmap:<pt> <codecFragment>"
+        let preferredPT = null;
+        for (const line of sdpLines) {
+            if (line.startsWith('a=rtpmap:') && line.includes(codecFragment)) {
+                preferredPT = line.split(':')[1].split(' ')[0];
+                break;
+            }
+        }
+
+        if (preferredPT) {
+            const newPayloadTypes = [preferredPT, ...payloadTypes.filter(pt => pt !== preferredPT)];
+            const newMLine = mLine.split(' ').slice(0, 3).concat(newPayloadTypes).join(' ');
+            sdpLines[mLineIndex] = newMLine;
+            return sdpLines.join('\r\n');
+        }
+
+        return sdp;
+    };
 
     // 1. Listen for Incoming Calls
     useEffect(() => {
         if (!currentUser) return;
 
         const unsubscribe = subscribeToIncomingCalls(currentUser.uid, (callId, data) => {
-            if (!callState) {
+            // ONLY handle video calls in this context
+            if (data.type === 'video' && !callState) {
                 soundService.play('ringtone', true); // Play Ringtone
                 setCallState({
                     id: callId,
@@ -83,12 +231,21 @@ export function CallProvider({ children }) {
                         displayName: data.callerName,
                         photoURL: data.callerPhoto
                     },
-                    type: data.type,
+                    type: 'video',
                     isIncoming: true,
                     status: 'ringing',
                     connectionState: 'new',
                     chatId: data.chatId
                 });
+
+                // SYNC FIX: Start a status listener immediately for incoming ringing
+                const unsubStatus = subscribeToCall(callId, (update) => {
+                    if (update?.status === 'ended' || update?.status === 'rejected') {
+                        console.log("[CallContext] Incoming call canceled by caller.");
+                        endCall(false);
+                    }
+                });
+                listeners.current.push(unsubStatus);
             }
         });
 
@@ -97,6 +254,7 @@ export function CallProvider({ children }) {
 
     // 1.5 Calling Timeout (Outgoing)
     const timeoutRef = useRef(null);
+    const reconnectTimeoutRef = useRef(null); // Monitor for active call disconnection
     const callStateStatusRef = useRef(callState?.status);
     callStateStatusRef.current = callState?.status;
 
@@ -130,7 +288,108 @@ export function CallProvider({ children }) {
         return () => window.removeEventListener('beforeunload', handleBeforeUnload);
     }, [callState]);
 
-    // 2. PeerConnection & Media Setup
+    // MONITOR NETWORK QUALITY (Bitrate & Connection)
+    useEffect(() => {
+        if (callState?.status === 'connected' && pc.current) {
+            console.log("[CallContext] Starting Network Monitoring...");
+
+            statsInterval.current = setInterval(async () => {
+                if (!pc.current || pc.current.signalingState === 'closed') return;
+
+                try {
+                    const stats = await pc.current.getStats();
+                    let packetLoss = 0;
+                    let roundTripTime = 0;
+
+                    stats.forEach(report => {
+                        if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+                            roundTripTime = report.currentRoundTripTime * 1000; // ms
+                        }
+                        if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                            packetLoss = report.packetsLost;
+                        }
+                    });
+
+                    // Determine Quality
+                    let quality = 'good';
+                    if (packetLoss > 50 || roundTripTime > 500) quality = 'poor';
+                    else if (packetLoss > 10 || roundTripTime > 200) quality = 'fair';
+
+                    setNetworkQuality(quality);
+
+                    // Adaptive Bitrate Control (Simple)
+                    const videoSender = pc.current.getSenders().find(s => s.track.kind === 'video');
+                    if (videoSender && videoSender.track) {
+                        const params = videoSender.getParameters();
+                        if (!params.encodings) params.encodings = [{}];
+
+                        let targetBitrate = 4500000; // Default Max (AV1/VP9)
+
+                        // ADAPTIVE & SMOOTH RAMPING
+                        if (quality === 'poor') {
+                            targetBitrate = 800000; // Drop hard to save connection
+                            consecutiveGoodStats.current = 0;
+                        } else if (quality === 'fair') {
+                            targetBitrate = 1500000;
+                            consecutiveGoodStats.current = 0;
+                        } else {
+                            // Quality is GOOD
+                            consecutiveGoodStats.current += 1;
+
+                            // "Soft Start" Recovery - Prevent shocking the network
+                            if (consecutiveGoodStats.current < 4) { // Wait ~8 seconds (4 checks)
+                                targetBitrate = 2500000; // Intermediate Step
+                                console.log(`[CallContext] Soft Ramping... Holding at 2.5Mbps (${consecutiveGoodStats.current}/4)`);
+                            } else {
+                                targetBitrate = 4500000; // Full 1080p60 Quality
+                            }
+                        }
+
+                        // Only update if significantly different
+                        const currentMax = params.encodings[0].maxBitrate;
+                        if (!currentMax || Math.abs(currentMax - targetBitrate) > 200000) {
+                            console.log(`[CallContext] Adjusting Bitrate to ${targetBitrate / 1000} kbps (${quality})`);
+                            params.encodings[0].maxBitrate = targetBitrate;
+                            videoSender.setParameters(params).catch(e => console.warn("Bitrate adj failed", e));
+                        }
+                    }
+
+                    // MONITOR CODEC (Verification)
+                    if (stats) {
+                        stats.forEach(report => {
+                            if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                                const codec = stats.get(report.codecId);
+                                if (codec && !window.codecLogged) {
+                                    console.log(`[CallContext] 🟢 ACTIVE VIDEO CODEC: ${codec.mimeType} (Payload: ${codec.payloadType})`);
+                                    window.codecLogged = true;
+                                }
+                            }
+                            if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+                                const codec = stats.get(report.codecId);
+                                if (codec && !window.audioCodecLogged) {
+                                    console.log(`[CallContext] 🔊 ACTIVE AUDIO CODEC: ${codec.mimeType} | Channels: ${codec.channels || 2} | Clock: ${codec.clockRate}`);
+                                    window.audioCodecLogged = true;
+                                }
+                            }
+                        });
+                    }
+
+                } catch (e) {
+                    console.warn("Stats error:", e);
+                }
+            }, 2000);
+
+        } else {
+            if (statsInterval.current) clearInterval(statsInterval.current);
+        }
+
+        return () => {
+            if (statsInterval.current) clearInterval(statsInterval.current);
+        };
+    }, [callState?.status]);
+
+
+
     const initPeerConnection = async (callId, isCaller) => {
         // Cleanup existing stream
         if (stream.current) {
@@ -139,39 +398,62 @@ export function CallProvider({ children }) {
         }
 
         // Reset remote stream
-        remoteStream.current = null;
+        setActiveRemoteStream(null);
 
         // Get media
         let localStream;
         try {
             const constraints = {
                 video: {
-                    facingMode: 'user', // Preference for front camera
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 }
+                    facingMode: 'user',
+                    width: { ideal: 1920, min: 1280 }, // Back to 1080p Preference
+                    height: { ideal: 1080, min: 720 },
+                    aspectRatio: { ideal: 1.777777778 },
+                    frameRate: { ideal: 60, min: 30 }
                 },
                 audio: {
                     echoCancellation: true,
                     noiseSuppression: true,
-                    autoGainControl: true
+                    autoGainControl: true,
+                    channelCount: 2, // Stereo
+                    sampleRate: 48000, // HD Audio
+                    sampleSize: 16
                 }
             };
             localStream = await navigator.mediaDevices.getUserMedia(constraints);
         } catch (err) {
-            console.error("Media permission error:", err);
-            let errorMsg = "Could not access camera/microphone. Please check permissions.";
-            if (err.name === 'NotAllowedError') errorMsg = "Camera/microphone permission was denied.";
-            else if (err.name === 'NotFoundError') errorMsg = "No camera/microphone found on this device.";
+            console.warn("High-Spec Video failed. Trying standard HD...", err);
+            try {
+                // Return to Standard HD (No specific frame rate or aspect ratio strictness)
+                localStream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+                    audio: true
+                });
+            } catch (err2) {
+                console.warn("Standard HD failed. Falling back to VGA...", err2);
+                try {
+                    // Fallback to lower resolution
+                    localStream = await navigator.mediaDevices.getUserMedia({
+                        video: { width: { ideal: 640 }, height: { ideal: 480 } },
+                        audio: true
+                    });
+                } catch (finalErr) {
+                    console.error("Media permission error:", finalErr);
+                    let errorMsg = "Could not access camera/microphone. Please check permissions.";
+                    if (finalErr.name === 'NotAllowedError') errorMsg = "Camera/microphone permission was denied.";
+                    else if (finalErr.name === 'NotFoundError') errorMsg = "No camera/microphone found on this device.";
 
-            // We use standard alert as fallback, or toast if context is right
-            alert(errorMsg);
-            endCall(true);
-            throw err;
+                    alert(errorMsg);
+                    endCall(true);
+                    throw finalErr;
+                }
+            }
         }
 
         console.log("[CallContext] getUserMedia success");
 
         stream.current = localStream;
+        setActiveLocalStream(localStream); // Update state for UI
         if (localVideoRef.current) localVideoRef.current.srcObject = localStream;
 
         const iceServers = await getIceServers();
@@ -179,24 +461,32 @@ export function CallProvider({ children }) {
 
         const peer = new RTCPeerConnection({
             iceServers,
-            iceCandidatePoolSize: 10
+            iceCandidatePoolSize: 10,
+            iceTransportPolicy: 'all', // Allow RELAY (TURN) and HOST/SRFLX
+            bundlePolicy: 'max-bundle',
+            rtcpMuxPolicy: 'require'
         });
         console.log("[CallContext] PeerConnection initialized");
         pc.current = peer;
 
-        localStream.getTracks().forEach(track => peer.addTrack(track, localStream));
+        localStream.getTracks().forEach(track => {
+            if (track.kind === 'video') {
+                track.contentHint = 'motion'; // Prioritize fluidity/framerate
+            }
+            console.log(`[CallContext] Adding local track: ${track.kind}`);
+            peer.addTrack(track, localStream);
+        });
 
         peer.ontrack = (event) => {
-            console.log("[CallContext] ontack fired. Tracks:", event.streams[0].getTracks());
-            remoteStream.current = event.streams[0];
+            console.log("[CallContext] ontrack fired. Tracks:", event.streams[0].getTracks());
 
-            if (remoteVideoRef.current) {
-                console.log("[CallContext] Attaching remote stream immediately");
-                remoteVideoRef.current.srcObject = event.streams[0];
-                remoteVideoRef.current.play().catch(e => console.warn("Auto-play blocked:", e));
-            } else {
-                console.log("[CallContext] remoteVideoRef is null, stream buffered in ref");
+            // LOW LATENCY OPTIMIZATION
+            if (event.receiver && event.receiver.playoutDelayHint !== undefined) {
+                event.receiver.playoutDelayHint = 0; // Request immediate playout (no buffering)
             }
+
+            // Update state for UI to handle
+            setActiveRemoteStream(event.streams[0]);
         };
 
         // Network robustness
@@ -205,15 +495,51 @@ export function CallProvider({ children }) {
             console.log(`[CallContext] ICE Connection State Changed: ${state}`);
             setCallState(prev => prev ? { ...prev, connectionState: state } : null);
 
-            if (state === 'failed' || state === 'disconnected') {
-                if (state === 'failed') endCall(true);
+            // CONNECTION MONITOR: Auto-end if stuck in disconnected/failed for >15s
+            if (state === 'disconnected' || state === 'failed') {
+                console.warn(`[CallContext] Connection instability detected: ${state}.`);
+
+                // 1. Trigger ICE Restart (Caller Only) - Aggressive on Failure
+                // 1. Trigger ICE Restart (Caller Only) - Aggressive on Failure
+                if (isCaller) {
+                    const restartDelay = state === 'failed' ? 100 : 2000; // Immediate if failed
+                    console.log(`[CallContext] Initiating ICE Restart in ${restartDelay}ms...`);
+
+                    // If FAILED, clear any pending Disconnected timeout to prevent double trigger
+                    if (state === 'failed' && reconnectTimeoutRef.current) {
+                        clearTimeout(reconnectTimeoutRef.current);
+                    }
+
+                    setTimeout(() => {
+                        if (pc.current && (pc.current.iceConnectionState === 'disconnected' || pc.current.iceConnectionState === 'failed')) {
+                            triggerIceRestart();
+                        }
+                    }, restartDelay);
+                }
+
+                // 2. Timeout for total failure
+                if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+                reconnectTimeoutRef.current = setTimeout(() => {
+                    if (pc.current && (pc.current.iceConnectionState === 'disconnected' || pc.current.iceConnectionState === 'failed')) {
+                        console.error("[CallContext] Connection timeout (30s). Ending call.");
+                        endCall(true); // End and notify
+                    }
+                }, 30000); // 30s Tolerance for 4G switching
+
+            } else if (state === 'connected' || state === 'completed') {
+                // Connection recovered
+                if (reconnectTimeoutRef.current) {
+                    console.log("[CallContext] Connection recovered. Clearing timeout.");
+                    clearTimeout(reconnectTimeoutRef.current);
+                    reconnectTimeoutRef.current = null;
+                }
             }
         };
 
         // ICE Candidates
         peer.onicecandidate = (e) => {
             if (e.candidate) {
-                console.log("[CallContext] Generated Local ICE Candidate");
+                // console.log("[CallContext] Generated Local ICE Candidate"); 
                 addCandidate(callId, isCaller ? 'caller' : 'callee', e.candidate);
             } else {
                 console.log("[CallContext] Local ICE Candidate Gathering Complete");
@@ -229,14 +555,15 @@ export function CallProvider({ children }) {
 
     const processIceBuffer = (peer) => {
         if (!peer || !peer.remoteDescription) return;
-        console.log(`[CallContext] Processing ${iceBuffer.current.length} buffered ICE candidates`);
-        iceBuffer.current.forEach(candidate => {
-            console.log("[CallContext] Adding buffered candidate");
+        const candidates = [...iceBuffer.current];
+        iceBuffer.current = []; // Clear immediately to avoid doubles
+
+        console.log(`[CallContext] Processing ${candidates.length} buffered ICE candidates`);
+        candidates.forEach(candidate => {
             peer.addIceCandidate(new RTCIceCandidate(candidate)).catch(e =>
                 console.warn("[CallContext] Buffered ICE error:", e)
             );
         });
-        iceBuffer.current = [];
     };
 
     // 3. Caller Side
@@ -247,20 +574,18 @@ export function CallProvider({ children }) {
         }
         console.log("[CallContext] startCall called for:", otherUser?.uid, "Type:", type);
         try {
-            // Ensure audio context is ready (user gesture)
             await soundService.ensureAudioContext();
-            soundService.play('dialing', true); // Play Dialing Sound
+            soundService.play('dialing', true);
             console.log("[CallContext] Dialing sound started");
 
             const callId = await createCallDoc(currentUser, otherUser, type, chatId);
             console.log("[CallContext] Call doc created:", callId);
 
-            // Set initial state so UI shows outgoing call screen
             setCallState({
                 id: callId,
                 otherUser,
                 type,
-                status: 'dialing', // Start with dialing
+                status: 'dialing',
                 isIncoming: false,
                 connectionState: 'new',
                 startTime: Date.now(),
@@ -269,8 +594,20 @@ export function CallProvider({ children }) {
 
             const peer = await initPeerConnection(callId, true);
 
-            // Create Offer
-            const offer = await peer.createOffer();
+            // Create Offer with Constraints for 2-way Audio/Video
+            const offer = await peer.createOffer({
+                offerToReceiveAudio: true,
+                offerToReceiveVideo: type === 'video'
+            });
+
+            // FORCE STABLE BITRATE & AV1 > VP9 > H264
+            if (type === 'video') {
+                offer.sdp = setPreferredCodec(offer.sdp, 'video', 'VP9/90000');
+                offer.sdp = setPreferredCodec(offer.sdp, 'video', 'AV1/90000'); // Push AV1 to top
+                offer.sdp = setMediaBitrate(offer.sdp, 'video', 4500); // Start High
+                offer.sdp = setMediaBitrate(offer.sdp, 'audio', 128); // 128kbps Audio
+            }
+
             await peer.setLocalDescription(offer);
 
             // Send Offer
@@ -282,13 +619,35 @@ export function CallProvider({ children }) {
                     setCallState(prev => prev ? { ...prev, status: 'ringing' } : null);
                 }
 
-                if (data?.answer && !peer.currentRemoteDescription) {
-                    soundService.stop(); // Stop dialing
-                    console.log("[CallContext] Answer received, setting remote description");
-                    const rtcDesc = new RTCSessionDescription(data.answer);
-                    await peer.setRemoteDescription(rtcDesc);
-                    setCallState(prev => prev ? { ...prev, status: 'connected', startTime: Date.now() } : null);
-                    processIceBuffer(peer);
+                if (data?.answer) {
+                    // RACE CONDITION FIX: Strict Lock & State Check
+                    if (peer.signalingState === 'stable' || processingAnswer.current) {
+                        return;
+                    }
+
+                    processingAnswer.current = true; // LOCK
+
+                    try {
+                        if (peer.signalingState === 'have-local-offer') {
+                            soundService.stop(); // Stop dialing
+                            console.log("[CallContext] Answer received, setting remote description");
+                            const rtcDesc = new RTCSessionDescription(data.answer);
+                            await peer.setRemoteDescription(rtcDesc);
+
+                            setCallState(prev => prev ? { ...prev, status: 'connected', startTime: Date.now() } : null);
+                            processIceBuffer(peer);
+                        }
+                    } catch (err) {
+                        console.error("[CallContext] Error setting remote description:", err);
+                    } finally {
+                        processingAnswer.current = false; // UNLOCK
+                    }
+
+                    // ICE RESTART SUCCESS: Release lock
+                    if (isRestarting.current) {
+                        console.log("[CallContext] ICE Restart Successful (Answer received).");
+                        isRestarting.current = false;
+                    }
                 }
 
                 if (data?.status === 'ended' || data?.status === 'rejected') {
@@ -297,16 +656,16 @@ export function CallProvider({ children }) {
             });
 
             const unsubCandidates = subscribeToCandidates(callId, 'caller', (candidateData) => {
-                console.log("[CallContext] Received Remote Candidate (Callee)");
-                if (peer.remoteDescription) {
+                // console.log("[CallContext] Received Remote Candidate (Callee)");
+                if (peer.remoteDescription && peer.signalingState === 'stable') {
                     peer.addIceCandidate(new RTCIceCandidate(candidateData)).catch(e => console.warn("ICE Error:", e));
                 } else {
-                    console.log("[CallContext] Buffering Remote Candidate");
+                    // console.log("[CallContext] Buffering Remote Candidate");
                     iceBuffer.current.push(candidateData);
                 }
             });
 
-            listeners.current = [unsubCall, unsubCandidates];
+            listeners.current.push(unsubCall, unsubCandidates);
 
         } catch (err) {
             console.error("Error starting call:", err);
@@ -325,7 +684,6 @@ export function CallProvider({ children }) {
             const peer = await initPeerConnection(callId, false);
 
             // Wait for offer using realtime RTDB listener (not polling)
-            // This is instant — as soon as the caller writes the offer, we get it
             const offer = await waitForOffer(callId);
 
             if (!offer || !offer.type || !offer.sdp) {
@@ -337,11 +695,23 @@ export function CallProvider({ children }) {
             console.log("[CallContext] Offer received, setting remote description...");
 
             // Set Remote Description (Offer)
-            await peer.setRemoteDescription(new RTCSessionDescription(offer));
-            processIceBuffer(peer);
+            // Ensure we are in the right state to accept an offer (usually 'stable' or 'have-remote-offer' if renegotiating)
+            if (peer.signalingState === 'stable') {
+                await peer.setRemoteDescription(new RTCSessionDescription(offer));
+                processIceBuffer(peer);
+            }
 
-            // Create Answer
+            // Create Answer with constraints
             const answer = await peer.createAnswer();
+
+            // FORCE STABLE BITRATE & AV1 > VP9 > H264
+            if (callState.type === 'video') {
+                answer.sdp = setPreferredCodec(answer.sdp, 'video', 'VP9/90000');
+                answer.sdp = setPreferredCodec(answer.sdp, 'video', 'AV1/90000'); // Push AV1 to top
+                answer.sdp = setMediaBitrate(answer.sdp, 'video', 4500); // Start High
+                answer.sdp = setMediaBitrate(answer.sdp, 'audio', 128); // 128 kbps Opus
+            }
+
             await peer.setLocalDescription(answer);
 
             // Send Answer
@@ -351,24 +721,55 @@ export function CallProvider({ children }) {
             // Fetch full call data for chatId
             const callData = await getCallDoc(callId);
 
+            // Mark initial offer as processed to avoid immediate re-trigger
+            if (offer && offer.sdp) {
+                lastProcessedOfferSdp.current = offer.sdp;
+            }
+
             setCallState(prev => prev ? { ...prev, status: 'connected', startTime: Date.now(), chatId: callData?.chatId } : null);
 
             // Listen for Candidates and End
             const unsubCandidates = subscribeToCandidates(callId, 'callee', (candidateData) => {
-                console.log("[CallContext] Received Remote Candidate (Caller)");
-                if (peer.remoteDescription) {
+                // console.log("[CallContext] Received Remote Candidate (Caller)");
+                if (peer.remoteDescription && peer.signalingState === 'stable') {
                     peer.addIceCandidate(new RTCIceCandidate(candidateData)).catch(e => console.warn("ICE Error:", e));
                 } else {
-                    console.log("[CallContext] Buffering Remote Candidate");
+                    // console.log("[CallContext] Buffering Remote Candidate");
                     iceBuffer.current.push(candidateData);
                 }
             });
 
-            const unsubCall = subscribeToCall(callId, (data) => {
-                if (data?.status === 'ended') endCall(false);
+            const unsubCall = subscribeToCall(callId, async (data) => {
+                if (data?.status === 'ended' || data?.status === 'rejected') endCall(false);
+
+                // RE-NEGOTIATION (Callee handling new offer)
+                if (data?.offer && pc.current && pc.current.signalingState === 'stable') {
+                    const remoteSdp = data.offer.sdp;
+
+                    // FIXED: Deduplication to prevent infinite loops
+                    if (remoteSdp !== lastProcessedOfferSdp.current) {
+                        console.log("[CallContext] Received ICE Restart Offer. Re-answering...");
+                        lastProcessedOfferSdp.current = remoteSdp; // UPDATE REF
+
+                        try {
+                            await pc.current.setRemoteDescription(new RTCSessionDescription(data.offer));
+                            const answer = await pc.current.createAnswer();
+                            if (callState.type === 'video') {
+                                answer.sdp = setPreferredCodec(answer.sdp, 'video', 'VP9/90000');
+                                answer.sdp = setPreferredCodec(answer.sdp, 'video', 'AV1/90000');
+                                answer.sdp = setMediaBitrate(answer.sdp, 'video', 4500);
+                                answer.sdp = setMediaBitrate(answer.sdp, 'audio', 128);
+                            }
+                            await pc.current.setLocalDescription(answer);
+                            await setLocalDescription(callId, answer, 'answer');
+                        } catch (e) {
+                            console.error("Renegotiation failed:", e);
+                        }
+                    }
+                }
             });
 
-            listeners.current = [unsubCandidates, unsubCall];
+            listeners.current.push(unsubCandidates, unsubCall);
 
         } catch (err) {
             console.error("Error answering call:", err);
@@ -388,10 +789,35 @@ export function CallProvider({ children }) {
         if (callState) soundService.play('end');
 
         // Cleanup Media
-        if (stream.current) {
-            stream.current.getTracks().forEach(t => t.stop());
-            stream.current = null;
+        // Cleanup Media (Aggressive)
+        const stopTracks = (mediaStream) => {
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(t => {
+                    t.stop();
+                    console.log(`[CallContext] Stopped track: ${t.kind} (${t.label})`);
+                });
+            }
+        };
+
+        stopTracks(stream.current);
+        stream.current = null;
+
+        stopTracks(activeLocalStream); // ALSO stop the state version just in case
+        setActiveLocalStream(null);
+
+        // Force clear video elements to release hardware lock
+        if (localVideoRef.current) {
+            localVideoRef.current.srcObject = null;
+            localVideoRef.current.load(); // Tip: Forces browser to release device
         }
+        if (remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject = null;
+            remoteVideoRef.current.load();
+        }
+
+        setActiveLocalStream(null); // Clear state
+        setActiveRemoteStream(null); // Clear remote state
+
         if (pc.current) {
             pc.current.close();
             pc.current = null;
@@ -473,10 +899,72 @@ export function CallProvider({ children }) {
         }
     };
 
+    const switchCamera = async () => {
+        try {
+            if (!stream.current) return;
+            const currentVideoTrack = stream.current.getVideoTracks()[0];
+            if (!currentVideoTrack) return;
+
+            const currentFacingMode = currentVideoTrack.getSettings().facingMode;
+            const newFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+
+            console.log(`[CallContext] Switching camera to: ${newFacingMode}`);
+
+            const newConstraints = {
+                video: {
+                    facingMode: { exact: newFacingMode },
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 },
+                    frameRate: { ideal: 60, min: 30 }
+                }
+            };
+
+            let newStream;
+            try {
+                newStream = await navigator.mediaDevices.getUserMedia(newConstraints);
+            } catch (err) {
+                // Fallback to non-exact if exact fails (some browsers/devices don't support 'exact')
+                console.warn("Exact facingMode failed, trying loose constraint");
+                newStream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: newFacingMode,
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }
+                });
+            }
+
+            const newVideoTrack = newStream.getVideoTracks()[0];
+
+            // 1. Replace track in PeerConnection (smooth switch for remote)
+            if (pc.current) {
+                const sender = pc.current.getSenders().find(s => s.track.kind === 'video');
+                if (sender) {
+                    await sender.replaceTrack(newVideoTrack);
+                }
+            }
+
+            // 2. Update Local Stream (for self-view)
+            currentVideoTrack.stop(); // Stop old track
+            stream.current = newStream;
+            setActiveLocalStream(newStream); // Trigger UI update
+
+            // Re-attach to ref if needed (useEffect handles this but good to be explicit)
+            if (localVideoRef.current) {
+                localVideoRef.current.srcObject = newStream;
+            }
+
+        } catch (err) {
+            console.error("Error switching camera:", err);
+            alert("Could not switch camera. " + err.message);
+        }
+    };
+
     const value = React.useMemo(() => ({
-        callState, startCall, answerCall, endCall,
-        localVideoRef, remoteVideoRef
-    }), [callState, startCall, answerCall, endCall, localVideoRef, remoteVideoRef]);
+        callState: { ...callState, activeLocalStream, activeRemoteStream, networkQuality },
+        startCall, answerCall, endCall, switchCamera,
+        localVideoRef, remoteVideoRef, activeLocalStream, activeRemoteStream, networkQuality
+    }), [callState, startCall, answerCall, endCall, switchCamera, localVideoRef, remoteVideoRef, activeLocalStream, activeRemoteStream, networkQuality]);
 
     return (
         <CallContext.Provider value={value}>
@@ -490,11 +978,14 @@ export function CallProvider({ children }) {
                     onAnswer={answerCall}
                     onToggleMute={toggleMute}
                     onToggleVideo={toggleVideo}
+                    onSwitchCamera={switchCamera}
                     isMuted={isMuted}
                     isVideoEnabled={isVideoEnabled}
+                    activeLocalStream={activeLocalStream}
+                    activeRemoteStream={activeRemoteStream}
                 />
             )}
         </CallContext.Provider>
     );
-}
 
+}

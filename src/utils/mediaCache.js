@@ -4,14 +4,20 @@ const DB_NAME = 'whatsapp-clone-media-cache';
 const STORE_NAME = 'media';
 
 // Initialize DB
-const initDB = async () => {
-    return openDB(DB_NAME, 1, {
-        upgrade(db) {
-            if (!db.objectStoreNames.contains(STORE_NAME)) {
-                db.createObjectStore(STORE_NAME);
-            }
-        },
-    });
+// Singleton DB Promise
+let dbPromise = null;
+
+const initDB = () => {
+    if (!dbPromise) {
+        dbPromise = openDB(DB_NAME, 1, {
+            upgrade(db) {
+                if (!db.objectStoreNames.contains(STORE_NAME)) {
+                    db.createObjectStore(STORE_NAME);
+                }
+            },
+        });
+    }
+    return dbPromise;
 };
 
 // Track active object URLs to allow cleanup

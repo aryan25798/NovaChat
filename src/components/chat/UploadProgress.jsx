@@ -11,7 +11,12 @@ const UploadProgress = () => {
 
     // Auto-clear logic for WhatsApp-like behavior
     useEffect(() => {
-        const hasActive = activeUploads.some(u => u.status === 'uploading' || u.status === 'compressing' || u.status === 'paused');
+        const hasActive = activeUploads.some(u =>
+            u.status === 'uploading' ||
+            u.status === 'compressing' ||
+            u.status === 'paused' ||
+            u.status === 'retrying'
+        );
         const hasCompleted = activeUploads.some(u => u.status === 'completed');
 
         if (hasCompleted && !hasActive) {
@@ -87,6 +92,12 @@ const UploadProgress = () => {
                                             </p>
                                         </div>
                                         <div className="flex gap-1 shrink-0">
+                                            {upload.status === 'retrying' && (
+                                                <div className="flex items-center gap-1 text-orange-500 animate-pulse">
+                                                    <FaCloudUploadAlt className="text-xs" />
+                                                    <span className="text-[10px] font-bold">Retrying...</span>
+                                                </div>
+                                            )}
                                             {upload.status === 'uploading' && (
                                                 <Button size="icon" variant="ghost" className="h-6 w-6 rounded-full" onClick={() => pauseUpload(upload.id)}>
                                                     <FaPause className="text-[10px]" />
@@ -100,7 +111,7 @@ const UploadProgress = () => {
                                             {upload.status === 'error' && (
                                                 <FaExclamationTriangle className="text-red-500 text-sm mt-1" title={upload.error} />
                                             )}
-                                            {(upload.status === 'uploading' || upload.status === 'paused' || upload.status === 'error') && (
+                                            {(upload.status === 'uploading' || upload.status === 'paused' || upload.status === 'error' || upload.status === 'retrying') && (
                                                 <Button size="icon" variant="ghost" className="h-6 w-6 rounded-full hover:bg-red-50 hover:text-red-500" onClick={() => cancelUpload(upload.id)}>
                                                     <FaTimes className="text-[10px]" />
                                                 </Button>
@@ -112,7 +123,7 @@ const UploadProgress = () => {
                                     </div>
                                     <div className="h-1 bg-surface w-full rounded-full overflow-hidden">
                                         <motion.div
-                                            className={`h-full ${upload.status === 'error' ? 'bg-red-500' : upload.status === 'completed' ? 'bg-green-500' : 'bg-primary'}`}
+                                            className={`h-full ${upload.status === 'error' ? 'bg-red-500' : upload.status === 'completed' ? 'bg-green-500' : upload.status === 'retrying' ? 'bg-orange-400' : 'bg-primary'}`}
                                             initial={{ width: 0 }}
                                             animate={{ width: `${upload.progress}%` }}
                                         />

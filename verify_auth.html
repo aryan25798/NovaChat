@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firebase API Key Verification</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        .status { margin-bottom: 10px; padding: 10px; border-radius: 4px; }
+        .success { background-color: #d4edda; color: #155724; }
+        .error { background-color: #f8d7da; color: #721c24; }
+        pre { background: #f4f4f4; padding: 10px; border-radius: 4px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>Firebase API Key Verification</h1>
+    <div id="status" class="status">Initializing...</div>
+    <div id="details"></div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getAuth, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyDINn3KvxCX4FHQm_NG4pMsCAxeCcJeDqw",
+            authDomain: "whatsappclone-50b5b.firebaseapp.com",
+            projectId: "whatsappclone-50b5b",
+            storageBucket: "whatsappclone-50b5b.firebasestorage.app",
+            messagingSenderId: "662334343258",
+            appId: "1:662334343258:web:a1b7a9fe49563c9aeaf063"
+        };
+
+        const statusDiv = document.getElementById('status');
+        const detailsDiv = document.getElementById('details');
+
+        function log(message, type = 'info') {
+            const p = document.createElement('p');
+            p.textContent = message;
+            detailsDiv.appendChild(p);
+            console.log(message);
+        }
+
+        async function verify() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                const auth = getAuth(app);
+                
+                log("Initialized Firebase. Attempting login...");
+
+                // Using specific credentials from user request
+                await signInWithEmailAndPassword(auth, "admin@system.com", "123456");
+                
+                statusDiv.textContent = "SUCCESS: API Key is valid and Login worked!";
+                statusDiv.className = "status success";
+                log("Login successful!");
+            } catch (error) {
+                statusDiv.textContent = `FAILED: ${error.code} - ${error.message}`;
+                statusDiv.className = "status error";
+                log(`Error Code: ${error.code}`);
+                log(`Error Message: ${error.message}`);
+                
+                if (error.code === 'auth/api-key-expired') {
+                    log("CONCLUSION: The API Key is indeed expired/invalid.");
+                } else if (error.code === 'auth/invalid-api-key') {
+                     log("CONCLUSION: The API Key is invalid.");
+                }
+            }
+        }
+
+        verify();
+    </script>
+</body>
+</html>

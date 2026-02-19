@@ -85,16 +85,21 @@ export const FileUploadProvider = ({ children }) => {
 
         // Listen for state changes (throttle updates)
         let lastUpdate = 0;
-        uploadTask.on('state_changed',
+        let retryCount = 0;
+        const maxRetries = 5;
+
+        const unsubscribe = uploadTask.on('state_changed',
             (snapshot) => {
                 const now = Date.now();
                 const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+
+                // Reset retry count on progress
+                if (progress > lastUpdate) retryCount = 0;
 
                 // Emit at most every 200ms or on key events to reduce flickering
                 if (now - lastUpdate > 200 || progress === 0 || progress >= 100) {
                     lastUpdate = now;
                     setUploads(prev => {
-                        // Don't update if already removed or cancelled
                         if (!prev[uploadId]) return prev;
                         return {
                             ...prev,
@@ -107,8 +112,33 @@ export const FileUploadProvider = ({ children }) => {
                     });
                 }
             },
-            (error) => {
-                console.error("Upload error:", error);
+            async (error) => {
+                console.error("Upload error:", error.code, error.message);
+
+                // Handle network errors with auto-retry
+                const isRetryable =
+                    error.code === 'storage/retry-limit-exceeded' ||
+                    error.code === 'storage/unknown' ||
+                    error.code === 'storage/network-error';
+
+                if (isRetryable && retryCount < maxRetries) {
+                    retryCount++;
+                    const delay = Math.pow(2, retryCount) * 1000;
+                    console.log(`Retrying upload ${uploadId} in ${delay}ms (Attempt ${retryCount}/${maxRetries})`);
+
+                    setUploads(prev => ({
+                        ...prev,
+                        [uploadId]: { ...prev[uploadId], status: 'retrying', error: `Network error. Retrying... (${retryCount}/${maxRetries})` }
+                    }));
+
+                    setTimeout(() => {
+                        if (uploadTasksRef.current[uploadId]) {
+                            uploadTasksRef.current[uploadId].resume();
+                        }
+                    }, delay);
+                    return;
+                }
+
                 setUploads(prev => {
                     if (!prev[uploadId]) return prev;
                     return {
@@ -139,6 +169,10 @@ export const FileUploadProvider = ({ children }) => {
                     });
                 } catch (e) {
                     console.error("Failed to get download URL", e);
+                    setUploads(prev => ({
+                        ...prev,
+                        [uploadId]: { ...prev[uploadId], status: 'error', error: "Failed to finalize upload." }
+                    }));
                 } finally {
                     delete uploadTasksRef.current[uploadId];
                 }

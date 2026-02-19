@@ -3,7 +3,7 @@ import { lightningSync } from "./LightningService";
 import {
     collection, addDoc, query, where, orderBy, onSnapshot,
     doc, updateDoc, deleteDoc, getDoc, setDoc, getDocs,
-    serverTimestamp, increment, arrayUnion, writeBatch, deleteField, limit, limitToLast, startAfter // added limit/limitToLast
+    serverTimestamp, increment, arrayUnion, writeBatch, deleteField, limit, limitToLast, startAfter, runTransaction // added limit/limitToLast/runTransaction
 } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
 import { httpsCallable } from "firebase/functions";
@@ -159,7 +159,6 @@ let readDebounceTimer = null;
 let deliveredDebounceTimer = null;
 
 const FLUSH_DELAY = 1500; // Increased speed
-const BATCH_LIMIT = 20; // This constant is not used in the provided new code, keeping it for consistency if it was intended to be used.
 
 const flushReadBatch = async () => {
     if (readBatchBuffer.size === 0) return;
@@ -397,42 +396,44 @@ async function sendMessageSequential(chatId, currentUser, text, replyTo, optimis
     try {
         const chatRef = doc(db, "chats", chatId);
 
-        // [LAZY INIT] Ensure parent chat doc exists for "Ghost chats"
-        // This ensures the recipient's chat list can detect the new conversation.
-        const chatSnap = await getDoc(chatRef);
-        if (!chatSnap.exists() && chatId.includes('_')) {
-            console.log(`[ChatService] Lazy-creating ghost chat: ${chatId}`);
-            const parts = chatId.split('_');
-            const otherUid = parts.find(uid => uid !== currentUser.uid);
+        // [LAZY INIT] Ensure parent chat doc exists for "Ghost chats" (Transactional)
+        const chatDoc = await runTransaction(db, async (transaction) => {
+            const snap = await transaction.get(chatRef);
+            if (snap.exists()) return snap;
 
-            // Try to fetch other user's basic info for the first-time shell
-            let otherUserInfo = { displayName: "User", photoURL: null };
-            try {
-                const uSnap = await getDoc(doc(db, "users", otherUid));
-                if (uSnap.exists()) {
-                    const ud = uSnap.data();
-                    otherUserInfo = { displayName: ud.displayName || "User", photoURL: ud.photoURL || null };
-                }
-            } catch (e) {
-                console.warn("[ChatService] Failed to fetch peer info for ghost init", e);
+            if (chatId.includes('_')) {
+                console.log(`[ChatService] Lazy-creating ghost chat (Atomic): ${chatId}`);
+                const parts = chatId.split('_');
+                const otherUid = parts.find(uid => uid !== currentUser.uid);
+
+                let otherUserInfo = { displayName: "User", photoURL: null };
+                try {
+                    const uSnap = await transaction.get(doc(db, "users", otherUid)); // Read within transaction if possible, or just accept eventual consistency
+                    if (uSnap.exists()) {
+                        const ud = uSnap.data();
+                        otherUserInfo = { displayName: ud.displayName || "User", photoURL: ud.photoURL || null };
+                    }
+                } catch (e) { /* ignore */ }
+
+                const initData = {
+                    id: chatId,
+                    participants: parts,
+                    participantInfo: {
+                        [currentUser.uid]: { displayName: currentUser.displayName, photoURL: currentUser.photoURL },
+                        [otherUid]: otherUserInfo
+                    },
+                    lastMessage: null,
+                    lastMessageTimestamp: serverTimestamp(),
+                    type: 'private',
+                    unreadCount: { [currentUser.uid]: 0, [otherUid]: 0 },
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp()
+                };
+                transaction.set(chatRef, initData);
+                return { exists: () => true, data: () => initData };
             }
-
-            const initData = {
-                id: chatId,
-                participants: parts,
-                participantInfo: {
-                    [currentUser.uid]: { displayName: currentUser.displayName, photoURL: currentUser.photoURL },
-                    [otherUid]: otherUserInfo
-                },
-                lastMessage: null,
-                lastMessageTimestamp: serverTimestamp(),
-                type: 'private',
-                unreadCount: { [currentUser.uid]: 0, [otherUid]: 0 },
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp()
-            };
-            await setDoc(chatRef, initData).catch(e => console.warn("[ChatService] Ghost setDoc failed", e));
-        }
+            return snap; // Should not happen for ghost chats usually, but fallback
+        });
 
         const messagesRef = collection(db, "chats", chatId, "messages");
         const docRef = optimisticId ? doc(messagesRef, optimisticId) : doc(messagesRef);

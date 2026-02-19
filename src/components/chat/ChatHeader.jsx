@@ -10,7 +10,8 @@ export function ChatHeader({
     otherUser,
     presence,
     getStatusText,
-    startCall,
+    startVideoCall,
+    startVoiceCall,
     chat,
     onBack,
     onShowInfo,
@@ -60,7 +61,7 @@ export function ChatHeader({
                             className="rounded-full hover:text-text-1 min-w-[40px] min-h-[40px] w-10 h-10 md:w-10 md:h-10 flex items-center justify-center disabled:opacity-30 disabled:hover:text-text-2"
                             onClick={() => {
                                 console.log("[ChatHeader] Video call clicked for:", otherUser?.uid);
-                                startCall(otherUser, 'video', chat.id);
+                                startVideoCall?.(otherUser, 'video', chat.id);
                             }}
                             disabled={!canMessage}
                         >
@@ -72,7 +73,7 @@ export function ChatHeader({
                             className="rounded-full hover:text-text-1 min-w-[40px] min-h-[40px] w-10 h-10 md:w-10 md:h-10 flex items-center justify-center disabled:opacity-30 disabled:hover:text-text-2"
                             onClick={() => {
                                 console.log("[ChatHeader] Audio call clicked for:", otherUser?.uid);
-                                startCall(otherUser, 'audio', chat.id);
+                                startVoiceCall?.(otherUser, chat.id);
                             }}
                             disabled={!canMessage}
                         >

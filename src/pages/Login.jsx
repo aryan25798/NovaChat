@@ -48,7 +48,7 @@ export default function Login() {
         setStatus({ error: "" });
         try {
             await loginWithEmail(email, password);
-            // navigate("/admin"); // Let the useEffect above handle the redirect based on auth state
+            console.debug("[Login] Admin credentials accepted. Waiting for AuthContext redirect...");
         } catch (error) {
             setStatus({ error: "Invalid admin credentials." });
         } finally {

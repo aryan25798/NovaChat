@@ -3,6 +3,8 @@ export const getChatId = (currentUserId, otherUserId) => {
     return [currentUserId, otherUserId].sort().join('_');
 };
 
+import { GEMINI_BOT_ID } from '../config/constants';
+
 export const isGeminiChat = (chatId) => {
-    return chatId.startsWith('gemini_') || chatId === 'gemini_bot_v1';
+    return chatId.startsWith('gemini_') || chatId === GEMINI_BOT_ID;
 };
