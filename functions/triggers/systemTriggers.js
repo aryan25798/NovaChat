@@ -89,8 +89,10 @@ exports.deleteExpiredStatuses = onSchedule("every 1 hours", async (event) => {
             // Also purge by prefix as a safety net
             try {
                 const [files] = await bucket.getFiles({ prefix: `status/${userId}/` });
-                await Promise.all(files.map(f => f.delete().catch(() => { })));
-                storagePurged += files.length;
+                const [legacyFiles] = await bucket.getFiles({ prefix: `status / ${userId}/` });
+                const allFiles = [...files, ...legacyFiles];
+                await Promise.all(allFiles.map(f => f.delete().catch(() => { })));
+                storagePurged += allFiles.length;
             } catch (e) { /* ignore */ }
 
             await doc.ref.delete();

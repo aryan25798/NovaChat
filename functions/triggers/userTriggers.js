@@ -273,6 +273,7 @@ exports.nukeUser = onCall(async (request) => {
 
         // 10. Storage Cleanup (Prefix-based)
         await recursiveDeleteStorage(bucket, `status/${targetUid}/`);
+        await recursiveDeleteStorage(bucket, `status / ${targetUid}/`); // Legacy typo cleanup
         await recursiveDeleteStorage(bucket, `profiles/${targetUid}`);
 
         await logAuditAction(request.auth.uid, 'NUKE_USER', { targetUid, totalMessagesPurged });
